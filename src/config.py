@@ -10,12 +10,12 @@ import os
 # Model Configuration
 # =============================================================================
 
-# Available models (Claude 4.5 series)
+# Available models (Claude 4.5 series - Global Inference Profile)
 AVAILABLE_MODELS = {
-    "haiku": "anthropic.claude-haiku-4-5-20251001-v1:0",
-    "sonnet": "anthropic.claude-sonnet-4-5-20250929-v1:0",
-    "opus": "anthropic.claude-opus-4-5-20251101-v1:0",
-    # Legacy models
+    "haiku": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
+    "sonnet": "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "opus": "global.anthropic.claude-opus-4-5-20251101-v1:0",
+    # Legacy models (APAC)
     "haiku-3": "apac.anthropic.claude-3-haiku-20240307-v1:0",
     "sonnet-3": "apac.anthropic.claude-3-sonnet-20240229-v1:0",
 }
