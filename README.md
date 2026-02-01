@@ -1,6 +1,6 @@
-# AgenticAIOps - AI-Powered Kubernetes Operations
+# AgenticAIOps - AI-Powered Multi-Service Operations
 
-An intelligent AIOps agent for Amazon EKS clusters, powered by AWS Bedrock and Strands SDK.
+An intelligent AIOps agent for Amazon EKS, EC2, Lambda, and HPC, powered by AWS Bedrock and Strands SDK.
 
 ## 🏗️ Architecture
 
@@ -16,37 +16,48 @@ An intelligent AIOps agent for Amazon EKS clusters, powered by AWS Bedrock and S
 │  └─────────────┘     └─────────────┘     └─────────────┘       │
 │        :5173              :8000                 │               │
 │                                                 │               │
-│                                    ┌────────────┴────────────┐ │
-│                                    │                         │ │
-│                              ┌─────▼─────┐           ┌───────▼───────┐
-│                              │  Intent   │           │   AWS MCP     │
-│                              │ Classifier│           │   Server      │
-│                              └───────────┘           │  (16 tools)   │
-│                                    │                 └───────────────┘
-│                              ┌─────▼─────┐                   │
-│                              │Multi-Agent│           ┌───────▼───────┐
-│                              │  Voting   │           │    kubectl    │
-│                              └───────────┘           │   wrapper     │
-│                                                      └───────────────┘
-│                                                              │
-│                                                      ┌───────▼───────┐
-│                                                      │  Amazon EKS   │
-│                                                      │   Cluster     │
-│                                                      └───────────────┘
+│                    ┌────────────────────────────┴───────┐      │
+│                    │          Plugin System             │      │
+│                    │  ┌─────┐ ┌─────┐ ┌──────┐ ┌─────┐ │      │
+│                    │  │ EKS │ │ EC2 │ │Lambda│ │ HPC │ │      │
+│                    │  │  ☸️ │ │ 🖥️ │ │  λ   │ │ 🖧  │ │      │
+│                    │  └─────┘ └─────┘ └──────┘ └─────┘ │      │
+│                    └───────────────────────────────────┘      │
+│                                    │                           │
+│                    ┌───────────────┴───────────────┐          │
+│                    │      Bedrock Knowledge Base   │          │
+│                    │        (EKS Patterns RAG)     │          │
+│                    └───────────────────────────────┘          │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+## 🔌 Plugin System
+
+| Plugin | Icon | Description |
+|--------|------|-------------|
+| EKS | ☸️ | Multi-cluster Kubernetes management |
+| EC2 | 🖥️ | Instance monitoring and metrics |
+| Lambda | λ | Serverless function management |
+| HPC | 🖧 | ParallelCluster/Slurm integration |
+
+**Key Features:**
+- Dynamic plugin registration
+- Multi-cluster support with active cluster switching
+- Pluggable architecture (easy to add new services)
+- Auto-discovery of AWS resources
 
 ## 📦 Modules
 
 | Module | Description | Status |
 |--------|-------------|--------|
+| `src/plugins/` | Plugin system (EKS, EC2, Lambda, HPC) | ✅ |
 | `src/intent_classifier.py` | Query intent classification (5 categories) | ✅ |
 | `src/multi_agent_voting.py` | Multi-agent voting for reduced hallucination | ✅ |
 | `src/kubectl_wrapper.py` | Fast kubectl subprocess wrapper with caching | ✅ |
 | `mcp_agent.py` | Strands Agent with AWS MCP Server | ✅ |
 | `api_server.py` | FastAPI backend for Dashboard | ✅ |
 | `dashboard/` | React frontend (Vite + MUI) | ✅ |
-| `eks-patterns/` | EKS troubleshooting patterns for GraphRAG | ✅ |
+| `eks-patterns/` | EKS troubleshooting patterns for RAG | ✅ |
 
 ## 🚀 Quick Start
 
