@@ -1,0 +1,43 @@
+# Pending Pod Demo
+# This pod requests more resources than available, causing Pending state
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pending-demo
+  namespace: default
+  labels:
+    app: pending-demo
+    scenario: pending
+spec:
+  restartPolicy: Always
+  containers:
+  - name: resource-hungry
+    image: nginx:alpine
+    resources:
+      requests:
+        memory: "999Gi"  # Impossibly large request
+        cpu: "999"       # Impossibly large request
+      limits:
+        memory: "999Gi"
+        cpu: "999"
+---
+# Alternative: Node selector that doesn't match any node
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pending-selector-demo
+  namespace: default
+  labels:
+    app: pending-selector-demo
+    scenario: pending
+spec:
+  restartPolicy: Always
+  nodeSelector:
+    node-type: nonexistent-special-node
+  containers:
+  - name: nginx
+    image: nginx:alpine
+    resources:
+      requests:
+        memory: "32Mi"
+        cpu: "10m"

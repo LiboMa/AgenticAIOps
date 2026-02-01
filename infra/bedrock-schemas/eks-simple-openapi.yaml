@@ -1,0 +1,54 @@
+openapi: 3.0.0
+info:
+  title: EKS Operations API
+  version: 1.0.0
+  description: API for EKS cluster operations
+paths:
+  /cluster/info:
+    get:
+      operationId: getClusterInfo
+      summary: Get EKS cluster information
+      description: Get basic information about the EKS cluster including version, status, and endpoint.
+      responses:
+        '200':
+          description: Cluster information
+          content:
+            application/json:
+              schema:
+                type: object
+  /cluster/health:
+    get:
+      operationId: getClusterHealth
+      summary: Check cluster health
+      description: Perform a comprehensive health check of the EKS cluster including nodes and compute status.
+      responses:
+        '200':
+          description: Health check results
+          content:
+            application/json:
+              schema:
+                type: object
+  /nodes:
+    get:
+      operationId: getNodes
+      summary: Get node information
+      description: Get information about cluster nodes and compute configuration.
+      responses:
+        '200':
+          description: Node information
+          content:
+            application/json:
+              schema:
+                type: object
+  /nodegroups:
+    get:
+      operationId: getNodegroups
+      summary: List node groups
+      description: Get list of managed node groups with their status and scaling configuration.
+      responses:
+        '200':
+          description: List of node groups
+          content:
+            application/json:
+              schema:
+                type: object

@@ -1,0 +1,191 @@
+---
+# Online Shop - Sample E-commerce Application
+# Includes: frontend, API, cache, worker
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: onlineshop
+---
+# Frontend - Nginx serving static content
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shop-frontend
+  namespace: onlineshop
+  labels:
+    app: shop-frontend
+    tier: frontend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: shop-frontend
+  template:
+    metadata:
+      labels:
+        app: shop-frontend
+        tier: frontend
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.25-alpine
+        ports:
+        - containerPort: 80
+        resources:
+          requests:
+            cpu: "50m"
+            memory: "64Mi"
+          limits:
+            cpu: "100m"
+            memory: "128Mi"
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 5
+          periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: shop-frontend
+  namespace: onlineshop
+spec:
+  selector:
+    app: shop-frontend
+  ports:
+  - port: 80
+    targetPort: 80
+  type: ClusterIP
+---
+# API Service - HTTP Echo for testing
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shop-api
+  namespace: onlineshop
+  labels:
+    app: shop-api
+    tier: backend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: shop-api
+  template:
+    metadata:
+      labels:
+        app: shop-api
+        tier: backend
+    spec:
+      containers:
+      - name: api
+        image: hashicorp/http-echo:latest
+        args:
+        - "-text=Online Shop API v1.0"
+        - "-listen=:8080"
+        ports:
+        - containerPort: 8080
+        resources:
+          requests:
+            cpu: "50m"
+            memory: "32Mi"
+          limits:
+            cpu: "100m"
+            memory: "64Mi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: shop-api
+  namespace: onlineshop
+spec:
+  selector:
+    app: shop-api
+  ports:
+  - port: 8080
+    targetPort: 8080
+---
+# Cache - Redis
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shop-cache
+  namespace: onlineshop
+  labels:
+    app: shop-cache
+    tier: cache
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: shop-cache
+  template:
+    metadata:
+      labels:
+        app: shop-cache
+        tier: cache
+    spec:
+      containers:
+      - name: redis
+        image: redis:7-alpine
+        ports:
+        - containerPort: 6379
+        resources:
+          requests:
+            cpu: "50m"
+            memory: "64Mi"
+          limits:
+            cpu: "100m"
+            memory: "128Mi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: shop-cache
+  namespace: onlineshop
+spec:
+  selector:
+    app: shop-cache
+  ports:
+  - port: 6379
+    targetPort: 6379
+---
+# Background Worker
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shop-worker
+  namespace: onlineshop
+  labels:
+    app: shop-worker
+    tier: worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: shop-worker
+  template:
+    metadata:
+      labels:
+        app: shop-worker
+        tier: worker
+    spec:
+      containers:
+      - name: worker
+        image: busybox:latest
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          echo "Worker starting..."
+          while true; do
+            echo "Processing queue at $(date)"
+            sleep 30
+          done
+        resources:
+          requests:
+            cpu: "25m"
+            memory: "32Mi"
+          limits:
+            cpu: "50m"
+            memory: "64Mi"

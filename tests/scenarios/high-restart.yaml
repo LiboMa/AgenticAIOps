@@ -1,0 +1,30 @@
+# High Restart Demo
+# This pod will succeed but exit, causing many restarts
+apiVersion: v1
+kind: Pod
+metadata:
+  name: restart-demo
+  namespace: default
+  labels:
+    app: restart-demo
+    scenario: high-restart
+spec:
+  restartPolicy: Always
+  containers:
+  - name: short-lived
+    image: busybox:latest
+    command: ["/bin/sh", "-c"]
+    args:
+    - |
+      echo "Application starting..."
+      echo "Processing batch job..."
+      sleep 5
+      echo "Batch complete, exiting normally"
+      exit 0
+    resources:
+      requests:
+        memory: "32Mi"
+        cpu: "10m"
+      limits:
+        memory: "64Mi"
+        cpu: "50m"

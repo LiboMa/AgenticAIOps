@@ -1,0 +1,29 @@
+# CrashLoopBackOff Demo
+# This pod will crash immediately with a non-zero exit code
+apiVersion: v1
+kind: Pod
+metadata:
+  name: crash-demo
+  namespace: default
+  labels:
+    app: crash-demo
+    scenario: crashloop
+spec:
+  restartPolicy: Always
+  containers:
+  - name: crasher
+    image: busybox:latest
+    command: ["/bin/sh", "-c"]
+    args:
+    - |
+      echo "Starting application..."
+      echo "ERROR: Configuration file not found: /app/config.yaml"
+      echo "FATAL: Cannot start without configuration"
+      exit 1
+    resources:
+      requests:
+        memory: "32Mi"
+        cpu: "10m"
+      limits:
+        memory: "64Mi"
+        cpu: "50m"

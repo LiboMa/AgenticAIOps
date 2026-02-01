@@ -1,0 +1,170 @@
+---
+# Bookstore - Sample Application
+# Includes: web, API, database
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: bookstore
+---
+# Web Frontend
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bookstore-web
+  namespace: bookstore
+  labels:
+    app: bookstore-web
+    tier: frontend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: bookstore-web
+  template:
+    metadata:
+      labels:
+        app: bookstore-web
+        tier: frontend
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.25-alpine
+        ports:
+        - containerPort: 80
+        resources:
+          requests:
+            cpu: "50m"
+            memory: "64Mi"
+          limits:
+            cpu: "100m"
+            memory: "128Mi"
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 10
+          periodSeconds: 15
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 5
+          periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bookstore-web
+  namespace: bookstore
+spec:
+  selector:
+    app: bookstore-web
+  ports:
+  - port: 80
+    targetPort: 80
+---
+# API Service
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bookstore-api
+  namespace: bookstore
+  labels:
+    app: bookstore-api
+    tier: backend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: bookstore-api
+  template:
+    metadata:
+      labels:
+        app: bookstore-api
+        tier: backend
+    spec:
+      containers:
+      - name: api
+        image: hashicorp/http-echo:latest
+        args:
+        - "-text=Bookstore API v2.0"
+        - "-listen=:8080"
+        ports:
+        - containerPort: 8080
+        resources:
+          requests:
+            cpu: "50m"
+            memory: "32Mi"
+          limits:
+            cpu: "100m"
+            memory: "64Mi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bookstore-api
+  namespace: bookstore
+spec:
+  selector:
+    app: bookstore-api
+  ports:
+  - port: 8080
+    targetPort: 8080
+---
+# Database - PostgreSQL
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bookstore-db
+  namespace: bookstore
+  labels:
+    app: bookstore-db
+    tier: database
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bookstore-db
+  template:
+    metadata:
+      labels:
+        app: bookstore-db
+        tier: database
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:15-alpine
+        ports:
+        - containerPort: 5432
+        env:
+        - name: POSTGRES_USER
+          value: "bookstore"
+        - name: POSTGRES_PASSWORD
+          value: "bookstore123"
+        - name: POSTGRES_DB
+          value: "books"
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "256Mi"
+          limits:
+            cpu: "200m"
+            memory: "512Mi"
+        volumeMounts:
+        - name: postgres-data
+          mountPath: /var/lib/postgresql/data
+      volumes:
+      - name: postgres-data
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bookstore-db
+  namespace: bookstore
+spec:
+  selector:
+    app: bookstore-db
+  ports:
+  - port: 5432
+    targetPort: 5432

@@ -1,0 +1,177 @@
+---
+# Faulty Workloads - For Testing Diagnostics
+# Includes various failure scenarios
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: faulty-apps
+---
+# CrashLoop - Container that crashes repeatedly
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: crashloop-app
+  namespace: faulty-apps
+  labels:
+    app: crashloop-app
+    scenario: crashloop
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: crashloop-app
+  template:
+    metadata:
+      labels:
+        app: crashloop-app
+        scenario: crashloop
+    spec:
+      containers:
+      - name: crasher
+        image: busybox:latest
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          echo "Starting up..."
+          sleep 5
+          echo "Simulating crash!"
+          exit 1
+        resources:
+          requests:
+            cpu: "10m"
+            memory: "16Mi"
+          limits:
+            cpu: "50m"
+            memory: "32Mi"
+---
+# OOM - Out of Memory scenario
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: oom-app
+  namespace: faulty-apps
+  labels:
+    app: oom-app
+    scenario: oom
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: oom-app
+  template:
+    metadata:
+      labels:
+        app: oom-app
+        scenario: oom
+    spec:
+      containers:
+      - name: memory-hog
+        image: progrium/stress:latest
+        args:
+        - "--vm"
+        - "1"
+        - "--vm-bytes"
+        - "256M"
+        - "--vm-hang"
+        - "0"
+        resources:
+          requests:
+            cpu: "50m"
+            memory: "64Mi"
+          limits:
+            cpu: "100m"
+            memory: "128Mi"  # Will OOM when trying to allocate 256M
+---
+# ImagePull Error - Non-existent image
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: imagepull-fail
+  namespace: faulty-apps
+  labels:
+    app: imagepull-fail
+    scenario: imagepull
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: imagepull-fail
+  template:
+    metadata:
+      labels:
+        app: imagepull-fail
+        scenario: imagepull
+    spec:
+      containers:
+      - name: bad-image
+        image: nonexistent-registry.io/fake-image:v999
+        resources:
+          requests:
+            cpu: "10m"
+            memory: "16Mi"
+---
+# Pending Pod - Unschedulable due to resource requests
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pending-pod
+  namespace: faulty-apps
+  labels:
+    app: pending-pod
+    scenario: pending
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pending-pod
+  template:
+    metadata:
+      labels:
+        app: pending-pod
+        scenario: pending
+    spec:
+      containers:
+      - name: resource-hog
+        image: nginx:alpine
+        resources:
+          requests:
+            cpu: "100"  # 100 cores - will never be scheduled
+            memory: "1000Gi"
+---
+# High Restart - Application that restarts frequently
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: high-restart-app
+  namespace: faulty-apps
+  labels:
+    app: high-restart-app
+    scenario: high-restart
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: high-restart-app
+  template:
+    metadata:
+      labels:
+        app: high-restart-app
+        scenario: high-restart
+    spec:
+      containers:
+      - name: restarter
+        image: busybox:latest
+        command: ["/bin/sh", "-c"]
+        args:
+        - |
+          echo "Running for 60 seconds..."
+          sleep 60
+          echo "Exiting to trigger restart"
+          exit 0
+        resources:
+          requests:
+            cpu: "10m"
+            memory: "16Mi"
+          limits:
+            cpu: "50m"
+            memory: "32Mi"

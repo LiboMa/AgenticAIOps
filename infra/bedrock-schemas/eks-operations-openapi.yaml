@@ -1,0 +1,292 @@
+openapi: 3.0.0
+info:
+  title: EKS Operations API
+  description: Kubernetes/EKS cluster operations for AgenticAIOps
+  version: 1.0.0
+
+paths:
+  /pods:
+    get:
+      operationId: getPods
+      summary: List pods in a namespace
+      description: |
+        Get all pods with their status, restart count, and health information.
+        Use this to find problematic pods (CrashLoopBackOff, OOMKilled, etc).
+      parameters:
+        - name: namespace
+          in: query
+          description: Kubernetes namespace. Use 'all' for all namespaces.
+          schema:
+            type: string
+            default: default
+        - name: labelSelector
+          in: query
+          description: Label selector to filter pods (e.g., app=nginx)
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of pods with status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  count:
+                    type: integer
+                  pods:
+                    type: array
+                    items:
+                      type: object
+
+  /pods/{podName}/logs:
+    get:
+      operationId: getPodLogs
+      summary: Get pod logs
+      description: |
+        Retrieve logs from a specific pod. Essential for diagnosing crashes,
+        errors, and application issues. Look for ERROR, FATAL, Exception patterns.
+      parameters:
+        - name: podName
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: namespace
+          in: query
+          schema:
+            type: string
+            default: default
+        - name: tailLines
+          in: query
+          description: Number of lines from the end
+          schema:
+            type: integer
+            default: 100
+        - name: container
+          in: query
+          description: Container name (for multi-container pods)
+          schema:
+            type: string
+        - name: previous
+          in: query
+          description: Get logs from previous container instance (for crash analysis)
+          schema:
+            type: boolean
+            default: false
+      responses:
+        '200':
+          description: Pod logs
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  logs:
+                    type: string
+
+  /pods/{podName}:
+    get:
+      operationId: describePod
+      summary: Get detailed pod information
+      description: |
+        Get comprehensive pod details including containers, resources, volumes,
+        conditions, and recent events. Use for deep investigation.
+      parameters:
+        - name: podName
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: namespace
+          in: query
+          schema:
+            type: string
+            default: default
+      responses:
+        '200':
+          description: Detailed pod information
+
+  /events:
+    get:
+      operationId: getEvents
+      summary: Get cluster events
+      description: |
+        Retrieve Kubernetes events. Events show cluster activity: pod scheduling,
+        failures, scaling, warnings. Filter by namespace or object.
+      parameters:
+        - name: namespace
+          in: query
+          description: Namespace to filter (use 'all' for cluster-wide)
+          schema:
+            type: string
+            default: default
+        - name: fieldSelector
+          in: query
+          description: Field selector (e.g., involvedObject.name=my-pod)
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+      responses:
+        '200':
+          description: Cluster events
+
+  /deployments:
+    get:
+      operationId: getDeployments
+      summary: List deployments
+      description: |
+        Get all deployments with replica status (desired vs ready).
+        Identify deployments with unavailable replicas or stalled rollouts.
+      parameters:
+        - name: namespace
+          in: query
+          schema:
+            type: string
+            default: default
+        - name: labelSelector
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of deployments
+
+  /deployments/{name}/scale:
+    post:
+      operationId: scaleDeployment
+      summary: Scale a deployment
+      description: |
+        Change the replica count of a deployment. WRITE OPERATION.
+        Use to handle capacity issues or reduce costs.
+      x-requireConfirmation: ENABLED
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: namespace
+          in: query
+          schema:
+            type: string
+            default: default
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - replicas
+              properties:
+                replicas:
+                  type: integer
+                  description: Desired number of replicas
+                  minimum: 0
+      responses:
+        '200':
+          description: Scale result
+
+  /deployments/{name}/restart:
+    post:
+      operationId: restartDeployment
+      summary: Rolling restart a deployment
+      description: |
+        Perform a rolling restart of all pods in a deployment. WRITE OPERATION.
+        Use after configuration changes or to clear stuck state.
+      x-requireConfirmation: ENABLED
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: namespace
+          in: query
+          schema:
+            type: string
+            default: default
+      responses:
+        '200':
+          description: Restart initiated
+
+  /deployments/{name}/rollback:
+    post:
+      operationId: rollbackDeployment
+      summary: Rollback a deployment
+      description: |
+        Rollback a deployment to its previous version. WRITE OPERATION.
+        Use when a new deployment causes issues.
+      x-requireConfirmation: ENABLED
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: namespace
+          in: query
+          schema:
+            type: string
+            default: default
+        - name: revision
+          in: query
+          description: Specific revision to rollback to (default: previous)
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Rollback initiated
+
+  /nodes:
+    get:
+      operationId: getNodes
+      summary: Get node status
+      description: |
+        Get status of all cluster nodes including EC2 instance health,
+        resource capacity, and conditions.
+      responses:
+        '200':
+          description: Node status
+
+  /cluster/health:
+    get:
+      operationId: getClusterHealth
+      summary: Comprehensive cluster health check
+      description: |
+        Perform a comprehensive health check of the entire cluster.
+        Checks nodes, pods, deployments, and returns summary with issues.
+      responses:
+        '200':
+          description: Cluster health report
+
+  /analyze/pod/{podName}:
+    get:
+      operationId: analyzePod
+      summary: Automated pod issue analysis
+      description: |
+        Perform automated analysis of a pod's issues. Checks status, logs,
+        events and provides diagnosis with severity and recommendations.
+      parameters:
+        - name: podName
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: namespace
+          in: query
+          schema:
+            type: string
+            default: default
+      responses:
+        '200':
+          description: Analysis with recommendations

@@ -1,0 +1,27 @@
+# Ignore virtual environment and cache
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Lambda package
+lambda-package/
+*.zip
+
+# Temporary files
+*.log
+*.tmp
+/tmp/
+
+# AWS credentials (never commit)
+.aws/
+credentials
