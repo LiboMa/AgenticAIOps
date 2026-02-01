@@ -1,11 +1,14 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { ThemeProvider, createTheme, CssBaseline } from '@mui/material'
-import { Box, AppBar, Toolbar, Typography, Tabs, Tab, Container } from '@mui/material'
+import { Box, AppBar, Toolbar, Typography, Tabs, Tab, Container, IconButton, Menu, MenuItem } from '@mui/material'
 import SmartToyIcon from '@mui/icons-material/SmartToy'
+import SettingsIcon from '@mui/icons-material/Settings'
 import ChatPanel from './components/ChatPanel'
 import EKSStatus from './components/EKSStatus'
 import Anomalies from './components/Anomalies'
 import RCAReports from './components/RCAReports'
+import PluginManager from './components/PluginManager'
+import ClusterSelector from './components/ClusterSelector'
 
 const darkTheme = createTheme({
   palette: {
@@ -25,9 +28,25 @@ const darkTheme = createTheme({
 
 function App() {
   const [activeTab, setActiveTab] = useState(0)
+  const [activeCluster, setActiveCluster] = useState(null)
+  const [settingsAnchor, setSettingsAnchor] = useState(null)
+  
+  const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+
+  useEffect(() => {
+    // Fetch initial active cluster
+    fetch(`${API_URL}/api/clusters/active`)
+      .then(res => res.json())
+      .then(data => setActiveCluster(data))
+      .catch(console.error)
+  }, [])
 
   const handleTabChange = (event, newValue) => {
     setActiveTab(newValue)
+  }
+
+  const handleClusterChange = (cluster) => {
+    setActiveCluster(cluster)
   }
 
   return (
@@ -40,9 +59,28 @@ function App() {
             <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
               AgenticAIOps Dashboard
             </Typography>
-            <Typography variant="body2" sx={{ color: '#aaa' }}>
-              Cluster: testing-cluster | Region: ap-southeast-1
-            </Typography>
+            
+            {/* Cluster Selector */}
+            <Box sx={{ mr: 2 }}>
+              <ClusterSelector onClusterChange={handleClusterChange} />
+            </Box>
+            
+            {/* Settings Menu */}
+            <IconButton
+              onClick={(e) => setSettingsAnchor(e.currentTarget)}
+              sx={{ color: '#aaa' }}
+            >
+              <SettingsIcon />
+            </IconButton>
+            <Menu
+              anchorEl={settingsAnchor}
+              open={Boolean(settingsAnchor)}
+              onClose={() => setSettingsAnchor(null)}
+            >
+              <MenuItem onClick={() => { setActiveTab(4); setSettingsAnchor(null); }}>
+                🔌 Plugin Manager
+              </MenuItem>
+            </Menu>
           </Toolbar>
         </AppBar>
 
@@ -54,22 +92,25 @@ function App() {
             indicatorColor="primary"
           >
             <Tab label="💬 Chat" />
-            <Tab label="📊 EKS Status" />
+            <Tab label="📊 Status" />
             <Tab label="🚨 Anomalies" />
             <Tab label="📝 RCA Reports" />
+            <Tab label="🔌 Plugins" />
           </Tabs>
         </Box>
 
         <Container maxWidth="xl" sx={{ flexGrow: 1, py: 2 }}>
-          {activeTab === 0 && <ChatPanel />}
-          {activeTab === 1 && <EKSStatus />}
-          {activeTab === 2 && <Anomalies />}
+          {activeTab === 0 && <ChatPanel activeCluster={activeCluster} />}
+          {activeTab === 1 && <EKSStatus activeCluster={activeCluster} />}
+          {activeTab === 2 && <Anomalies activeCluster={activeCluster} />}
           {activeTab === 3 && <RCAReports />}
+          {activeTab === 4 && <PluginManager />}
         </Container>
 
         <Box component="footer" sx={{ py: 1, textAlign: 'center', backgroundColor: '#161b22' }}>
           <Typography variant="body2" color="text.secondary">
             AgenticAIOps © 2026 | Powered by Strands SDK + AWS Bedrock
+            {activeCluster && ` | Active: ${activeCluster.name}`}
           </Typography>
         </Box>
       </Box>
