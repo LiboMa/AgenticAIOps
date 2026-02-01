@@ -41,6 +41,13 @@ def get_hpa(ns=None): return {"hpas": []}
 from src.intent_classifier import analyze_query
 from src.multi_agent_voting import extract_diagnosis, simple_vote
 
+# Import plugin system
+from src.plugins import PluginRegistry, PluginConfig
+from src.plugins.eks_plugin import EKSPlugin
+from src.plugins.ec2_plugin import EC2Plugin
+from src.plugins.lambda_plugin import LambdaPlugin
+from src.plugins.hpc_plugin import HPCPlugin
+
 app = FastAPI(
     title="AgenticAIOps API",
     description="Backend API for EKS AIOps Dashboard",
@@ -360,6 +367,179 @@ async def get_rca_report(report_id: str):
 async def health_check():
     """Health check endpoint."""
     return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
+
+
+# =============================================================================
+# Plugin System Endpoints
+# =============================================================================
+
+class PluginCreateRequest(BaseModel):
+    plugin_type: str
+    name: str
+    config: dict = {}
+
+
+class ClusterAddRequest(BaseModel):
+    cluster_id: str
+    name: str
+    region: str
+    plugin_type: str
+    config: dict = {}
+
+
+# Initialize default plugins on startup
+@app.on_event("startup")
+async def startup_event():
+    """Initialize default plugins on startup."""
+    try:
+        # Create default EKS plugin
+        eks_config = PluginConfig(
+            plugin_id="eks-default",
+            plugin_type="eks",
+            name="EKS Default",
+            enabled=True,
+            config={"regions": ["ap-southeast-1"]}
+        )
+        PluginRegistry.create_plugin(eks_config)
+        
+        # Set active cluster if available
+        clusters = PluginRegistry.get_clusters_by_type("eks")
+        if clusters:
+            PluginRegistry.set_active_cluster(clusters[0].cluster_id)
+        
+        print(f"Plugins initialized: {len(PluginRegistry.get_all_plugins())} plugins")
+        print(f"Clusters discovered: {len(PluginRegistry.get_all_clusters())} clusters")
+    except Exception as e:
+        print(f"Warning: Failed to initialize plugins: {e}")
+
+
+@app.get("/api/plugins")
+async def list_plugins():
+    """List all registered plugins."""
+    return {
+        "plugins": [p.get_info() for p in PluginRegistry.get_all_plugins()],
+        "available_types": PluginRegistry.get_available_plugins()
+    }
+
+
+@app.post("/api/plugins")
+async def create_plugin(request: PluginCreateRequest):
+    """Create and register a new plugin."""
+    import uuid
+    
+    config = PluginConfig(
+        plugin_id=str(uuid.uuid4())[:8],
+        plugin_type=request.plugin_type,
+        name=request.name,
+        enabled=True,
+        config=request.config
+    )
+    
+    plugin = PluginRegistry.create_plugin(config)
+    if plugin:
+        return {"status": "created", "plugin": plugin.get_info()}
+    raise HTTPException(status_code=400, detail=f"Unknown plugin type: {request.plugin_type}")
+
+
+@app.delete("/api/plugins/{plugin_id}")
+async def remove_plugin(plugin_id: str):
+    """Remove a plugin."""
+    if PluginRegistry.remove_plugin(plugin_id):
+        return {"status": "removed", "plugin_id": plugin_id}
+    raise HTTPException(status_code=404, detail="Plugin not found")
+
+
+@app.post("/api/plugins/{plugin_id}/enable")
+async def enable_plugin(plugin_id: str):
+    """Enable a plugin."""
+    plugin = PluginRegistry.get_plugin(plugin_id)
+    if plugin:
+        plugin.enable()
+        return {"status": "enabled", "plugin": plugin.get_info()}
+    raise HTTPException(status_code=404, detail="Plugin not found")
+
+
+@app.post("/api/plugins/{plugin_id}/disable")
+async def disable_plugin(plugin_id: str):
+    """Disable a plugin."""
+    plugin = PluginRegistry.get_plugin(plugin_id)
+    if plugin:
+        plugin.disable()
+        return {"status": "disabled", "plugin": plugin.get_info()}
+    raise HTTPException(status_code=404, detail="Plugin not found")
+
+
+@app.get("/api/plugins/{plugin_id}/status")
+async def plugin_status(plugin_id: str):
+    """Get plugin status and summary."""
+    plugin = PluginRegistry.get_plugin(plugin_id)
+    if plugin:
+        return plugin.get_status_summary()
+    raise HTTPException(status_code=404, detail="Plugin not found")
+
+
+# =============================================================================
+# Cluster Management Endpoints
+# =============================================================================
+
+@app.get("/api/clusters")
+async def list_clusters(plugin_type: Optional[str] = None):
+    """List all clusters/resources."""
+    if plugin_type:
+        clusters = PluginRegistry.get_clusters_by_type(plugin_type)
+    else:
+        clusters = PluginRegistry.get_all_clusters()
+    
+    active = PluginRegistry.get_active_cluster()
+    
+    return {
+        "clusters": [c.to_dict() for c in clusters],
+        "active_cluster": active.to_dict() if active else None
+    }
+
+
+@app.post("/api/clusters")
+async def add_cluster(request: ClusterAddRequest):
+    """Add a cluster manually."""
+    from src.plugins.base import ClusterConfig
+    
+    cluster = ClusterConfig(
+        cluster_id=request.cluster_id,
+        name=request.name,
+        region=request.region,
+        plugin_type=request.plugin_type,
+        config=request.config
+    )
+    PluginRegistry.add_cluster(cluster)
+    return {"status": "added", "cluster": cluster.to_dict()}
+
+
+@app.post("/api/clusters/{cluster_id}/activate")
+async def activate_cluster(cluster_id: str):
+    """Set a cluster as active."""
+    if PluginRegistry.set_active_cluster(cluster_id):
+        cluster = PluginRegistry.get_cluster(cluster_id)
+        return {"status": "activated", "cluster": cluster.to_dict()}
+    raise HTTPException(status_code=404, detail="Cluster not found")
+
+
+@app.get("/api/clusters/active")
+async def get_active_cluster():
+    """Get the currently active cluster."""
+    cluster = PluginRegistry.get_active_cluster()
+    if cluster:
+        return cluster.to_dict()
+    return None
+
+
+# =============================================================================
+# Plugin Registry Status
+# =============================================================================
+
+@app.get("/api/registry/status")
+async def registry_status():
+    """Get overall plugin registry status."""
+    return PluginRegistry.get_status()
 
 
 # =============================================================================
