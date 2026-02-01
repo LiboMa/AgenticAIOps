@@ -257,3 +257,50 @@ class PluginRegistry:
             "plugins": [p.get_info() for p in cls._plugins.values()],
             "cluster_list": [c.to_dict() for c in cls._clusters.values()],
         }
+    
+    @classmethod
+    def load_from_manifests(cls, config_dir: str = None) -> int:
+        """Load plugins from YAML manifests"""
+        from .manifest import ManifestLoader
+        
+        loader = ManifestLoader(config_dir)
+        manifests = loader.load_all()
+        
+        loaded = 0
+        for manifest in manifests:
+            if manifest.enabled:
+                config = PluginConfig(
+                    plugin_id=f"{manifest.type}-{manifest.name.lower().replace(' ', '-')}",
+                    plugin_type=manifest.type,
+                    name=manifest.name,
+                    enabled=manifest.enabled,
+                    config=manifest.config
+                )
+                plugin = cls.create_plugin(config)
+                if plugin:
+                    loaded += 1
+                    logger.info(f"Loaded plugin from manifest: {manifest.name}")
+        
+        return loaded
+    
+    @classmethod
+    def save_to_manifest(cls, plugin_id: str, config_dir: str = None) -> bool:
+        """Save a plugin configuration to manifest file"""
+        from .manifest import ManifestLoader, PluginManifest
+        
+        plugin = cls.get_plugin(plugin_id)
+        if not plugin:
+            return False
+        
+        manifest = PluginManifest(
+            name=plugin.config.name,
+            type=plugin.PLUGIN_TYPE,
+            version="1.0.0",
+            description=plugin.PLUGIN_DESCRIPTION,
+            icon=plugin.PLUGIN_ICON,
+            enabled=plugin.status == PluginStatus.ENABLED,
+            config=plugin.config.config
+        )
+        
+        loader = ManifestLoader(config_dir)
+        return loader.save_manifest(manifest)

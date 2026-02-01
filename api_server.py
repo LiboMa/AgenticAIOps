@@ -390,17 +390,23 @@ class ClusterAddRequest(BaseModel):
 # Initialize default plugins on startup
 @app.on_event("startup")
 async def startup_event():
-    """Initialize default plugins on startup."""
+    """Initialize plugins from manifests on startup."""
     try:
-        # Create default EKS plugin
-        eks_config = PluginConfig(
-            plugin_id="eks-default",
-            plugin_type="eks",
-            name="EKS Default",
-            enabled=True,
-            config={"regions": ["ap-southeast-1"]}
-        )
-        PluginRegistry.create_plugin(eks_config)
+        # Try loading from manifests first
+        import os
+        config_dir = os.path.join(os.path.dirname(__file__), 'config', 'plugins')
+        loaded = PluginRegistry.load_from_manifests(config_dir)
+        
+        if loaded == 0:
+            # Fallback to default EKS plugin if no manifests
+            eks_config = PluginConfig(
+                plugin_id="eks-default",
+                plugin_type="eks",
+                name="EKS Default",
+                enabled=True,
+                config={"regions": ["ap-southeast-1"]}
+            )
+            PluginRegistry.create_plugin(eks_config)
         
         # Set active cluster if available
         clusters = PluginRegistry.get_clusters_by_type("eks")
@@ -540,6 +546,82 @@ async def get_active_cluster():
 async def registry_status():
     """Get overall plugin registry status."""
     return PluginRegistry.get_status()
+
+
+# =============================================================================
+# Manifest Management Endpoints
+# =============================================================================
+
+class ManifestRequest(BaseModel):
+    name: str
+    type: str
+    description: str = ""
+    icon: str = "🔌"
+    enabled: bool = True
+    config: dict = {}
+
+
+@app.get("/api/manifests")
+async def list_manifests():
+    """List all plugin manifests."""
+    from src.plugins.manifest import ManifestLoader
+    import os
+    
+    config_dir = os.path.join(os.path.dirname(__file__), 'config', 'plugins')
+    loader = ManifestLoader(config_dir)
+    manifests = loader.load_all()
+    
+    return {
+        "manifests": [m.to_dict() for m in manifests],
+        "config_dir": str(config_dir)
+    }
+
+
+@app.post("/api/manifests")
+async def create_manifest(request: ManifestRequest):
+    """Create a new plugin manifest."""
+    from src.plugins.manifest import ManifestLoader, PluginManifest
+    import os
+    
+    config_dir = os.path.join(os.path.dirname(__file__), 'config', 'plugins')
+    
+    manifest = PluginManifest(
+        name=request.name,
+        type=request.type,
+        description=request.description,
+        icon=request.icon,
+        enabled=request.enabled,
+        config=request.config
+    )
+    
+    loader = ManifestLoader(config_dir)
+    if loader.save_manifest(manifest):
+        return {"status": "created", "manifest": manifest.to_dict()}
+    raise HTTPException(status_code=500, detail="Failed to save manifest")
+
+
+@app.post("/api/manifests/reload")
+async def reload_manifests():
+    """Reload all plugins from manifests."""
+    import os
+    
+    # Clear existing plugins
+    for plugin_id in list(PluginRegistry._plugins.keys()):
+        PluginRegistry.remove_plugin(plugin_id)
+    
+    config_dir = os.path.join(os.path.dirname(__file__), 'config', 'plugins')
+    loaded = PluginRegistry.load_from_manifests(config_dir)
+    
+    # Re-activate first cluster
+    clusters = PluginRegistry.get_all_clusters()
+    if clusters:
+        PluginRegistry.set_active_cluster(clusters[0].cluster_id)
+    
+    return {
+        "status": "reloaded",
+        "plugins_loaded": loaded,
+        "registry": PluginRegistry.get_status()
+    }
 
 
 # =============================================================================
