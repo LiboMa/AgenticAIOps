@@ -1,0 +1,12 @@
+{
+    "knowledgeBaseId": "BUE4YPV3JD",
+    "dataSourceId": "LLPNALBXEC",
+    "name": "eks-patterns",
+    "dataSourceConfiguration": {
+        "type": "S3",
+        "s3Configuration": {
+            "bucketArn": "arn:aws:s3:::agentic-aiops-kb-1769960769",
+            "inclusionPrefixes": ["eks-patterns/"]
+        }
+    }
+}
