@@ -16,65 +16,27 @@ import uvicorn
 
 # Import our modules (handle import errors gracefully)
 K8S_TOOLS_AVAILABLE = False
-k8s_tools = None
 
 try:
-    from src.tools.kubernetes import KubernetesTools
-    k8s_tools = KubernetesTools()
+    from src.kubectl_wrapper import (
+        get_pods, get_deployments, get_nodes, get_events,
+        get_pod_logs, describe_pod, get_cluster_info, get_cluster_health
+    )
     K8S_TOOLS_AVAILABLE = True
-    print("K8s tools loaded successfully")
+    print("kubectl wrapper loaded successfully")
 except Exception as e:
-    print(f"Warning: K8s tools not available: {e}")
+    print(f"Warning: kubectl wrapper not available: {e}")
+    # Define mock functions
+    def get_pods(ns=None): return {"pods": []}
+    def get_deployments(ns=None): return {"deployments": []}
+    def get_nodes(): return {"nodes": []}
+    def get_events(ns=None): return {"events": []}
+    def get_pod_logs(ns, name, lines=100): return {"logs": ""}
+    def describe_pod(ns, name): return {}
+    def get_cluster_health(): return {"status": "unknown"}
+    def get_cluster_info(): return {"name": "testing-cluster", "version": "1.32", "status": "ACTIVE", "region": "ap-southeast-1"}
 
-# Define wrapper functions
-def get_pods(ns=None):
-    if k8s_tools:
-        return k8s_tools.get_pods(namespace=ns or "all")
-    return {"pods": []}
-
-def get_deployments(ns=None):
-    if k8s_tools:
-        return k8s_tools.get_deployments(namespace=ns or "all")
-    return {"deployments": []}
-
-def get_nodes():
-    if k8s_tools:
-        return k8s_tools.get_nodes()
-    return {"nodes": []}
-
-def get_events(ns=None):
-    if k8s_tools:
-        return k8s_tools.get_events(namespace=ns or "all")
-    return {"events": []}
-
-def get_pod_logs(ns, name, lines=100):
-    if k8s_tools:
-        return k8s_tools.get_pod_logs(namespace=ns, pod_name=name, lines=lines)
-    return {"logs": ""}
-
-def describe_pod(ns, name):
-    if k8s_tools:
-        return k8s_tools.describe_pod(namespace=ns, pod_name=name)
-    return {}
-
-def get_hpa(ns=None):
-    return {"hpas": []}
-
-def get_cluster_health():
-    if k8s_tools:
-        nodes = k8s_tools.get_nodes()
-        ready_nodes = sum(1 for n in nodes.get('nodes', []) if n.get('status') == 'Ready')
-        total_nodes = len(nodes.get('nodes', []))
-        return {"status": "healthy" if ready_nodes == total_nodes else "degraded", "nodes": total_nodes}
-    return {"status": "unknown"}
-
-def get_cluster_info():
-    return {
-        "name": os.environ.get("EKS_CLUSTER_NAME", "testing-cluster"),
-        "version": "1.32",
-        "status": "ACTIVE",
-        "region": os.environ.get("AWS_REGION", "ap-southeast-1")
-    }
+def get_hpa(ns=None): return {"hpas": []}
 
 from src.intent_classifier import analyze_query
 from src.multi_agent_voting import extract_diagnosis, simple_vote
