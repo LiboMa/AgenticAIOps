@@ -66,8 +66,51 @@ class ChatResponse(BaseModel):
     confidence: Optional[float] = None
 
 
-# In-memory storage for RCA reports (use DynamoDB in production)
-rca_reports = []
+# =============================================================================
+# Strands Agent Integration
+# =============================================================================
+
+_agent = None
+
+def get_agent():
+    """Get or create the Strands Agent instance."""
+    global _agent
+    if _agent is None:
+        try:
+            from strands import Agent
+            from strands.models import BedrockModel
+            from strands_agent_full import (
+                get_cluster_health as eks_health,
+                get_cluster_info as eks_info,
+                get_nodes as eks_nodes,
+                get_pods as eks_pods,
+                get_deployments as eks_deployments,
+                get_events as eks_events,
+                get_pod_logs as eks_logs,
+                scale_deployment
+            )
+            
+            model = BedrockModel(
+                model_id="apac.anthropic.claude-3-haiku-20240307-v1:0",
+                region_name="ap-southeast-1"
+            )
+            
+            system_prompt = """You are an expert SRE AI assistant for Amazon EKS clusters.
+            
+You help diagnose issues, check cluster health, and provide recommendations.
+Be concise but thorough. Always check relevant data before making conclusions."""
+            
+            _agent = Agent(
+                model=model,
+                tools=[eks_health, eks_info, eks_nodes, eks_pods, 
+                       eks_deployments, eks_events, eks_logs, scale_deployment],
+                system_prompt=system_prompt
+            )
+            print("Strands Agent initialized successfully")
+        except Exception as e:
+            print(f"Failed to initialize Strands Agent: {e}")
+            _agent = None
+    return _agent
 
 
 # =============================================================================
@@ -81,21 +124,29 @@ async def chat(request: ChatRequest):
         # Classify intent
         analysis = analyze_query(request.message)
         
-        # For MVP, return a simulated response
-        # In production, this calls the actual Strands agent
-        response = f"""Intent: {analysis['intent']} (confidence: {analysis['confidence']:.0%})
+        # Try to use real Strands Agent
+        agent = get_agent()
+        
+        if agent:
+            # Call real agent
+            result = agent(request.message)
+            response_text = str(result)
+        else:
+            # Fallback to intent-based response
+            response_text = f"""Intent: {analysis['intent']} (confidence: {analysis['confidence']:.0%})
 
-Based on your query, I would use these tools: {', '.join(analysis['recommended_tools'][:3])}
+Recommended tools: {', '.join(analysis['recommended_tools'][:3])}
 
-[This is a demo response. Connect the Strands agent for live analysis.]"""
+[Agent not available - showing intent analysis only]"""
         
         return ChatResponse(
-            response=response,
+            response=response_text,
             intent=analysis['intent'],
             confidence=analysis['confidence']
         )
     except Exception as e:
-        return ChatResponse(response=f"Error: {str(e)}")
+        import traceback
+        return ChatResponse(response=f"Error: {str(e)}\n{traceback.format_exc()}")
 
 
 # =============================================================================
