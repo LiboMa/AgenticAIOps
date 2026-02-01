@@ -1,103 +1,203 @@
-# AgenticAIOps
+# AgenticAIOps - AI-Powered Kubernetes Operations
 
-AI-powered operations assistant for Amazon EKS using Strands SDK and Amazon Bedrock.
+An intelligent AIOps agent for Amazon EKS clusters, powered by AWS Bedrock and Strands SDK.
 
-## Features
+## 🏗️ Architecture
 
-- 🤖 **Strands SDK** - Modern agentic AI framework with `@tool` decorators
-- 🔧 **EKS Operations** - Cluster health, info, nodes, VPC configuration
-- ☁️ **Amazon Bedrock** - Claude models via APAC inference profiles
-- 🧪 **Tested** - 4/4 test scenarios passing
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    AgenticAIOps Architecture                    │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  ┌─────────────┐     ┌─────────────┐     ┌─────────────┐       │
+│  │   React     │     │  FastAPI    │     │   Strands   │       │
+│  │  Dashboard  │────▶│   Backend   │────▶│    Agent    │       │
+│  │  (Vite+MUI) │     │  (uvicorn)  │     │  (Bedrock)  │       │
+│  └─────────────┘     └─────────────┘     └─────────────┘       │
+│        :5173              :8000                 │               │
+│                                                 │               │
+│                                    ┌────────────┴────────────┐ │
+│                                    │                         │ │
+│                              ┌─────▼─────┐           ┌───────▼───────┐
+│                              │  Intent   │           │   AWS MCP     │
+│                              │ Classifier│           │   Server      │
+│                              └───────────┘           │  (16 tools)   │
+│                                    │                 └───────────────┘
+│                              ┌─────▼─────┐                   │
+│                              │Multi-Agent│           ┌───────▼───────┐
+│                              │  Voting   │           │    kubectl    │
+│                              └───────────┘           │   wrapper     │
+│                                                      └───────────────┘
+│                                                              │
+│                                                      ┌───────▼───────┐
+│                                                      │  Amazon EKS   │
+│                                                      │   Cluster     │
+│                                                      └───────────────┘
+└─────────────────────────────────────────────────────────────────┘
+```
 
-## Quick Start
+## 📦 Modules
+
+| Module | Description | Status |
+|--------|-------------|--------|
+| `src/intent_classifier.py` | Query intent classification (5 categories) | ✅ |
+| `src/multi_agent_voting.py` | Multi-agent voting for reduced hallucination | ✅ |
+| `src/kubectl_wrapper.py` | Fast kubectl subprocess wrapper with caching | ✅ |
+| `mcp_agent.py` | Strands Agent with AWS MCP Server | ✅ |
+| `api_server.py` | FastAPI backend for Dashboard | ✅ |
+| `dashboard/` | React frontend (Vite + MUI) | ✅ |
+| `eks-patterns/` | EKS troubleshooting patterns for GraphRAG | ✅ |
+
+## 🚀 Quick Start
+
+### Prerequisites
+- Python 3.10+
+- Node.js 18+
+- AWS CLI configured
+- kubectl configured for EKS cluster
+- AWS Bedrock access (Claude models)
+
+### Installation
 
 ```bash
-# Create virtual environment
-python3 -m venv venv
+# Clone repository
+git clone https://github.com/LiboMa/AgenticAIOps.git
+cd AgenticAIOps
+
+# Checkout MCP branch
+git checkout agent-mcp
+
+# Setup Python environment
+python -m venv venv
 source venv/bin/activate
+pip install -r requirements.txt
 
-# Install dependencies
-pip install strands-agents boto3
-
-# Configure AWS credentials
-aws configure
-
-# Run tests
-python3 test_strands.py
-
-# Interactive mode
-python3 strands_agent.py
+# Setup React dashboard
+cd dashboard
+npm install
+cd ..
 ```
 
-## Architecture
+### Running the Services
 
-```
-┌─────────────────────────────────────────────────┐
-│  Strands Agent SDK                              │
-│  ├── @tool decorators for EKS operations        │
-│  ├── ReAct loop (built-in)                      │
-│  └── Bedrock model integration                  │
-└─────────────────────────────────────────────────┘
-                      ↓
-┌─────────────────────────────────────────────────┐
-│  Amazon Bedrock (APAC Claude 3 Haiku)           │
-│  ├── Natural language understanding             │
-│  └── Tool selection & response generation       │
-└─────────────────────────────────────────────────┘
-                      ↓
-┌─────────────────────────────────────────────────┐
-│  EKS Cluster (boto3 API)                        │
-│  ├── Cluster health & info                      │
-│  ├── Node groups & compute config               │
-│  └── VPC & networking                           │
-└─────────────────────────────────────────────────┘
-```
-
-## Available Tools
-
-| Tool | Description |
-|------|-------------|
-| `get_cluster_health` | Check cluster health status |
-| `get_cluster_info` | Get cluster version, endpoint, platform |
-| `get_nodes` | View compute/node configuration |
-| `get_vpc_config` | Check VPC and networking setup |
-| `list_nodegroups` | List managed node groups |
-| `get_addons` | List installed add-ons |
-
-## Example Usage
-
-```python
-from strands import Agent, tool
-from strands.models import BedrockModel
-
-model = BedrockModel(
-    model_id="apac.anthropic.claude-3-haiku-20240307-v1:0",
-    region_name="ap-southeast-1"
-)
-
-agent = Agent(model=model, tools=[get_cluster_health, get_cluster_info])
-response = agent("Check the health of my EKS cluster")
-print(response)
-```
-
-## Sample Workloads
-
-Deploy sample applications for testing:
-
+**1. Start Backend API**
 ```bash
-kubectl apply -f samples/onlineshop.yaml
-kubectl apply -f samples/bookstore.yaml
-kubectl apply -f samples/faulty-workloads.yaml  # For testing diagnostics
+source venv/bin/activate
+python api_server.py
+# Running on http://localhost:8000
 ```
 
-## Roadmap
+**2. Start Dashboard**
+```bash
+cd dashboard
+npm run dev -- --host 0.0.0.0
+# Running on http://localhost:5173
+```
 
-- [ ] Intent classification layer
-- [ ] Multi-agent voting (reduce hallucinations)
-- [ ] Operation sequence recommendations
-- [ ] Knowledge graph integration
-- [ ] AgentCore deployment
+**3. Access Dashboard**
+Open browser: `http://localhost:5173`
 
-## License
+## 📊 Features
+
+### Dashboard Tabs
+
+| Tab | Function |
+|-----|----------|
+| 💬 Chat | Conversational interface with AI agent |
+| 📊 EKS Status | Real-time cluster, node, pod status |
+| 🚨 Anomalies | Automated anomaly detection with AI suggestions |
+| 📝 RCA Reports | Root cause analysis history and reports |
+
+### Intent Categories
+
+| Intent | Keywords | Recommended Tools |
+|--------|----------|-------------------|
+| `diagnose` | issue, error, crash, why | get_pods, get_events, get_pod_logs |
+| `monitor` | status, health, check | get_cluster_health, get_pods, get_nodes |
+| `scale` | scale, replica, increase | scale_deployment, get_hpa |
+| `info` | what, list, show | get_cluster_info, get_pods |
+| `recover` | restart, rollback, fix | scale_deployment |
+
+### Supported Diagnoses
+
+- OOM (Out of Memory)
+- CrashLoopBackOff
+- ImagePullBackOff
+- Pending pods
+- Network issues
+- Configuration errors
+
+## 📁 Project Structure
+
+```
+AgenticAIOps/
+├── api_server.py           # FastAPI backend
+├── mcp_agent.py            # Strands + MCP Agent
+├── strands_agent.py        # Standalone Strands Agent
+├── src/
+│   ├── intent_classifier.py
+│   ├── multi_agent_voting.py
+│   ├── kubectl_wrapper.py
+│   └── tools/
+│       ├── kubernetes.py
+│       └── aws.py
+├── dashboard/              # React frontend
+│   ├── src/
+│   │   ├── App.jsx
+│   │   └── components/
+│   │       ├── ChatPanel.jsx
+│   │       ├── EKSStatus.jsx
+│   │       ├── Anomalies.jsx
+│   │       └── RCAReports.jsx
+│   └── package.json
+├── eks-patterns/           # GraphRAG patterns
+│   ├── troubleshooting/
+│   │   ├── oom-killed.md
+│   │   ├── crashloop-backoff.md
+│   │   ├── image-pull-fail.md
+│   │   └── pending-pods.md
+│   └── best-practices/
+│       └── resource-limits.md
+├── samples/                # K8s sample workloads
+└── docs/
+    ├── TESTING.md
+    └── ROADMAP.md
+```
+
+## 🔧 API Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Health check |
+| `/api/cluster/info` | GET | Cluster information |
+| `/api/pods` | GET | List all pods |
+| `/api/nodes` | GET | List all nodes |
+| `/api/deployments` | GET | List deployments |
+| `/api/events` | GET | Recent events |
+| `/api/anomalies` | GET | Detected anomalies |
+| `/api/chat` | POST | Chat with agent |
+| `/api/rca/reports` | GET | RCA reports |
+
+## 🛣️ Roadmap
+
+- [x] Strands SDK integration
+- [x] AWS MCP Server integration
+- [x] Intent classification
+- [x] Multi-agent voting
+- [x] React Dashboard
+- [x] Real-time anomaly detection
+- [ ] GraphRAG Knowledge Base
+- [ ] Bedrock Agents integration
+- [ ] Auto-remediation actions
+- [ ] ALB deployment
+
+## 📄 License
 
 MIT
+
+## 🤝 Contributors
+
+- Ma Ronnie (Project Lead)
+- Worker1 (豆腐脑) - Development
+- Worker2 - Research
+- Myboat - Coordination
