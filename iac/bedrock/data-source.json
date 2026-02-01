@@ -1,6 +1,6 @@
 {
-    "knowledgeBaseId": "BUE4YPV3JD",
-    "dataSourceId": "LLPNALBXEC",
+    "knowledgeBaseId": "GGNIZHOHEX",
+    "dataSourceId": "RBGUGKKISS",
     "name": "eks-patterns",
     "dataSourceConfiguration": {
         "type": "S3",

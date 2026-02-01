@@ -1,18 +1,18 @@
 {
-    "knowledgeBaseId": "BUE4YPV3JD",
+    "knowledgeBaseId": "GGNIZHOHEX",
     "name": "AgenticAIOps-KB",
     "roleArn": "arn:aws:iam::533267047935:role/AgenticAIOps-KB-Role",
     "knowledgeBaseConfiguration": {
         "type": "VECTOR",
         "vectorKnowledgeBaseConfiguration": {
-            "embeddingModelArn": "arn:aws:bedrock:ap-southeast-1::foundation-model/amazon.titan-embed-text-v1"
+            "embeddingModelArn": "arn:aws:bedrock:ap-southeast-1::foundation-model/cohere.embed-multilingual-v3"
         }
     },
     "storageConfiguration": {
         "type": "OPENSEARCH_SERVERLESS",
         "opensearchServerlessConfiguration": {
             "collectionArn": "arn:aws:aoss:ap-southeast-1:533267047935:collection/pfa6wvl941lbwaihiz54",
-            "vectorIndexName": "agentic-aiops-index",
+            "vectorIndexName": "agentic-aiops-cohere",
             "fieldMapping": {
                 "vectorField": "vector",
                 "textField": "text",

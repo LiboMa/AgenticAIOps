@@ -55,7 +55,7 @@ AWS_REGION = os.environ.get("AWS_REGION", "ap-southeast-1")
 # Knowledge Base Configuration
 # =============================================================================
 
-KNOWLEDGE_BASE_ID = os.environ.get("KNOWLEDGE_BASE_ID", "")
+KNOWLEDGE_BASE_ID = os.environ.get("KNOWLEDGE_BASE_ID", "GGNIZHOHEX")
 KB_S3_BUCKET = os.environ.get("KB_S3_BUCKET", "agentic-aiops-kb-1769960769")
 
 
