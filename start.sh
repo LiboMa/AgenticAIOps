@@ -9,6 +9,9 @@ PROJECT_DIR="/home/ubuntu/agentic-aiops-mvp"
 PID_FILE="$PROJECT_DIR/.pids"
 LOG_DIR="$PROJECT_DIR/logs"
 
+# Default model (can be overridden: ./start.sh sonnet)
+AGENT_MODEL="${1:-haiku}"
+
 # Colors
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -18,6 +21,7 @@ NC='\033[0m' # No Color
 echo "========================================"
 echo "  AgenticAIOps Dashboard 启动中..."
 echo "========================================"
+echo -e "  Model: ${GREEN}${AGENT_MODEL}${NC}"
 
 # Create logs directory
 mkdir -p "$LOG_DIR"
@@ -38,9 +42,9 @@ if [ -f "$PID_FILE" ]; then
     sleep 2
 fi
 
-# Start Backend API
+# Start Backend API with model configuration
 echo -e "${GREEN}启动后端 API (FastAPI)...${NC}"
-nohup python api_server.py > "$LOG_DIR/backend.log" 2>&1 &
+AGENT_MODEL=$AGENT_MODEL nohup python api_server.py > "$LOG_DIR/backend.log" 2>&1 &
 BACKEND_PID=$!
 echo $BACKEND_PID >> "$PID_FILE"
 
@@ -74,11 +78,16 @@ echo ""
 echo "  📊 Dashboard:  http://${SERVER_IP}:5173"
 echo "  🔧 API:        http://localhost:8000"
 echo "  📋 API Docs:   http://localhost:8000/docs"
+echo "  🤖 Model:      $AGENT_MODEL"
+echo ""
+echo "  用法:"
+echo "    ./start.sh          # 使用默认 (haiku)"
+echo "    ./start.sh sonnet   # 使用 Sonnet 4.5"
+echo "    ./start.sh opus     # 使用 Opus 4.5"
 echo ""
 echo "  日志文件:"
 echo "    - $LOG_DIR/backend.log"
 echo "    - $LOG_DIR/frontend.log"
 echo ""
 echo "  停止服务:  ./stop.sh"
-echo "  查看日志:  tail -f $LOG_DIR/backend.log"
 echo ""

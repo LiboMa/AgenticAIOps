@@ -79,6 +79,7 @@ def get_agent():
         try:
             from strands import Agent
             from strands.models import BedrockModel
+            from src.config import get_model_id, AWS_REGION
             from strands_agent_full import (
                 get_cluster_health as eks_health,
                 get_cluster_info as eks_info,
@@ -90,9 +91,16 @@ def get_agent():
                 scale_deployment
             )
             
+            # Get model from environment or default
+            import os
+            model_name = os.environ.get("AGENT_MODEL", "haiku")
+            model_id = get_model_id(model_name)
+            
+            print(f"Initializing Strands Agent with model: {model_id}")
+            
             model = BedrockModel(
-                model_id="apac.anthropic.claude-3-haiku-20240307-v1:0",
-                region_name="ap-southeast-1"
+                model_id=model_id,
+                region_name=AWS_REGION
             )
             
             system_prompt = """You are an expert SRE AI assistant for Amazon EKS clusters.
