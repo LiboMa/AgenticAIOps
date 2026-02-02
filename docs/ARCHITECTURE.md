@@ -1,161 +1,342 @@
-# AgenticAIOps for EKS - MVP Architecture
+# AgenticAIOps 系统架构文档
 
-## Overview
+> **Version**: 1.0  
+> **Last Updated**: 2026-02-02  
+> **Status**: Phase 4 Complete
 
-An LLM-powered agent that can understand, diagnose, and remediate issues in Amazon EKS clusters through natural language interaction.
+---
 
-## Architecture Diagram
+## 📋 目录
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         User Interface                               │
-│                    (Slack / CLI / Web Chat)                         │
-└─────────────────────────────────┬───────────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                      AgenticAIOps Core                               │
-│  ┌─────────────────────────────────────────────────────────────┐   │
-│  │                    LLM Agent (Claude/GPT)                    │   │
-│  │                                                               │   │
-│  │  • Intent Recognition                                        │   │
-│  │  • Action Planning                                           │   │
-│  │  • Result Interpretation                                     │   │
-│  │  • Natural Language Response                                 │   │
-│  └─────────────────────────────────────────────────────────────┘   │
-│                              │                                       │
-│                              ▼                                       │
-│  ┌─────────────────────────────────────────────────────────────┐   │
-│  │                     Tool Registry                            │   │
-│  │                                                               │   │
-│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐    │   │
-│  │  │ kubectl  │  │ AWS SDK  │  │CloudWatch│  │   Helm   │    │   │
-│  │  │  Tools   │  │  Tools   │  │  Tools   │  │  Tools   │    │   │
-│  │  └──────────┘  └──────────┘  └──────────┘  └──────────┘    │   │
-│  └─────────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────┬───────────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                         AWS Environment                              │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐              │
-│  │     EKS      │  │  CloudWatch  │  │     EC2      │              │
-│  │   Cluster    │  │    Logs &    │  │   (Nodes)    │              │
-│  │              │  │   Metrics    │  │              │              │
-│  └──────────────┘  └──────────────┘  └──────────────┘              │
-└─────────────────────────────────────────────────────────────────────┘
-```
+1. [系统概览](#系统概览)
+2. [核心组件](#核心组件)
+3. [ACI (Agent-Cloud Interface)](#aci-agent-cloud-interface)
+4. [Multi-Agent Voting (mABC)](#multi-agent-voting-mabc)
+5. [数据流](#数据流)
+6. [部署架构](#部署架构)
+7. [安全架构](#安全架构)
 
-## Core Components
+---
 
-### 1. LLM Agent
-- Receives natural language requests
-- Plans multi-step actions
-- Interprets results and provides recommendations
-- Maintains conversation context
+## 系统概览
 
-### 2. Tool Registry
-A set of callable tools the agent can use:
+AgenticAIOps 是一个基于 AI Agent 的智能运维平台，集成 AWS EKS、EC2、Lambda 等云服务的自主诊断与运维能力。
 
-#### Kubernetes Tools (kubectl wrapper)
-- `get_pods` - List pods with status
-- `get_pod_logs` - Fetch pod logs
-- `describe_pod` - Get detailed pod info
-- `get_events` - Cluster events
-- `get_deployments` - Deployment status
-- `scale_deployment` - Scale replicas
-- `restart_deployment` - Rolling restart
-- `rollback_deployment` - Rollback to previous version
+### 设计理念
 
-#### AWS Tools
-- `describe_cluster` - EKS cluster info
-- `list_nodegroups` - Node group details
-- `get_node_health` - EC2 node status
-- `get_cloudwatch_metrics` - Cluster metrics
-- `get_cloudwatch_logs` - Application logs
+- **AIOpsLab Framework**: 基于微软研究院 AIOpsLab 论文的 P=⟨T,C,S⟩ 问题定义框架
+- **mABC Voting**: 基于区块链启发的多 Agent 加权投票机制
+- **MCP Protocol**: 利用 AWS 官方 Model Context Protocol 服务器
 
-#### Diagnostic Tools
-- `analyze_pod_issues` - Automated issue detection
-- `check_resource_usage` - CPU/Memory analysis
-- `connectivity_test` - Network diagnostics
-
-### 3. Safety Layer
-- Read-only mode by default
-- Action confirmation for destructive operations
-- Audit logging of all actions
-- Rollback capability
-
-## MVP Scope
-
-### Phase 1: Read Operations (Day 1)
-- [ ] Query cluster state
-- [ ] View pod logs and events
-- [ ] Basic diagnostics
-- [ ] Natural language responses
-
-### Phase 2: Write Operations (Day 2+)
-- [ ] Scale deployments
-- [ ] Restart pods
-- [ ] Rollback deployments
-- [ ] With human approval flow
-
-## Technology Stack
-
-- **Language**: Python 3.11+
-- **LLM Framework**: LangChain or direct API
-- **Kubernetes Client**: kubernetes-client/python
-- **AWS SDK**: boto3
-- **Interface**: CLI (MVP), Slack (future)
-
-## Security Considerations
-
-1. **RBAC**: Agent uses a dedicated ServiceAccount with minimal permissions
-2. **Audit**: All actions logged to CloudWatch
-3. **Approval**: Destructive actions require confirmation
-4. **Secrets**: No hardcoded credentials, use IAM roles
-
-## Example Interactions
+### 系统架构图
 
 ```
-User: "Why is my payment-service pod crashing?"
-
-Agent:
-1. get_pods(namespace="production", label="app=payment-service")
-2. get_pod_logs(pod="payment-service-xyz", tail=100)
-3. get_events(namespace="production", field_selector="involvedObject.name=payment-service-xyz")
-4. analyze_pod_issues(pod="payment-service-xyz")
-
-Response: "The payment-service pod is in CrashLoopBackOff. Looking at the logs,
-I see an OOMKilled error - the container exceeded its memory limit of 512Mi.
-The pod has restarted 5 times in the last 10 minutes.
-
-Recommended actions:
-1. Increase memory limit to 1Gi
-2. Check for memory leaks in recent deployments
-3. Review the application's memory usage patterns
-
-Would you like me to increase the memory limit?"
+┌─────────────────────────────────────────────────────────────────┐
+│                    AgenticAIOps Architecture                    │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  ┌─────────────────┐     ┌─────────────────┐     ┌───────────┐ │
+│  │   React         │     │   FastAPI       │     │  Strands  │ │
+│  │   Dashboard     │────▶│   Backend       │────▶│   Agent   │ │
+│  │   (Vite+MUI)    │     │   (uvicorn)     │     │ (Bedrock) │ │
+│  └─────────────────┘     └─────────────────┘     └───────────┘ │
+│        :5173                   :8000                   │        │
+│                                                        │        │
+│  ┌─────────────────────────────────────────────────────┴───────┐│
+│  │              ACI (Agent-Cloud Interface)                     ││
+│  │  ┌─────────────────────────────────────────────────────────┐││
+│  │  │  get_logs() │ get_events() │ get_metrics() │ kubectl()  │││
+│  │  └─────────────────────────────────────────────────────────┘││
+│  └─────────────────────────────────────────────────────────────┘│
+│                              │                                  │
+│  ┌───────────────────────────┴────────────────────────────────┐│
+│  │                    Plugin System                            ││
+│  │  ┌─────────┐  ┌─────────┐  ┌──────────┐  ┌─────────┐      ││
+│  │  │   EKS   │  │   EC2   │  │  Lambda  │  │   HPC   │      ││
+│  │  │   ☸️    │  │   🖥️    │  │    λ     │  │   🖧    │      ││
+│  │  └─────────┘  └─────────┘  └──────────┘  └─────────┘      ││
+│  └────────────────────────────────────────────────────────────┘│
+│                              │                                  │
+│  ┌───────────────────────────┴────────────────────────────────┐│
+│  │              Multi-Agent Voting (mABC)                      ││
+│  │          Weight = α×Contribution + β×Expertise              ││
+│  │                  (α=0.4, β=0.6)                             ││
+│  └────────────────────────────────────────────────────────────┘│
+│                              │                                  │
+│  ┌───────────────────────────┴────────────────────────────────┐│
+│  │                 Infrastructure Layer                        ││
+│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐     ││
+│  │  │ EKS MCP      │  │  Prometheus  │  │   Grafana    │     ││
+│  │  │ (16 tools)   │  │              │  │              │     ││
+│  │  └──────────────┘  └──────────────┘  └──────────────┘     ││
+│  └────────────────────────────────────────────────────────────┘│
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-## Files Structure
+---
+
+## 核心组件
+
+### 1. 前端 (React Dashboard)
+
+| 路径 | 描述 |
+|------|------|
+| `dashboard/src/App.jsx` | 主应用入口 |
+| `dashboard/src/components/ChatPanel.jsx` | Agent 对话面板 |
+| `dashboard/src/components/EKSStatus.jsx` | 集群状态展示 |
+| `dashboard/src/components/ACITelemetry.jsx` | ACI 遥测数据展示 |
+| `dashboard/src/components/Anomalies.jsx` | 告警展示 |
+
+### 2. 后端 (FastAPI)
+
+| 路径 | 描述 |
+|------|------|
+| `api_server.py` | FastAPI 主服务 |
+| `/api/chat` | Agent 对话接口 |
+| `/api/aci/*` | ACI 数据接口 |
+| `/api/plugins` | 插件管理接口 |
+| `/api/clusters` | 集群管理接口 |
+
+### 3. AI Agent (Strands SDK)
+
+| 路径 | 描述 |
+|------|------|
+| `mcp_agent.py` | Strands Agent + MCP |
+| `src/intent_classifier.py` | 意图分类器 |
+
+---
+
+## ACI (Agent-Cloud Interface)
+
+ACI 是 Agent 与云环境交互的统一接口层。
+
+### 模块结构
 
 ```
-agentic-aiops-mvp/
-├── src/
-│   ├── __init__.py
-│   ├── agent.py          # Main agent logic
-│   ├── tools/
-│   │   ├── __init__.py
-│   │   ├── kubernetes.py # kubectl wrappers
-│   │   ├── aws.py        # AWS SDK tools
-│   │   └── diagnostics.py# Analysis tools
-│   ├── prompts/
-│   │   └── system.py     # System prompts
-│   └── cli.py            # CLI interface
-├── docs/
-│   └── ARCHITECTURE.md
-├── tests/
-│   └── test_tools.py
-├── requirements.txt
-└── README.md
+src/aci/
+├── __init__.py          # 导出 AgentCloudInterface
+├── interface.py         # 主接口类
+├── models.py            # 数据模型 (TelemetryResult, OperationResult)
+├── mcp_bridge.py        # MCP Server 桥接
+├── telemetry/
+│   ├── logs.py          # 日志获取
+│   ├── events.py        # 事件获取
+│   ├── metrics.py       # 指标获取
+│   └── prometheus.py    # Prometheus 查询
+├── operations/
+│   ├── kubectl.py       # kubectl 执行器
+│   └── shell.py         # Shell 执行器
+├── security/
+│   ├── filters.py       # 命令安全过滤
+│   └── audit.py         # 审计日志
+└── context/
+    └── __init__.py      # 上下文 (拓扑/依赖)
 ```
+
+### API 概览
+
+| 方法 | 描述 | 数据源 |
+|------|------|--------|
+| `get_logs()` | 获取 Pod 日志 | kubectl / CloudWatch |
+| `get_events()` | 获取 K8s 事件 | kubectl |
+| `get_metrics()` | 获取指标 | Prometheus / CloudWatch |
+| `kubectl()` | 执行 kubectl | kubectl CLI |
+| `exec_shell()` | 执行 Shell | Shell (受限) |
+
+### 使用示例
+
+```python
+from src.aci import AgentCloudInterface
+
+aci = AgentCloudInterface(
+    cluster_name="testing-cluster",
+    region="ap-southeast-1"
+)
+
+# 获取错误日志
+logs = aci.get_logs(
+    namespace="default",
+    severity="error",
+    duration_minutes=30
+)
+
+# 获取警告事件
+events = aci.get_events(
+    namespace="stress-test",
+    event_type="Warning"
+)
+
+# 获取 CPU 指标
+metrics = aci.get_metrics(
+    namespace="default",
+    metric_names=["cpu_usage", "memory_usage"]
+)
+```
+
+---
+
+## Multi-Agent Voting (mABC)
+
+基于 mABC 论文实现的加权投票机制，减少 LLM 幻觉。
+
+### 核心公式
+
+```
+Weight = α × Contribution + β × Expertise
+
+其中:
+- α = 0.4 (贡献度权重)
+- β = 0.6 (专业度权重)
+- Contribution: 历史贡献度 (0.1 - 1.0)
+- Expertise: 任务领域专业度 (0.0 - 1.0)
+```
+
+### Agent 角色
+
+| 角色 | 专长领域 |
+|------|----------|
+| Orchestrator | 协调、流程 |
+| Architect | 设计、架构 |
+| Developer | 实现、代码 |
+| Tester | 测试、验证 |
+| Reviewer | 评审、质量 |
+
+### 使用示例
+
+```python
+from src.voting import MultiAgentVoting, TaskType
+
+voting = MultiAgentVoting()
+
+result = voting.vote(
+    task_type=TaskType.ANALYSIS,
+    query="根因分析",
+    agent_responses={
+        "architect": "OOM 导致崩溃",
+        "developer": "内存溢出问题",
+        "tester": "确认 OOM 复现"
+    }
+)
+
+print(f"诊断: {result.final_answer}")
+print(f"共识: {result.consensus}")
+print(f"置信度: {result.agreement_ratio:.0%}")
+```
+
+### 共识检测
+
+```python
+consensus = agreement_ratio >= 0.66  # 66% 阈值
+```
+
+---
+
+## 数据流
+
+### 诊断流程
+
+```
+用户请求
+    │
+    ▼
+┌──────────────────┐
+│  Intent Classify │  ← 意图识别
+└────────┬─────────┘
+         │
+         ▼
+┌──────────────────┐
+│  ACI Telemetry   │  ← 数据收集
+│  - get_events()  │
+│  - get_logs()    │
+│  - get_metrics() │
+└────────┬─────────┘
+         │
+         ▼
+┌──────────────────┐
+│  Multi-Agent     │  ← 多 Agent 分析
+│  Analysis        │
+└────────┬─────────┘
+         │
+         ▼
+┌──────────────────┐
+│  Voting (mABC)   │  ← 加权投票
+│  Weight = α×C+β×E│
+└────────┬─────────┘
+         │
+         ▼
+┌──────────────────┐
+│  Final Diagnosis │  ← 诊断结论
+│  + Recommendation│
+└──────────────────┘
+```
+
+---
+
+## 部署架构
+
+### 组件端口
+
+| 组件 | 端口 | 协议 |
+|------|------|------|
+| FastAPI Backend | 8000 | HTTP |
+| React Dashboard | 5173 | HTTP |
+| Grafana | 3000 | HTTP |
+| Prometheus | 9090 | HTTP |
+| EKS MCP Server | (internal) | stdio |
+
+### 环境变量
+
+| 变量 | 描述 | 默认值 |
+|------|------|--------|
+| `AGENT_MODEL` | Bedrock 模型 | haiku |
+| `AWS_REGION` | AWS 区域 | ap-southeast-1 |
+| `VITE_API_URL` | 后端 URL | http://localhost:8000 |
+| `PROMETHEUS_URL` | Prometheus | http://localhost:9090 |
+
+---
+
+## 安全架构
+
+### 命令过滤
+
+ACI 内置安全过滤器，阻止危险操作：
+
+```python
+# 被阻止的 kubectl 命令
+BLOCKED_KUBECTL = [
+    "delete namespace",
+    "delete all",
+    "exec",
+    "--privileged",
+]
+
+# 被阻止的 Shell 命令
+BLOCKED_SHELL = [
+    "rm -rf",
+    "dd if=",
+    "> /dev/",
+    "chmod 777",
+]
+```
+
+### 审计日志
+
+所有操作记录审计日志：
+
+```
+2026-02-02 14:30:00 | kubectl | get pods -n default | SUCCESS | cluster=testing
+2026-02-02 14:30:05 | kubectl | delete namespace prod | BLOCKED | cluster=testing
+```
+
+---
+
+## 参考文档
+
+- [ACI_DESIGN.md](designs/ACI_DESIGN.md) - ACI 详细设计
+- [VOTING_DESIGN.md](designs/VOTING_DESIGN.md) - Voting 详细设计
+- [PHASE4_SCENARIOS.md](designs/PHASE4_SCENARIOS.md) - 故障注入场景
+- [MULTI_CLUSTER_DESIGN.md](designs/MULTI_CLUSTER_DESIGN.md) - 多集群设计 (Phase 5)
+
+---
+
+**© 2026 AgenticAIOps Team**
