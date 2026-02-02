@@ -1,0 +1,12 @@
+2026.2.2 
+
+1. 增加了ACI接口，可以自由的对EKS、EC 
+2. 增加了破坏事件。
+
+==== Core =================
+未来的实现是 - 将云视为操作系统,
+1. !! 初始化Agent应用，全云扫描 
+2. !! 选择要纳管的服务[EKS,VPC,EC2...]，后期来选择要加入的Agent数量
+3. 统一抽象架构 每个服务都会有 get-events、get-metrics、abnormal predirection，RCS，以及Auto remidition
+
+==========================
