@@ -1,0 +1,12 @@
+author: ''
+config:
+  regions:
+  - ap-southeast-1
+dependencies: []
+description: AWS Lambda function management
+enabled: false
+homepage: ''
+icon: λ
+name: Lambda Functions
+type: lambda
+version: 1.0.0

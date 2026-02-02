@@ -1,0 +1,12 @@
+{
+    "knowledgeBaseId": "GGNIZHOHEX",
+    "dataSourceId": "RBGUGKKISS",
+    "name": "eks-patterns",
+    "dataSourceConfiguration": {
+        "type": "S3",
+        "s3Configuration": {
+            "bucketArn": "arn:aws:s3:::agentic-aiops-kb-1769960769",
+            "inclusionPrefixes": ["eks-patterns/"]
+        }
+    }
+}

@@ -1,0 +1,13 @@
+author: ''
+config:
+  include_stopped: true
+  regions:
+  - ap-southeast-1
+dependencies: []
+description: Amazon EC2 instance monitoring
+enabled: true
+homepage: ''
+icon: 🖥️
+name: EC2 Monitor
+type: ec2
+version: 1.0.0

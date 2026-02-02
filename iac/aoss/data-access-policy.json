@@ -1,0 +1,22 @@
+{
+    "name": "agentic-aiops-kb-data",
+    "type": "data",
+    "policy": [{
+        "Rules": [
+            {
+                "ResourceType": "collection",
+                "Resource": ["collection/agentic-aiops-kb"],
+                "Permission": ["aoss:CreateCollectionItems", "aoss:UpdateCollectionItems", "aoss:DescribeCollectionItems"]
+            },
+            {
+                "ResourceType": "index",
+                "Resource": ["index/agentic-aiops-kb/*"],
+                "Permission": ["aoss:CreateIndex", "aoss:UpdateIndex", "aoss:DescribeIndex", "aoss:ReadDocument", "aoss:WriteDocument"]
+            }
+        ],
+        "Principal": [
+            "arn:aws:iam::533267047935:role/AgenticAIOps-KB-Role",
+            "arn:aws:iam::533267047935:role/iam-mbot-role"
+        ]
+    }]
+}
