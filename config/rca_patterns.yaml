@@ -1,0 +1,189 @@
+# Root Cause Pattern Rules Configuration
+# Version: 1.0
+# AgenticAIOps - Phase 5
+
+version: "1.0"
+
+patterns:
+  # ============================================================
+  # OOM (Out of Memory) - Medium Severity, Auto-fixable
+  # ============================================================
+  - id: "oom-001"
+    name: "OOM Kill - Memory Limit"
+    description: "Pod 因内存超限被 OOM Killer 终止"
+    
+    symptoms:
+      events:
+        - reason: "OOMKilled"
+        - reason: "OOMKilling"
+    
+    root_cause: "内存限制过低或应用内存泄漏"
+    severity: "medium"
+    confidence: 0.9
+    
+    remediation:
+      action: "increase_memory_limit"
+      auto_execute: true
+      params:
+        increase_ratio: 1.5
+        max_limit: "2Gi"
+      rollback:
+        action: "restore_memory_limit"
+    
+    references:
+      - "https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/"
+
+  # ============================================================
+  # CrashLoopBackOff - Medium Severity, Auto-fixable
+  # ============================================================
+  - id: "crash-001"
+    name: "CrashLoopBackOff - Application Error"
+    description: "应用启动失败导致反复重启"
+    
+    symptoms:
+      events:
+        - reason: "CrashLoopBackOff"
+        - reason: "BackOff"
+    
+    root_cause: "应用启动失败或配置错误"
+    severity: "medium"
+    confidence: 0.85
+    
+    remediation:
+      action: "rollout_restart"
+      auto_execute: true
+      conditions:
+        - "restarts < 10"
+      fallback:
+        action: "rollback_deployment"
+
+  # ============================================================
+  # ImagePullBackOff - High Severity, Manual Review
+  # ============================================================
+  - id: "image-001"
+    name: "ImagePullBackOff"
+    description: "镜像拉取失败"
+    
+    symptoms:
+      events:
+        - reason: "ImagePullBackOff"
+        - reason: "ErrImagePull"
+        - reason: "Failed"
+          message: "pull image"
+    
+    root_cause: "镜像不存在或仓库认证失败"
+    severity: "high"
+    confidence: 0.95
+    
+    remediation:
+      action: "manual_review"
+      auto_execute: false
+      suggestion: "检查镜像名称和仓库认证"
+      checklist:
+        - "验证镜像名称和标签是否正确"
+        - "检查镜像仓库是否可访问"
+        - "验证 imagePullSecrets 配置"
+
+  # ============================================================
+  # CPU Throttling - Low Severity, Auto-fixable
+  # ============================================================
+  - id: "cpu-001"
+    name: "CPU Throttling"
+    description: "CPU 被限流导致性能下降"
+    
+    symptoms:
+      events:
+        - reason: "Throttled"
+      metrics:
+        - name: "container_cpu_cfs_throttled_seconds_total"
+          condition: "> 0"
+    
+    root_cause: "CPU 限制过低"
+    severity: "low"
+    confidence: 0.8
+    
+    remediation:
+      action: "increase_cpu_limit"
+      auto_execute: true
+      params:
+        increase_ratio: 1.5
+        max_limit: "2000m"
+
+  # ============================================================
+  # Network Error - High Severity, Manual Review
+  # ============================================================
+  - id: "network-001"
+    name: "Service Connection Refused"
+    description: "服务连接被拒绝"
+    
+    symptoms:
+      events:
+        - message: "connection refused"
+      logs:
+        - pattern: "ECONNREFUSED|Connection refused|connection timed out"
+    
+    root_cause: "目标服务不可用或网络隔离"
+    severity: "high"
+    confidence: 0.75
+    
+    remediation:
+      action: "manual_review"
+      auto_execute: false
+      checklist:
+        - "检查目标 Pod 是否运行"
+        - "检查 Service 配置和 Endpoints"
+        - "检查 NetworkPolicy 规则"
+        - "验证 DNS 解析是否正常"
+
+  # ============================================================
+  # PVC Pending - High Severity, Manual Review
+  # ============================================================
+  - id: "pvc-001"
+    name: "PVC Pending"
+    description: "存储卷绑定失败"
+    
+    symptoms:
+      events:
+        - reason: "FailedBinding"
+        - reason: "ProvisioningFailed"
+        - reason: "FailedMount"
+    
+    root_cause: "StorageClass 配置错误或存储资源不足"
+    severity: "high"
+    confidence: 0.9
+    
+    remediation:
+      action: "manual_review"
+      auto_execute: false
+      suggestion: "检查 StorageClass 和存储配额"
+      checklist:
+        - "验证 StorageClass 是否存在"
+        - "检查存储配额是否充足"
+        - "检查 PVC 和 PV 规格是否匹配"
+
+  # ============================================================
+  # Node NotReady - High Severity, Manual Review
+  # ============================================================
+  - id: "node-001"
+    name: "Node NotReady"
+    description: "节点不可用"
+    
+    symptoms:
+      events:
+        - reason: "NodeNotReady"
+        - reason: "NodeStatusUnknown"
+        - reason: "FailedScheduling"
+          message: "node"
+    
+    root_cause: "节点网络故障或 kubelet 异常"
+    severity: "high"
+    confidence: 0.85
+    
+    remediation:
+      action: "manual_review"
+      auto_execute: false
+      checklist:
+        - "检查节点网络连通性"
+        - "检查 kubelet 和 containerd 日志"
+        - "检查节点资源使用情况"
+        - "考虑 drain 节点迁移工作负载"
