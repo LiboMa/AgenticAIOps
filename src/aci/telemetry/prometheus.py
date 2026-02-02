@@ -6,8 +6,10 @@ Provides metrics retrieval from Prometheus server.
 
 import json
 import logging
+import re
 import requests
 from datetime import datetime, timedelta
+from string import Template
 from typing import Any, Dict, List, Optional
 from urllib.parse import urljoin
 
@@ -16,16 +18,17 @@ from ..models import TelemetryResult, ResultStatus, MetricPoint
 logger = logging.getLogger(__name__)
 
 
-# Common Kubernetes metrics
+# Common Kubernetes metrics - using $namespace for Template substitution
+# to avoid conflict with PromQL {} syntax
 K8S_METRICS = {
-    "cpu_usage": 'sum(rate(container_cpu_usage_seconds_total{namespace="{namespace}"}[5m])) by (pod)',
-    "memory_usage": 'sum(container_memory_usage_bytes{namespace="{namespace}"}) by (pod)',
-    "network_rx": 'sum(rate(container_network_receive_bytes_total{namespace="{namespace}"}[5m])) by (pod)',
-    "network_tx": 'sum(rate(container_network_transmit_bytes_total{namespace="{namespace}"}[5m])) by (pod)',
-    "restarts": 'sum(kube_pod_container_status_restarts_total{namespace="{namespace}"}) by (pod)',
-    "pod_ready": 'kube_pod_status_ready{namespace="{namespace}",condition="true"}',
-    "pod_phase": 'kube_pod_status_phase{namespace="{namespace}"}',
-    "container_oom": 'kube_pod_container_status_last_terminated_reason{namespace="{namespace}",reason="OOMKilled"}',
+    "cpu_usage": 'sum(rate(container_cpu_usage_seconds_total{namespace="$namespace"}[5m])) by (pod)',
+    "memory_usage": 'sum(container_memory_usage_bytes{namespace="$namespace"}) by (pod)',
+    "network_rx": 'sum(rate(container_network_receive_bytes_total{namespace="$namespace"}[5m])) by (pod)',
+    "network_tx": 'sum(rate(container_network_transmit_bytes_total{namespace="$namespace"}[5m])) by (pod)',
+    "restarts": 'sum(kube_pod_container_status_restarts_total{namespace="$namespace"}) by (pod)',
+    "pod_ready": 'kube_pod_status_ready{namespace="$namespace",condition="true"}',
+    "pod_phase": 'kube_pod_status_phase{namespace="$namespace"}',
+    "container_oom": 'kube_pod_container_status_last_terminated_reason{namespace="$namespace",reason="OOMKilled"}',
 }
 
 
@@ -213,7 +216,8 @@ class PrometheusProvider:
             )
         
         query_template = K8S_METRICS[metric_name]
-        query = query_template.format(namespace=namespace)
+        # Use string.Template for safe substitution (avoids PromQL {} conflict)
+        query = Template(query_template).safe_substitute(namespace=namespace)
         
         end = datetime.now()
         start = end - timedelta(minutes=duration_minutes)

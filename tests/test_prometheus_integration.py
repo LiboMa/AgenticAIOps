@@ -56,7 +56,8 @@ class TestK8SMetrics:
         from src.aci.telemetry.prometheus import K8S_METRICS
         
         for name, query in K8S_METRICS.items():
-            assert "{namespace}" in query, f"Metric {name} missing namespace placeholder"
+            # Using $namespace for Template substitution to avoid PromQL {} conflict
+            assert "$namespace" in query, f"Metric {name} missing namespace placeholder"
 
 
 class TestPrometheusQuery:
