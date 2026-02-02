@@ -48,6 +48,24 @@ from src.plugins.ec2_plugin import EC2Plugin
 from src.plugins.lambda_plugin import LambdaPlugin
 from src.plugins.hpc_plugin import HPCPlugin
 
+# Import ACI for real telemetry data
+try:
+    from src.aci import AgentCloudInterface
+    ACI_AVAILABLE = True
+    print("ACI (Agent-Cloud Interface) loaded successfully")
+except Exception as e:
+    print(f"Warning: ACI not available: {e}")
+    ACI_AVAILABLE = False
+
+# Import Voting for diagnosis
+try:
+    from src.voting import MultiAgentVoting, TaskType
+    VOTING_AVAILABLE = True
+    print("Multi-Agent Voting loaded successfully")
+except Exception as e:
+    print(f"Warning: Voting not available: {e}")
+    VOTING_AVAILABLE = False
+
 app = FastAPI(
     title="AgenticAIOps API",
     description="Backend API for EKS AIOps Dashboard",
@@ -622,6 +640,147 @@ async def reload_manifests():
         "plugins_loaded": loaded,
         "registry": PluginRegistry.get_status()
     }
+
+
+# =============================================================================
+# ACI (Agent-Cloud Interface) Endpoints - REAL DATA
+# =============================================================================
+
+class ACILogsRequest(BaseModel):
+    namespace: str = "default"
+    pod_name: Optional[str] = None
+    severity: str = "all"
+    duration_minutes: int = 30
+    limit: int = 100
+
+
+class ACIMetricsRequest(BaseModel):
+    namespace: str = "default"
+    metric_names: List[str] = ["cpu_usage", "memory_usage"]
+
+
+class ACIEventsRequest(BaseModel):
+    namespace: str = "default"
+    event_type: str = "all"
+    duration_minutes: int = 60
+    limit: int = 50
+
+
+class DiagnosisRequest(BaseModel):
+    namespace: str = "default"
+    query: str = "What is wrong with this namespace?"
+
+
+@app.get("/api/aci/status")
+async def aci_status():
+    """Get ACI availability status."""
+    return {
+        "aci_available": ACI_AVAILABLE,
+        "voting_available": VOTING_AVAILABLE,
+        "timestamp": datetime.utcnow().isoformat()
+    }
+
+
+@app.post("/api/aci/logs")
+async def get_aci_logs(request: ACILogsRequest):
+    """Get logs via ACI."""
+    if not ACI_AVAILABLE:
+        return {"error": "ACI not available", "data": []}
+    
+    try:
+        aci = AgentCloudInterface(cluster_name="testing-cluster", region="ap-southeast-1")
+        result = aci.get_logs(
+            namespace=request.namespace,
+            pod_name=request.pod_name,
+            severity=request.severity,
+            duration_minutes=request.duration_minutes,
+            limit=request.limit
+        )
+        return result.to_dict()
+    except Exception as e:
+        return {"error": str(e), "data": []}
+
+
+@app.post("/api/aci/metrics")
+async def get_aci_metrics(request: ACIMetricsRequest):
+    """Get metrics via ACI (from Prometheus/CloudWatch)."""
+    if not ACI_AVAILABLE:
+        return {"error": "ACI not available", "data": {}}
+    
+    try:
+        aci = AgentCloudInterface(cluster_name="testing-cluster", region="ap-southeast-1")
+        result = aci.get_metrics(
+            namespace=request.namespace,
+            metric_names=request.metric_names
+        )
+        return result.to_dict()
+    except Exception as e:
+        return {"error": str(e), "data": {}}
+
+
+@app.post("/api/aci/events")
+async def get_aci_events(request: ACIEventsRequest):
+    """Get K8s events via ACI."""
+    if not ACI_AVAILABLE:
+        return {"error": "ACI not available", "data": []}
+    
+    try:
+        aci = AgentCloudInterface(cluster_name="testing-cluster", region="ap-southeast-1")
+        result = aci.get_events(
+            namespace=request.namespace,
+            event_type=request.event_type if request.event_type != "all" else None,
+            duration_minutes=request.duration_minutes,
+            limit=request.limit
+        )
+        return result.to_dict()
+    except Exception as e:
+        return {"error": str(e), "data": []}
+
+
+@app.get("/api/aci/telemetry/{namespace}")
+async def get_aci_telemetry(namespace: str):
+    """Get all telemetry data for a namespace (logs, metrics, events)."""
+    if not ACI_AVAILABLE:
+        return {"error": "ACI not available"}
+    
+    try:
+        aci = AgentCloudInterface(cluster_name="testing-cluster", region="ap-southeast-1")
+        
+        # Collect all telemetry
+        logs = aci.get_logs(namespace=namespace, severity="error", limit=20)
+        metrics = aci.get_metrics(namespace=namespace)
+        events = aci.get_events(namespace=namespace, event_type="Warning", limit=30)
+        
+        return {
+            "namespace": namespace,
+            "timestamp": datetime.utcnow().isoformat(),
+            "logs": logs.to_dict(),
+            "metrics": metrics.to_dict(),
+            "events": events.to_dict()
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/api/aci/diagnosis")
+async def run_diagnosis(request: DiagnosisRequest):
+    """Run multi-agent diagnosis on a namespace."""
+    if not ACI_AVAILABLE or not VOTING_AVAILABLE:
+        return {"error": "ACI or Voting not available"}
+    
+    try:
+        from scripts.diagnosis.run_diagnosis import DiagnosisRunner
+        
+        runner = DiagnosisRunner(namespace=request.namespace)
+        report = runner.run_diagnosis()
+        
+        return {
+            "status": "success",
+            "report": report
+        }
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "trace": traceback.format_exc()}
 
 
 # =============================================================================

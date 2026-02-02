@@ -9,6 +9,7 @@ import Anomalies from './components/Anomalies'
 import RCAReports from './components/RCAReports'
 import PluginManager from './components/PluginManager'
 import ClusterSelector from './components/ClusterSelector'
+import ACITelemetry from './components/ACITelemetry'
 
 const darkTheme = createTheme({
   palette: {
@@ -93,6 +94,7 @@ function App() {
           >
             <Tab label="💬 Chat" />
             <Tab label="📊 Status" />
+            <Tab label="🔬 ACI Telemetry" />
             <Tab label="🚨 Anomalies" />
             <Tab label="📝 RCA Reports" />
             <Tab label="🔌 Plugins" />
@@ -102,9 +104,10 @@ function App() {
         <Container maxWidth="xl" sx={{ flexGrow: 1, py: 2 }}>
           {activeTab === 0 && <ChatPanel activeCluster={activeCluster} />}
           {activeTab === 1 && <EKSStatus activeCluster={activeCluster} />}
-          {activeTab === 2 && <Anomalies activeCluster={activeCluster} />}
-          {activeTab === 3 && <RCAReports />}
-          {activeTab === 4 && <PluginManager />}
+          {activeTab === 2 && <ACITelemetry activeCluster={activeCluster} />}
+          {activeTab === 3 && <Anomalies activeCluster={activeCluster} />}
+          {activeTab === 4 && <RCAReports />}
+          {activeTab === 5 && <PluginManager />}
         </Container>
 
         <Box component="footer" sx={{ py: 1, textAlign: 'center', backgroundColor: '#161b22' }}>
