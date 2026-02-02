@@ -5,7 +5,7 @@ Provides scheduled health checks for Kubernetes clusters using APScheduler.
 Integrates with ACI for telemetry collection and Issue Manager for problem tracking.
 """
 
-from .models import HealthCheckResult, CheckType, CheckStatus
+from .models import HealthCheckResult, CheckType, CheckStatus, HealthCheckConfig
 from .checker import HealthChecker
 from .scheduler import HealthCheckScheduler
 
@@ -13,6 +13,7 @@ __all__ = [
     "HealthCheckResult",
     "CheckType", 
     "CheckStatus",
+    "HealthCheckConfig",
     "HealthChecker",
     "HealthCheckScheduler",
 ]

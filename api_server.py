@@ -66,6 +66,36 @@ except Exception as e:
     print(f"Warning: Voting not available: {e}")
     VOTING_AVAILABLE = False
 
+# Import Issue Manager
+try:
+    from src.issues import IssueManager
+    ISSUES_AVAILABLE = True
+    _issue_manager = None
+    print("Issue Manager loaded successfully")
+except Exception as e:
+    print(f"Warning: Issue Manager not available: {e}")
+    ISSUES_AVAILABLE = False
+
+# Import Runbook Executor
+try:
+    from src.runbook import RunbookExecutor, RunbookLoader
+    RUNBOOK_AVAILABLE = True
+    _runbook_executor = None
+    print("Runbook Executor loaded successfully")
+except Exception as e:
+    print(f"Warning: Runbook Executor not available: {e}")
+    RUNBOOK_AVAILABLE = False
+
+# Import Health Checker
+try:
+    from src.health import HealthChecker, HealthCheckScheduler, HealthCheckConfig
+    HEALTH_AVAILABLE = True
+    _health_scheduler = None
+    print("Health Checker loaded successfully")
+except Exception as e:
+    print(f"Warning: Health Checker not available: {e}")
+    HEALTH_AVAILABLE = False
+
 app = FastAPI(
     title="AgenticAIOps API",
     description="Backend API for EKS AIOps Dashboard",
@@ -781,6 +811,248 @@ async def run_diagnosis(request: DiagnosisRequest):
     except Exception as e:
         import traceback
         return {"error": str(e), "trace": traceback.format_exc()}
+
+
+# =============================================================================
+# Issue Management API
+# =============================================================================
+
+def get_issue_manager():
+    """Get or create IssueManager instance."""
+    global _issue_manager
+    if not ISSUES_AVAILABLE:
+        return None
+    if _issue_manager is None:
+        _issue_manager = IssueManager()
+    return _issue_manager
+
+
+def get_runbook_executor():
+    """Get or create RunbookExecutor instance."""
+    global _runbook_executor
+    if not RUNBOOK_AVAILABLE:
+        return None
+    if _runbook_executor is None:
+        _runbook_executor = RunbookExecutor()
+    return _runbook_executor
+
+
+@app.get("/api/issues")
+async def list_issues(
+    status: Optional[str] = None,
+    severity: Optional[str] = None,
+    namespace: Optional[str] = None,
+    limit: int = 50
+):
+    """List issues with optional filters."""
+    manager = get_issue_manager()
+    if not manager:
+        return {"error": "Issue Manager not available", "issues": []}
+    
+    try:
+        issues = manager.list_issues(
+            status=status,
+            severity=severity,
+            namespace=namespace,
+            limit=limit
+        )
+        return {"issues": [i.to_dict() for i in issues]}
+    except Exception as e:
+        return {"error": str(e), "issues": []}
+
+
+@app.get("/api/issues/dashboard")
+async def get_issues_dashboard():
+    """Get dashboard summary data."""
+    manager = get_issue_manager()
+    if not manager:
+        return {"error": "Issue Manager not available"}
+    
+    try:
+        data = manager.get_dashboard_data()
+        return data
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/api/issues/{issue_id}")
+async def get_issue(issue_id: str):
+    """Get issue by ID."""
+    manager = get_issue_manager()
+    if not manager:
+        raise HTTPException(status_code=503, detail="Issue Manager not available")
+    
+    issue = manager.get_issue(issue_id)
+    if not issue:
+        raise HTTPException(status_code=404, detail="Issue not found")
+    
+    return issue.to_dict()
+
+
+class IssueUpdateRequest(BaseModel):
+    status: Optional[str] = None
+    severity: Optional[str] = None
+    root_cause: Optional[str] = None
+    remediation: Optional[str] = None
+
+
+@app.patch("/api/issues/{issue_id}")
+async def update_issue(issue_id: str, request: IssueUpdateRequest):
+    """Update issue fields."""
+    manager = get_issue_manager()
+    if not manager:
+        raise HTTPException(status_code=503, detail="Issue Manager not available")
+    
+    try:
+        from src.issues import IssueStatus, Severity
+        
+        status = IssueStatus(request.status) if request.status else None
+        severity = Severity(request.severity) if request.severity else None
+        
+        issue = manager.update_issue(
+            issue_id=issue_id,
+            status=status,
+            severity=severity,
+            root_cause=request.root_cause,
+            remediation=request.remediation
+        )
+        
+        if not issue:
+            raise HTTPException(status_code=404, detail="Issue not found")
+        
+        return issue.to_dict()
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/issues/{issue_id}/fix")
+async def fix_issue(issue_id: str):
+    """Trigger auto-fix for an issue."""
+    manager = get_issue_manager()
+    executor = get_runbook_executor()
+    
+    if not manager:
+        raise HTTPException(status_code=503, detail="Issue Manager not available")
+    
+    issue = manager.get_issue(issue_id)
+    if not issue:
+        raise HTTPException(status_code=404, detail="Issue not found")
+    
+    if not issue.auto_fixable:
+        raise HTTPException(status_code=400, detail="Issue is not auto-fixable")
+    
+    # Find and execute runbook
+    if executor:
+        try:
+            # Try to find runbook for this issue's pattern
+            pattern_id = issue.pattern_id or f"{issue.resource_type}-unknown"
+            
+            context = {
+                "namespace": issue.namespace,
+                "resource_type": issue.resource_type,
+                "resource_name": issue.resource_name,
+                "container_name": "main",
+            }
+            
+            execution = executor.execute_for_pattern(pattern_id, context, issue_id=issue_id)
+            
+            if execution:
+                # Record fix attempt
+                manager.record_fix_attempt(
+                    issue_id=issue_id,
+                    action=execution.runbook_id,
+                    success=execution.status.value == "success",
+                    details={"execution_id": execution.execution_id}
+                )
+                
+                return {
+                    "status": "initiated",
+                    "execution_id": execution.execution_id,
+                    "runbook_id": execution.runbook_id,
+                }
+            else:
+                return {"status": "no_runbook", "message": "No runbook found for this issue"}
+                
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+    
+    return {"status": "no_executor", "message": "Runbook executor not available"}
+
+
+# =============================================================================
+# Health Check API
+# =============================================================================
+
+def get_health_scheduler():
+    """Get or create health scheduler."""
+    global _health_scheduler
+    if not HEALTH_AVAILABLE:
+        return None
+    if _health_scheduler is None:
+        config = HealthCheckConfig(
+            enabled=False,  # Don't auto-start
+            interval_seconds=60,
+        )
+        _health_scheduler = HealthCheckScheduler(config=config)
+    return _health_scheduler
+
+
+@app.get("/api/health/check")
+async def run_health_check(namespace: Optional[str] = None):
+    """Run health check now."""
+    scheduler = get_health_scheduler()
+    if not scheduler:
+        return {"error": "Health Checker not available"}
+    
+    try:
+        result = scheduler.run_now()
+        return result.to_dict()
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/api/health/status")
+async def get_health_status():
+    """Get health check scheduler status."""
+    scheduler = get_health_scheduler()
+    if not scheduler:
+        return {"error": "Health Checker not available"}
+    
+    return scheduler.get_status()
+
+
+@app.get("/api/health/history")
+async def get_health_history(limit: int = 10):
+    """Get health check history."""
+    scheduler = get_health_scheduler()
+    if not scheduler:
+        return {"error": "Health Checker not available", "history": []}
+    
+    return {"history": scheduler.get_history(limit=limit)}
+
+
+# =============================================================================
+# Runbook API
+# =============================================================================
+
+@app.get("/api/runbooks")
+async def list_runbooks():
+    """List available runbooks."""
+    executor = get_runbook_executor()
+    if not executor:
+        return {"error": "Runbook Executor not available", "runbooks": []}
+    
+    return {"runbooks": executor.loader.list_runbooks()}
+
+
+@app.get("/api/runbooks/executions")
+async def list_runbook_executions(limit: int = 10):
+    """List recent runbook executions."""
+    executor = get_runbook_executor()
+    if not executor:
+        return {"error": "Runbook Executor not available", "executions": []}
+    
+    return {"executions": executor.list_executions(limit=limit)}
 
 
 # =============================================================================

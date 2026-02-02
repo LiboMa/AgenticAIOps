@@ -10,6 +10,7 @@ import RCAReports from './components/RCAReports'
 import PluginManager from './components/PluginManager'
 import ClusterSelector from './components/ClusterSelector'
 import ACITelemetry from './components/ACITelemetry'
+import IssueCenter from './components/IssueCenter'
 
 const darkTheme = createTheme({
   palette: {
@@ -78,7 +79,7 @@ function App() {
               open={Boolean(settingsAnchor)}
               onClose={() => setSettingsAnchor(null)}
             >
-              <MenuItem onClick={() => { setActiveTab(4); setSettingsAnchor(null); }}>
+              <MenuItem onClick={() => { setActiveTab(6); setSettingsAnchor(null); }}>
                 🔌 Plugin Manager
               </MenuItem>
             </Menu>
@@ -94,6 +95,7 @@ function App() {
           >
             <Tab label="💬 Chat" />
             <Tab label="📊 Status" />
+            <Tab label="🎯 Issues" />
             <Tab label="🔬 ACI Telemetry" />
             <Tab label="🚨 Anomalies" />
             <Tab label="📝 RCA Reports" />
@@ -104,10 +106,11 @@ function App() {
         <Container maxWidth="xl" sx={{ flexGrow: 1, py: 2 }}>
           {activeTab === 0 && <ChatPanel activeCluster={activeCluster} />}
           {activeTab === 1 && <EKSStatus activeCluster={activeCluster} />}
-          {activeTab === 2 && <ACITelemetry activeCluster={activeCluster} />}
-          {activeTab === 3 && <Anomalies activeCluster={activeCluster} />}
-          {activeTab === 4 && <RCAReports />}
-          {activeTab === 5 && <PluginManager />}
+          {activeTab === 2 && <IssueCenter activeCluster={activeCluster} />}
+          {activeTab === 3 && <ACITelemetry activeCluster={activeCluster} />}
+          {activeTab === 4 && <Anomalies activeCluster={activeCluster} />}
+          {activeTab === 5 && <RCAReports />}
+          {activeTab === 6 && <PluginManager />}
         </Container>
 
         <Box component="footer" sx={{ py: 1, textAlign: 'center', backgroundColor: '#161b22' }}>
