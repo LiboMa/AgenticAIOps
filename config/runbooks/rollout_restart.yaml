@@ -1,0 +1,67 @@
+# Runbook: Rollout Restart
+# Triggered by: crash-001 (CrashLoopBackOff)
+
+id: "rollout-restart"
+name: "Rollout Restart Deployment"
+description: "Restart deployment when CrashLoopBackOff detected"
+
+triggers:
+  - pattern_id: "crash-001"
+  - severity: ["medium"]
+
+preconditions:
+  - check: "resource_exists"
+    resource_type: "deployment"
+  - check: "restart_count_below"
+    max_restarts: 10
+
+steps:
+  - id: "backup-state"
+    action: "get_resource"
+    description: "备份当前 Deployment 状态"
+    params:
+      resource_type: "deployment"
+      resource_name: "{{ resource_name }}"
+      namespace: "{{ namespace }}"
+    output: "backup"
+
+  - id: "rollout-restart"
+    action: "rollout_restart"
+    description: "执行 Rollout Restart"
+    params:
+      resource_type: "deployment"
+      resource_name: "{{ resource_name }}"
+      namespace: "{{ namespace }}"
+    requires_approval: false
+
+  - id: "wait-rollout"
+    action: "wait_rollout"
+    description: "等待 Rollout 完成"
+    params:
+      resource_type: "deployment"
+      resource_name: "{{ resource_name }}"
+      namespace: "{{ namespace }}"
+      timeout_seconds: 300
+
+  - id: "verify-pods"
+    action: "verify_health"
+    description: "验证 Pod 状态"
+    params:
+      namespace: "{{ namespace }}"
+      label_selector: "app={{ resource_name }}"
+      timeout_seconds: 120
+      expected_ready: true
+
+rollback:
+  - id: "rollback-deployment"
+    action: "rollout_undo"
+    description: "回滚到上一版本"
+    params:
+      resource_type: "deployment"
+      resource_name: "{{ resource_name }}"
+      namespace: "{{ namespace }}"
+
+notifications:
+  on_start: true
+  on_complete: true
+  on_failure: true

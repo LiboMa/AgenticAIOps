@@ -1,0 +1,93 @@
+# Runbook: Increase Memory Limit
+# Triggered by: oom-001 (OOMKilled)
+
+id: "increase-memory-limit"
+name: "Increase Pod Memory Limit"
+description: "Automatically increase memory limit when OOMKilled detected"
+
+triggers:
+  - pattern_id: "oom-001"
+  - severity: ["medium", "high"]
+
+preconditions:
+  - check: "resource_exists"
+    resource_type: "deployment"
+  - check: "not_recently_modified"
+    duration_minutes: 30
+
+steps:
+  - id: "get-current-limit"
+    action: "get_resource_limits"
+    description: "获取当前内存限制"
+    params:
+      resource_type: "{{ resource_type }}"
+      resource_name: "{{ resource_name }}"
+      namespace: "{{ namespace }}"
+    output: "current_limits"
+
+  - id: "calculate-new-limit"
+    action: "calculate"
+    description: "计算新的内存限制 (增加 50%)"
+    params:
+      expression: "{{ current_limits.memory }} * 1.5"
+      max_value: "2Gi"
+    output: "new_memory_limit"
+
+  - id: "patch-deployment"
+    action: "patch_resource"
+    description: "更新 Deployment 内存限制"
+    params:
+      resource_type: "deployment"
+      resource_name: "{{ resource_name }}"
+      namespace: "{{ namespace }}"
+      patch:
+        spec:
+          template:
+            spec:
+              containers:
+                - name: "{{ container_name }}"
+                  resources:
+                    limits:
+                      memory: "{{ new_memory_limit }}"
+    requires_approval: false
+
+  - id: "wait-rollout"
+    action: "wait_rollout"
+    description: "等待 Rollout 完成"
+    params:
+      resource_type: "deployment"
+      resource_name: "{{ resource_name }}"
+      namespace: "{{ namespace }}"
+      timeout_seconds: 300
+
+  - id: "verify-health"
+    action: "verify_health"
+    description: "验证 Pod 健康状态"
+    params:
+      namespace: "{{ namespace }}"
+      label_selector: "app={{ resource_name }}"
+      timeout_seconds: 60
+
+rollback:
+  - id: "restore-limit"
+    action: "patch_resource"
+    description: "恢复原内存限制"
+    params:
+      resource_type: "deployment"
+      resource_name: "{{ resource_name }}"
+      namespace: "{{ namespace }}"
+      patch:
+        spec:
+          template:
+            spec:
+              containers:
+                - name: "{{ container_name }}"
+                  resources:
+                    limits:
+                      memory: "{{ current_limits.memory }}"
+
+notifications:
+  on_start: true
+  on_complete: true
+  on_failure: true
+  channels: ["slack"]

@@ -1,0 +1,85 @@
+# Runbook: Increase CPU Limit
+# Triggered by: cpu-001 (CPU Throttling)
+
+id: "increase-cpu-limit"
+name: "Increase Pod CPU Limit"
+description: "Automatically increase CPU limit when throttling detected"
+
+triggers:
+  - pattern_id: "cpu-001"
+  - severity: ["low"]
+
+preconditions:
+  - check: "resource_exists"
+    resource_type: "deployment"
+
+steps:
+  - id: "get-current-limit"
+    action: "get_resource_limits"
+    description: "获取当前 CPU 限制"
+    params:
+      resource_type: "{{ resource_type }}"
+      resource_name: "{{ resource_name }}"
+      namespace: "{{ namespace }}"
+    output: "current_limits"
+
+  - id: "calculate-new-limit"
+    action: "calculate"
+    description: "计算新的 CPU 限制 (增加 50%)"
+    params:
+      expression: "{{ current_limits.cpu }} * 1.5"
+      max_value: "2000m"
+    output: "new_cpu_limit"
+
+  - id: "patch-deployment"
+    action: "patch_resource"
+    description: "更新 Deployment CPU 限制"
+    params:
+      resource_type: "deployment"
+      resource_name: "{{ resource_name }}"
+      namespace: "{{ namespace }}"
+      patch:
+        spec:
+          template:
+            spec:
+              containers:
+                - name: "{{ container_name }}"
+                  resources:
+                    limits:
+                      cpu: "{{ new_cpu_limit }}"
+    requires_approval: false
+
+  - id: "wait-rollout"
+    action: "wait_rollout"
+    description: "等待 Rollout 完成"
+    params:
+      timeout_seconds: 300
+
+  - id: "monitor-throttling"
+    action: "check_metrics"
+    description: "监控 CPU Throttling 指标"
+    params:
+      metric: "container_cpu_cfs_throttled_seconds_total"
+      duration_seconds: 60
+      expected: "decreasing"
+
+rollback:
+  - id: "restore-limit"
+    action: "patch_resource"
+    params:
+      resource_type: "deployment"
+      resource_name: "{{ resource_name }}"
+      namespace: "{{ namespace }}"
+      patch:
+        spec:
+          template:
+            spec:
+              containers:
+                - name: "{{ container_name }}"
+                  resources:
+                    limits:
+                      cpu: "{{ current_limits.cpu }}"
+
+notifications:
+  on_complete: true
+  on_failure: true
