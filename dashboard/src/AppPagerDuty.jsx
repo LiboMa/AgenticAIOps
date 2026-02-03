@@ -1,5 +1,5 @@
 import { useState, useEffect, lazy, Suspense } from 'react'
-import { ConfigProvider, Layout, Menu, Avatar, Dropdown, Badge, Button, Space, Spin, theme } from 'antd'
+import { ConfigProvider, Layout, Menu, Avatar, Dropdown, Badge, Button, Space, Spin, theme, Drawer } from 'antd'
 import {
   DashboardOutlined,
   AlertOutlined,
@@ -8,8 +8,10 @@ import {
   SettingOutlined,
   BellOutlined,
   UserOutlined,
-  MenuOutlined,
+  RobotOutlined,
+  CloseOutlined,
 } from '@ant-design/icons'
+import ChatPanelPD from './components/ChatPanelPD'
 
 // Lazy load pages - PagerDuty style
 const Overview = lazy(() => import('./pages/OverviewPD'))
@@ -52,12 +54,16 @@ function App() {
   const [currentPage, setCurrentPage] = useState('overview')
   const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
   const [openIssues, setOpenIssues] = useState(0)
+  const [chatVisible, setChatVisible] = useState(false)
 
   useEffect(() => {
     // Fetch open issues count
     fetch(`${API_URL}/api/issues/dashboard`)
       .then(r => r.json())
-      .then(data => setOpenIssues(data.status_counts?.open || 0))
+      .then(data => {
+        const stats = data.stats || {}
+        setOpenIssues(stats.by_status?.detected || 0)
+      })
       .catch(() => {})
   }, [])
 
@@ -159,6 +165,16 @@ function App() {
 
           {/* Right Actions */}
           <Space size="middle">
+            {/* AI Assistant Button */}
+            <Button 
+              type="text" 
+              icon={<RobotOutlined style={{ fontSize: 18, color: chatVisible ? '#06AC38' : '#fff' }} />}
+              onClick={() => setChatVisible(!chatVisible)}
+              style={{ 
+                background: chatVisible ? 'rgba(6, 172, 56, 0.2)' : 'transparent',
+                borderRadius: 4,
+              }}
+            />
             <Badge count={openIssues} size="small">
               <Button 
                 type="text" 
@@ -195,6 +211,26 @@ function App() {
         }}>
           AgenticAIOps Platform © 2026 | Powered by AI-driven Operations
         </Footer>
+
+        {/* Chat Drawer */}
+        <Drawer
+          title={
+            <Space>
+              <RobotOutlined style={{ color: '#06AC38' }} />
+              <span>AI Assistant</span>
+            </Space>
+          }
+          placement="right"
+          width={420}
+          onClose={() => setChatVisible(false)}
+          open={chatVisible}
+          closeIcon={<CloseOutlined />}
+          bodyStyle={{ padding: 0, height: 'calc(100vh - 55px)' }}
+        >
+          <div style={{ height: '100%', padding: 12 }}>
+            <ChatPanelPD apiUrl={API_URL} />
+          </div>
+        </Drawer>
       </Layout>
     </ConfigProvider>
   )
