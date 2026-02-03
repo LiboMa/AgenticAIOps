@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Card, Button, Input, Select, Space, message, Spin, Descriptions, Tag, Steps, Timeline } from 'antd'
+import { Card, Button, Input, Space, message, Spin, Descriptions, Tag, Steps, Timeline } from 'antd'
 import { ProCard } from '@ant-design/pro-components'
 import {
   SearchOutlined,
@@ -8,8 +8,6 @@ import {
   LoadingOutlined,
   ExperimentOutlined,
 } from '@ant-design/icons'
-
-const { TextArea } = Input
 
 function Diagnosis({ apiUrl }) {
   const [namespace, setNamespace] = useState('stress-test')
@@ -32,10 +30,10 @@ function Diagnosis({ apiUrl }) {
         message.error(data.error)
       } else {
         setResult(data.report || data)
-        message.success('诊断完成')
+        message.success('Diagnosis completed')
       }
     } catch (err) {
-      message.error('诊断请求失败')
+      message.error('Diagnosis request failed')
     } finally {
       setLoading(false)
     }
@@ -48,21 +46,20 @@ function Diagnosis({ apiUrl }) {
       <Space direction="vertical" size="large" style={{ width: '100%', marginTop: 24 }}>
         {/* Summary */}
         <ProCard
-          title="诊断摘要"
-          style={{ background: '#141414' }}
-          headStyle={{ borderBottom: '1px solid #303030' }}
+          title="Diagnosis Summary"
+          style={{ background: '#fff' }}
         >
           <Descriptions column={2} bordered size="small">
-            <Descriptions.Item label="命名空间">{result.namespace || namespace}</Descriptions.Item>
-            <Descriptions.Item label="诊断时间">
+            <Descriptions.Item label="Namespace">{result.namespace || namespace}</Descriptions.Item>
+            <Descriptions.Item label="Diagnosis Time">
               {result.timestamp ? new Date(result.timestamp).toLocaleString() : new Date().toLocaleString()}
             </Descriptions.Item>
-            <Descriptions.Item label="问题数量">
+            <Descriptions.Item label="Issue Count">
               <Tag color={result.issues_count > 0 ? 'red' : 'green'}>
-                {result.issues_count || 0} 个问题
+                {result.issues_count || 0} issues
               </Tag>
             </Descriptions.Item>
-            <Descriptions.Item label="状态">
+            <Descriptions.Item label="Status">
               <Tag color={result.status === 'healthy' ? 'green' : 'orange'}>
                 {result.status || 'completed'}
               </Tag>
@@ -72,18 +69,14 @@ function Diagnosis({ apiUrl }) {
 
         {/* Root Cause */}
         {result.root_cause && (
-          <ProCard
-            title="根因分析"
-            style={{ background: '#141414' }}
-            headStyle={{ borderBottom: '1px solid #303030' }}
-          >
+          <ProCard title="Root Cause Analysis" style={{ background: '#fff' }}>
             <div style={{ 
-              background: '#1a1a2e', 
+              background: '#f5f5f5', 
               padding: 16, 
               borderRadius: 8,
-              border: '1px solid #303030',
+              border: '1px solid #e8e8e8',
             }}>
-              <pre style={{ margin: 0, whiteSpace: 'pre-wrap', color: '#fff' }}>
+              <pre style={{ margin: 0, whiteSpace: 'pre-wrap', color: '#333' }}>
                 {typeof result.root_cause === 'string' 
                   ? result.root_cause 
                   : JSON.stringify(result.root_cause, null, 2)}
@@ -94,11 +87,7 @@ function Diagnosis({ apiUrl }) {
 
         {/* Recommendations */}
         {result.recommendations && (
-          <ProCard
-            title="修复建议"
-            style={{ background: '#141414' }}
-            headStyle={{ borderBottom: '1px solid #303030' }}
-          >
+          <ProCard title="Remediation Steps" style={{ background: '#fff' }}>
             <Timeline
               items={
                 (Array.isArray(result.recommendations) 
@@ -108,7 +97,7 @@ function Diagnosis({ apiUrl }) {
                   color: idx === 0 ? 'blue' : 'gray',
                   children: (
                     <div>
-                      <strong>步骤 {idx + 1}</strong>
+                      <strong>Step {idx + 1}</strong>
                       <p style={{ margin: '8px 0 0' }}>{rec}</p>
                     </div>
                   ),
@@ -120,19 +109,18 @@ function Diagnosis({ apiUrl }) {
 
         {/* Raw Data */}
         <ProCard
-          title="原始数据"
+          title="Raw Data"
           collapsible
           defaultCollapsed
-          style={{ background: '#141414' }}
-          headStyle={{ borderBottom: '1px solid #303030' }}
+          style={{ background: '#fff' }}
         >
           <pre style={{ 
-            background: '#0d1117', 
+            background: '#f5f5f5', 
             padding: 16, 
             borderRadius: 8,
             overflow: 'auto',
             maxHeight: 400,
-            color: '#e6e6e6',
+            color: '#333',
             fontSize: 12,
           }}>
             {JSON.stringify(result, null, 2)}
@@ -149,23 +137,22 @@ function Diagnosis({ apiUrl }) {
         title={
           <Space>
             <ExperimentOutlined />
-            智能诊断
+            AI Diagnostics
           </Space>
         }
-        style={{ background: '#141414' }}
-        headStyle={{ borderBottom: '1px solid #303030' }}
+        style={{ background: '#fff' }}
       >
         <Space direction="vertical" size="middle" style={{ width: '100%' }}>
           <div>
-            <label style={{ color: '#aaa', marginBottom: 8, display: 'block' }}>
-              目标命名空间
+            <label style={{ color: '#666', marginBottom: 8, display: 'block' }}>
+              Target Namespace
             </label>
             <Input
-              placeholder="输入要诊断的命名空间"
+              placeholder="Enter namespace to diagnose"
               value={namespace}
               onChange={(e) => setNamespace(e.target.value)}
               style={{ width: 300 }}
-              prefix={<SearchOutlined style={{ color: '#666' }} />}
+              prefix={<SearchOutlined style={{ color: '#999' }} />}
             />
           </div>
 
@@ -175,8 +162,9 @@ function Diagnosis({ apiUrl }) {
             onClick={handleDiagnosis}
             loading={loading}
             size="large"
+            style={{ background: '#06AC38', borderColor: '#06AC38' }}
           >
-            {loading ? '正在诊断...' : '开始诊断'}
+            {loading ? 'Analyzing...' : 'Start Diagnosis'}
           </Button>
 
           {loading && (
@@ -184,9 +172,9 @@ function Diagnosis({ apiUrl }) {
               current={1}
               size="small"
               items={[
-                { title: '收集数据', status: 'finish' },
-                { title: '分析问题', status: 'process' },
-                { title: '生成报告', status: 'wait' },
+                { title: 'Collect Data', status: 'finish' },
+                { title: 'Analyze Issues', status: 'process' },
+                { title: 'Generate Report', status: 'wait' },
               ]}
             />
           )}

@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Form, Input, Switch, Select, Button, message, Divider, Space, Tag, Table } from 'antd'
-import { ProCard, ProList } from '@ant-design/pro-components'
+import { Form, Input, Switch, Select, Button, message, Space, Tag, Table, Card, Typography, Divider } from 'antd'
 import {
   SaveOutlined,
   ReloadOutlined,
@@ -8,6 +7,8 @@ import {
   CloudServerOutlined,
   ToolOutlined,
 } from '@ant-design/icons'
+
+const { Title, Text } = Typography
 
 function Settings({ apiUrl }) {
   const [healthConfig, setHealthConfig] = useState({
@@ -41,7 +42,7 @@ function Settings({ apiUrl }) {
   }, [apiUrl])
 
   const handleSaveHealth = () => {
-    message.success('健康检查配置已保存')
+    message.success('Health check configuration saved')
   }
 
   const runHealthCheck = async () => {
@@ -52,10 +53,10 @@ function Settings({ apiUrl }) {
       if (data.error) {
         message.error(data.error)
       } else {
-        message.success(`健康检查完成: ${data.status}`)
+        message.success(`Health check completed: ${data.status}`)
       }
     } catch (err) {
-      message.error('健康检查失败')
+      message.error('Health check failed')
     } finally {
       setLoading(false)
     }
@@ -63,72 +64,81 @@ function Settings({ apiUrl }) {
 
   return (
     <Space direction="vertical" size="large" style={{ width: '100%' }}>
+      {/* Page Header */}
+      <div style={{ marginBottom: 8 }}>
+        <Title level={3} style={{ margin: 0 }}>Settings</Title>
+        <Text type="secondary">Configure health checks and automation</Text>
+      </div>
+
       {/* Health Check Settings */}
-      <ProCard
+      <Card
+        bordered={false}
         title={
           <Space>
             <ClockCircleOutlined />
-            健康检查配置
+            Health Check Configuration
           </Space>
         }
-        style={{ background: '#141414' }}
-        headStyle={{ borderBottom: '1px solid #303030' }}
       >
         <Form layout="vertical">
-          <Form.Item label="启用定时检查">
+          <Form.Item label="Enable Scheduled Checks">
             <Switch
               checked={healthConfig.enabled}
               onChange={(checked) => setHealthConfig({ ...healthConfig, enabled: checked })}
             />
           </Form.Item>
-          <Form.Item label="检查间隔 (秒)">
+          <Form.Item label="Check Interval (seconds)">
             <Select
               value={healthConfig.interval}
               onChange={(value) => setHealthConfig({ ...healthConfig, interval: value })}
               style={{ width: 200 }}
               options={[
-                { value: 30, label: '30 秒' },
-                { value: 60, label: '1 分钟' },
-                { value: 120, label: '2 分钟' },
-                { value: 300, label: '5 分钟' },
+                { value: 30, label: '30 seconds' },
+                { value: 60, label: '1 minute' },
+                { value: 120, label: '2 minutes' },
+                { value: 300, label: '5 minutes' },
               ]}
             />
           </Form.Item>
-          <Form.Item label="检查类型">
+          <Form.Item label="Check Types">
             <Select
               mode="multiple"
               defaultValue={['pods', 'events']}
               style={{ width: '100%', maxWidth: 400 }}
               options={[
-                { value: 'pods', label: 'Pods 状态' },
-                { value: 'nodes', label: 'Nodes 状态' },
-                { value: 'events', label: 'K8s 事件' },
-                { value: 'resources', label: '资源使用' },
+                { value: 'pods', label: 'Pod Status' },
+                { value: 'nodes', label: 'Node Status' },
+                { value: 'events', label: 'K8s Events' },
+                { value: 'resources', label: 'Resource Usage' },
               ]}
             />
           </Form.Item>
           <Space>
-            <Button type="primary" icon={<SaveOutlined />} onClick={handleSaveHealth}>
-              保存配置
+            <Button 
+              type="primary" 
+              icon={<SaveOutlined />} 
+              onClick={handleSaveHealth}
+              style={{ background: '#06AC38', borderColor: '#06AC38' }}
+            >
+              Save Configuration
             </Button>
             <Button icon={<ReloadOutlined />} onClick={runHealthCheck} loading={loading}>
-              立即检查
+              Run Check Now
             </Button>
           </Space>
         </Form>
-      </ProCard>
+      </Card>
 
       {/* Runbooks */}
-      <ProCard
+      <Card
+        bordered={false}
         title={
           <Space>
             <ToolOutlined />
-            自动修复 Runbook
+            Auto-Remediation Runbooks
           </Space>
         }
-        extra={<Tag color="blue">{runbooks.length} 个可用</Tag>}
-        style={{ background: '#141414' }}
-        headStyle={{ borderBottom: '1px solid #303030' }}
+        extra={<Tag color="blue">{runbooks.length} available</Tag>}
       >
         <Table
           dataSource={runbooks}
@@ -142,11 +152,11 @@ function Settings({ apiUrl }) {
               render: (id) => <code>{id}</code>,
             },
             {
-              title: '名称',
+              title: 'Name',
               dataIndex: 'name',
             },
             {
-              title: '触发规则',
+              title: 'Trigger Pattern',
               dataIndex: 'triggers',
               render: (triggers) => (
                 <Space>
@@ -157,46 +167,45 @@ function Settings({ apiUrl }) {
               ),
             },
             {
-              title: '步骤数',
+              title: 'Steps',
               dataIndex: 'step_count',
               width: 80,
               render: (count) => <Tag>{count || 0}</Tag>,
             },
             {
-              title: '回滚',
+              title: 'Rollback',
               dataIndex: 'has_rollback',
-              width: 80,
+              width: 100,
               render: (has) => (
-                <Tag color={has ? 'green' : 'default'}>{has ? '支持' : '无'}</Tag>
+                <Tag color={has ? 'green' : 'default'}>{has ? 'Supported' : 'None'}</Tag>
               ),
             },
           ]}
         />
-      </ProCard>
+      </Card>
 
       {/* Cluster Settings */}
-      <ProCard
+      <Card
+        bordered={false}
         title={
           <Space>
             <CloudServerOutlined />
-            集群配置
+            Cluster Configuration
           </Space>
         }
-        style={{ background: '#141414' }}
-        headStyle={{ borderBottom: '1px solid #303030' }}
       >
         <Form layout="vertical">
-          <Form.Item label="当前集群">
+          <Form.Item label="Current Cluster">
             <Input value="testing-cluster" disabled style={{ width: 300 }} />
           </Form.Item>
-          <Form.Item label="区域">
+          <Form.Item label="Region">
             <Input value="ap-southeast-1" disabled style={{ width: 300 }} />
           </Form.Item>
           <Form.Item label="API Server">
             <Input value={apiUrl} disabled style={{ width: 400 }} />
           </Form.Item>
         </Form>
-      </ProCard>
+      </Card>
     </Space>
   )
 }
