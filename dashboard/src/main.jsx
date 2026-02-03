@@ -1,8 +1,8 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
-// Use new enterprise-style App
-import App from './AppNew.jsx'
+// Use PagerDuty-inspired enterprise App
+import App from './AppPagerDuty.jsx'
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>
