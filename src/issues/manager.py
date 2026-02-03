@@ -334,3 +334,27 @@ class IssueManager:
         }
         
         return mapping.get(event_type, IssueType.UNKNOWN)
+    
+    def list_issues(
+        self, 
+        status: str = None, 
+        severity: str = None, 
+        namespace: str = None, 
+        limit: int = 100
+    ) -> List[Issue]:
+        """List issues with optional filters."""
+        issues = self.store.get_all(limit=limit)
+        
+        # Apply filters
+        if status:
+            issues = [i for i in issues if i.status.value == status]
+        if severity:
+            issues = [i for i in issues if i.severity.value == severity]
+        if namespace:
+            issues = [i for i in issues if i.namespace == namespace]
+        
+        return issues
+    
+    def get_issue(self, issue_id: str) -> Optional[Issue]:
+        """Get a single issue by ID."""
+        return self.store.get(issue_id)

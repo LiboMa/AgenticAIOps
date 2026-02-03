@@ -162,16 +162,64 @@ Timeline:
 
 ---
 
-## 5. 页面结构
+## 5. Page Structure
 
-| 页面 | 路由 | 功能 |
-|------|------|------|
-| **Incidents** | `/` | Incident 列表 (主页) |
-| Incident Detail | `/incidents/:id` | 详情 + 时间线 |
-| **Services** | `/services` | 服务健康状态 |
-| **Analytics** | `/analytics` | 统计图表 |
-| **On-Call** | `/on-call` | 值班管理 |
-| Settings | `/settings` | 系统设置 |
+| Page | Route | Function |
+|------|-------|----------|
+| **Incidents** | `/` | Incident list (homepage) |
+| Incident Detail | `/incidents/:id` | Details + timeline |
+| **Services** | `/services` | Service health status |
+| **Analytics** | `/analytics` | Statistics charts |
+| **Chat** | `/chat` | AI Chatbot interface |
+| Settings | `/settings` | System settings |
+
+---
+
+## 5.1 Chatbot Component (Required)
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│          AI Chatbot - User Interaction Layer                 │
+├─────────────────────────────────────────────────────────────┤
+│                                                              │
+│  Layout Options:                                             │
+│  ├── A) Right sidebar panel (always visible)                │
+│  ├── B) Floating chat button (expandable)                   │
+│  └── C) Dedicated /chat page                                │
+│                                                              │
+│  Features:                                                   │
+│  ├── Natural language incident queries                      │
+│  ├── AI-powered diagnosis requests                          │
+│  ├── Runbook execution via chat                             │
+│  └── Status updates and alerts                              │
+│                                                              │
+│  Example Interactions:                                       │
+│  ├── "What's causing the OOMKilled error?"                  │
+│  ├── "Diagnose pod memory-hog-demo"                         │
+│  ├── "Fix the memory issue automatically"                   │
+│  └── "Show cluster health status"                           │
+│                                                              │
+│  Backend API:                                                │
+│  └── POST /api/chat - Send message to AI                    │
+│                                                              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+```tsx
+// ChatPanel component interface
+interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: Date;
+}
+
+interface ChatPanelProps {
+  onSendMessage: (message: string) => Promise<void>;
+  messages: ChatMessage[];
+  isLoading: boolean;
+}
+```
 
 ---
 

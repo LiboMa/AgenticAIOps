@@ -1,11 +1,12 @@
 # Runbook: Increase Memory Limit
-# Triggered by: oom-001 (OOMKilled)
+# Triggered by: oom_killed (OOMKilled)
 
 id: "increase-memory-limit"
 name: "Increase Pod Memory Limit"
 description: "Automatically increase memory limit when OOMKilled detected"
 
 triggers:
+  - pattern_id: "oom_killed"
   - pattern_id: "oom-001"
   - severity: ["medium", "high"]
 

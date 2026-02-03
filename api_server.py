@@ -889,11 +889,66 @@ async def get_issue(issue_id: str):
     return issue.to_dict()
 
 
+class IssueCreateRequest(BaseModel):
+    title: str
+    description: Optional[str] = None
+    severity: str = "medium"
+    namespace: str = "default"
+    resource_type: str = "Pod"
+    resource_name: str = ""
+    root_cause: Optional[str] = None
+    remediation: Optional[str] = None
+    pattern_id: Optional[str] = None
+    auto_fixable: bool = False
+
+
 class IssueUpdateRequest(BaseModel):
     status: Optional[str] = None
     severity: Optional[str] = None
     root_cause: Optional[str] = None
     remediation: Optional[str] = None
+
+
+@app.post("/api/issues")
+async def create_issue(request: IssueCreateRequest):
+    """Create a new issue."""
+    manager = get_issue_manager()
+    if not manager:
+        raise HTTPException(status_code=503, detail="Issue Manager not available")
+    
+    try:
+        from src.issues import IssueType
+        
+        # Map pattern_id to IssueType
+        type_map = {
+            "oom_killed": IssueType.OOM_KILLED,
+            "cpu_throttling": IssueType.CPU_THROTTLING,
+            "crash_loop": IssueType.CRASH_LOOP,
+            "image_pull_error": IssueType.IMAGE_PULL_ERROR,
+            "memory_pressure": IssueType.MEMORY_PRESSURE,
+        }
+        issue_type = type_map.get(request.pattern_id, IssueType.UNKNOWN)
+        
+        issue = manager.create_issue(
+            issue_type=issue_type,
+            title=request.title,
+            namespace=request.namespace,
+            resource=request.resource_name,
+            description=request.description or "",
+            symptoms=[request.root_cause] if request.root_cause else [],
+            metadata={
+                "resource_type": request.resource_type,
+                "root_cause": request.root_cause,
+                "remediation": request.remediation,
+                "auto_fixable": request.auto_fixable,
+                "pattern_id": request.pattern_id
+            }
+        )
+        return issue.to_dict()
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.patch("/api/issues/{issue_id}")
@@ -944,13 +999,13 @@ async def fix_issue(issue_id: str):
     # Find and execute runbook
     if executor:
         try:
-            # Try to find runbook for this issue's pattern
-            pattern_id = issue.pattern_id or f"{issue.resource_type}-unknown"
+            # Try to find runbook for this issue's type
+            pattern_id = issue.metadata.get("pattern_id") or issue.type.value if hasattr(issue.type, 'value') else str(issue.type)
             
             context = {
                 "namespace": issue.namespace,
-                "resource_type": issue.resource_type,
-                "resource_name": issue.resource_name,
+                "resource_type": issue.metadata.get("resource_type", "Pod"),
+                "resource_name": issue.resource,
                 "container_name": "main",
             }
             
@@ -961,8 +1016,8 @@ async def fix_issue(issue_id: str):
                 manager.record_fix_attempt(
                     issue_id=issue_id,
                     action=execution.runbook_id,
+                    result=f"Execution {execution.execution_id}: {execution.status.value}",
                     success=execution.status.value == "success",
-                    details={"execution_id": execution.execution_id}
                 )
                 
                 return {

@@ -27,8 +27,10 @@ const severityConfig = {
 }
 
 const statusConfig = {
+  detected: { color: '#CC2936', bg: '#fff2f0', label: 'Triggered' },
   open: { color: '#CC2936', bg: '#fff2f0', label: 'Triggered' },
   in_progress: { color: '#F2A900', bg: '#fffbe6', label: 'Acknowledged' },
+  fixed: { color: '#06AC38', bg: '#f6ffed', label: 'Resolved' },
   resolved: { color: '#06AC38', bg: '#f6ffed', label: 'Resolved' },
   closed: { color: '#666', bg: '#fafafa', label: 'Closed' },
 }
@@ -181,12 +183,12 @@ function IssueCenter({ apiUrl }) {
       width: 200,
       render: (_, record) => (
         <Space>
-          {record.status === 'open' && (
+          {record.status === 'detected' && (
             <Button size="small" onClick={() => handleAcknowledge(record.id)}>
               Acknowledge
             </Button>
           )}
-          {record.status === 'open' && record.auto_fixable && (
+          {record.status === 'detected' && record.auto_fixable && (
             <Button 
               size="small" 
               type="primary"
@@ -213,15 +215,17 @@ function IssueCenter({ apiUrl }) {
     },
   ]
 
-  const statusCounts = dashboardData.status_counts || {}
-
   // Filter issues by tab
   const filteredIssues = issues.filter(i => {
-    if (activeTab === 'triggered') return i.status === 'open'
+    if (activeTab === 'triggered') return i.status === 'detected' || i.status === 'open'
     if (activeTab === 'acknowledged') return i.status === 'in_progress'
-    if (activeTab === 'resolved') return i.status === 'resolved' || i.status === 'closed'
+    if (activeTab === 'resolved') return i.status === 'resolved' || i.status === 'fixed' || i.status === 'closed'
     return true
   })
+
+  // Get stats from dashboard
+  const stats = dashboardData.stats || {}
+  const statusCounts = stats.by_status || {}
 
   return (
     <div>
@@ -237,7 +241,7 @@ function IssueCenter({ apiUrl }) {
           <Col>
             <Statistic 
               title="Triggered" 
-              value={statusCounts.open || 0}
+              value={statusCounts.detected || 0}
               valueStyle={{ color: '#CC2936' }}
             />
           </Col>
@@ -252,8 +256,8 @@ function IssueCenter({ apiUrl }) {
           <Col><Divider type="vertical" style={{ height: 50 }} /></Col>
           <Col>
             <Statistic 
-              title="Resolved Today" 
-              value={statusCounts.resolved || 0}
+              title="Resolved" 
+              value={statusCounts.fixed || 0}
               valueStyle={{ color: '#06AC38' }}
             />
           </Col>
@@ -261,7 +265,7 @@ function IssueCenter({ apiUrl }) {
           <Col>
             <Statistic 
               title="Total" 
-              value={issues.length}
+              value={stats.total || issues.length}
               valueStyle={{ color: '#666' }}
             />
           </Col>
@@ -289,14 +293,14 @@ function IssueCenter({ apiUrl }) {
           tabBarStyle={{ padding: '0 16px', marginBottom: 0 }}
         >
           <TabPane 
-            tab={<Badge count={statusCounts.open || 0} offset={[10, 0]}>Triggered</Badge>} 
+            tab={<Badge count={statusCounts.detected || 0} offset={[10, 0]}>Triggered</Badge>} 
             key="triggered" 
           />
           <TabPane 
             tab={<Badge count={statusCounts.in_progress || 0} offset={[10, 0]}>Acknowledged</Badge>} 
             key="acknowledged" 
           />
-          <TabPane tab="Resolved" key="resolved" />
+          <TabPane tab={`Resolved (${statusCounts.fixed || 0})`} key="resolved" />
           <TabPane tab="All" key="all" />
         </Tabs>
         
