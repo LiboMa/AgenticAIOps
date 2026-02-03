@@ -193,7 +193,9 @@ function App() {
 
         {/* Main Content */}
         <Content style={{ 
-          padding: '24px 48px',
+          padding: '24px',
+          paddingLeft: 'max(24px, 3vw)',
+          paddingRight: 'max(24px, 3vw)',
           background: '#f5f7fa',
           minHeight: 'calc(100vh - 64px - 48px)',
         }}>

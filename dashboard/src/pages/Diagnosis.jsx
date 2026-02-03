@@ -189,9 +189,9 @@ function Diagnosis({ apiUrl }) {
         <Text type="secondary">Analyze and troubleshoot cluster issues with AI assistance</Text>
       </div>
 
-      <Row gutter={24}>
+      <Row gutter={[16, 16]}>
         {/* Left: Diagnostics Panel */}
-        <Col xs={24} lg={14}>
+        <Col xs={24} xl={14} xxl={15}>
           <Space direction="vertical" size="large" style={{ width: '100%' }}>
             {/* Quick Diagnosis */}
             <Card
@@ -208,11 +208,11 @@ function Diagnosis({ apiUrl }) {
                   <label style={{ color: '#666', marginBottom: 8, display: 'block' }}>
                     Target Namespace
                   </label>
-                  <Space>
+                  <Space wrap>
                     <Select
                       value={namespace}
                       onChange={setNamespace}
-                      style={{ width: 200 }}
+                      style={{ width: 200, minWidth: 150 }}
                       options={[
                         { value: 'stress-test', label: 'stress-test' },
                         { value: 'default', label: 'default' },
@@ -249,7 +249,7 @@ function Diagnosis({ apiUrl }) {
             {/* Results */}
             {result && (
               <Card bordered={false} title="Diagnosis Results">
-                <Descriptions column={2} bordered size="small" style={{ marginBottom: 16 }}>
+                <Descriptions column={{ xs: 1, sm: 2 }} bordered size="small" style={{ marginBottom: 16 }}>
                   <Descriptions.Item label="Namespace">{result.namespace}</Descriptions.Item>
                   <Descriptions.Item label="Time">
                     {new Date(result.timestamp).toLocaleString()}
@@ -272,7 +272,7 @@ function Diagnosis({ apiUrl }) {
         </Col>
 
         {/* Right: AI Chat */}
-        <Col xs={24} lg={10}>
+        <Col xs={24} xl={10} xxl={9}>
           <Card
             bordered={false}
             title={
@@ -282,7 +282,7 @@ function Diagnosis({ apiUrl }) {
               </Space>
             }
             bodyStyle={{ padding: 12 }}
-            style={{ height: 'calc(100vh - 220px)', minHeight: 500 }}
+            style={{ minHeight: 500 }}
           >
             <DiagnosisChat apiUrl={apiUrl} />
           </Card>
