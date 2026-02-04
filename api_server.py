@@ -1606,6 +1606,155 @@ async def perform_rca(request: RCARequest):
 
 
 # =============================================================================
+# AWS Cloud Scanner (Full Resource Discovery)
+# =============================================================================
+
+from src.aws_scanner import get_scanner, AWSCloudScanner
+
+# Current scanner state
+_current_region = "ap-southeast-1"
+_monitored_resources: List[Dict[str, Any]] = []
+
+@app.get("/api/scanner/account")
+async def get_account_info():
+    """Get current AWS account information."""
+    scanner = get_scanner(_current_region)
+    return scanner.get_account_info()
+
+@app.get("/api/scanner/regions")
+async def list_regions():
+    """List available AWS regions."""
+    scanner = get_scanner(_current_region)
+    regions = scanner.list_regions()
+    # Add common regions at top
+    common = ["ap-southeast-1", "us-east-1", "us-west-2", "eu-west-1", "ap-northeast-1"]
+    return {
+        "current": _current_region,
+        "common": common,
+        "all": regions,
+    }
+
+class SetRegionRequest(BaseModel):
+    region: str
+
+@app.post("/api/scanner/region")
+async def set_region(request: SetRegionRequest):
+    """Set the current region for scanning."""
+    global _current_region
+    _current_region = request.region
+    return {"status": "ok", "region": _current_region}
+
+@app.get("/api/scanner/scan")
+async def scan_all_resources(region: Optional[str] = None):
+    """Perform full cloud scan of all AWS resources."""
+    scan_region = region or _current_region
+    scanner = get_scanner(scan_region)
+    return scanner.scan_all_resources()
+
+@app.get("/api/scanner/service/{service}")
+async def scan_service(service: str, region: Optional[str] = None):
+    """Scan a specific AWS service."""
+    scan_region = region or _current_region
+    scanner = get_scanner(scan_region)
+    
+    service_scanners = {
+        "ec2": scanner._scan_ec2,
+        "lambda": scanner._scan_lambda,
+        "s3": scanner._scan_s3,
+        "rds": scanner._scan_rds,
+        "iam": scanner._scan_iam,
+        "eks": scanner._scan_eks,
+        "cloudwatch": scanner._scan_cloudwatch_alarms,
+    }
+    
+    if service not in service_scanners:
+        raise HTTPException(status_code=400, detail=f"Unknown service: {service}")
+    
+    return {
+        "service": service,
+        "region": scan_region,
+        "data": service_scanners[service](),
+    }
+
+# Monitoring endpoints
+
+class MonitorResourceRequest(BaseModel):
+    resource_id: str
+    resource_type: str
+    name: str = ""
+    service: str
+
+@app.post("/api/scanner/monitor")
+async def add_to_monitoring(request: MonitorResourceRequest):
+    """Add a resource to the monitoring list."""
+    global _monitored_resources
+    
+    # Check if already monitored
+    for r in _monitored_resources:
+        if r["resource_id"] == request.resource_id:
+            return {"status": "already_monitored", "resource_id": request.resource_id}
+    
+    _monitored_resources.append({
+        "resource_id": request.resource_id,
+        "resource_type": request.resource_type,
+        "name": request.name,
+        "service": request.service,
+        "added_at": datetime.now().isoformat(),
+    })
+    
+    return {"status": "ok", "resource_id": request.resource_id, "total_monitored": len(_monitored_resources)}
+
+@app.delete("/api/scanner/monitor/{resource_id}")
+async def remove_from_monitoring(resource_id: str):
+    """Remove a resource from monitoring."""
+    global _monitored_resources
+    _monitored_resources = [r for r in _monitored_resources if r["resource_id"] != resource_id]
+    return {"status": "ok", "resource_id": resource_id, "total_monitored": len(_monitored_resources)}
+
+@app.get("/api/scanner/monitored")
+async def list_monitored_resources():
+    """List all monitored resources."""
+    return {"resources": _monitored_resources, "count": len(_monitored_resources)}
+
+# CloudWatch Metrics/Logs endpoints
+
+@app.get("/api/cloudwatch/metrics/ec2/{instance_id}")
+async def get_ec2_metrics(instance_id: str, metric: str = "CPUUtilization", hours: int = 1):
+    """Get CloudWatch metrics for an EC2 instance."""
+    scanner = get_scanner(_current_region)
+    return scanner.get_ec2_metrics(instance_id, metric, hours)
+
+@app.get("/api/cloudwatch/metrics/rds/{db_id}")
+async def get_rds_metrics(db_id: str, metric: str = "CPUUtilization", hours: int = 1):
+    """Get CloudWatch metrics for an RDS instance."""
+    scanner = get_scanner(_current_region)
+    return scanner.get_rds_metrics(db_id, metric, hours)
+
+@app.get("/api/cloudwatch/metrics/lambda/{function_name}")
+async def get_lambda_metrics(function_name: str, metric: str = "Duration", hours: int = 1):
+    """Get CloudWatch metrics for a Lambda function."""
+    scanner = get_scanner(_current_region)
+    return scanner.get_lambda_metrics(function_name, metric, hours)
+
+class CloudWatchLogsRequest(BaseModel):
+    log_group: str
+    filter_pattern: str = ""
+    limit: int = 100
+    hours: int = 1
+
+@app.post("/api/cloudwatch/logs")
+async def get_cloudwatch_logs(request: CloudWatchLogsRequest):
+    """Get CloudWatch logs."""
+    scanner = get_scanner(_current_region)
+    return scanner.get_cloudwatch_logs(
+        request.log_group,
+        request.filter_pattern,
+        request.limit,
+        request.hours,
+    )
+
+
+# =============================================================================
 # Main
 # =============================================================================
 
