@@ -134,9 +134,22 @@ Try asking: *"What pods are having issues in stress-test namespace?"*
         body: JSON.stringify({ message: fullMessage })
       })
       const data = await response.json()
+      
+      // Check for A2UI action
+      let assistantMessage = data.response || data.error || 'No response'
+      if (data.ui_action && data.ui_action.action === 'add_widget') {
+        const widget = data.ui_action.widget
+        assistantMessage += `\n\n✅ **Widget Created!**\n- Type: ${widget.type}\n- Title: ${widget.config?.title || 'Untitled'}\n\n*Go to **Cloud Services** → Dashboard to see it, or I can add more widgets!*`
+        
+        // Store widget for potential use
+        if (window.addDashboardWidget) {
+          window.addDashboardWidget(widget)
+        }
+      }
+      
       setMessages(prev => [...prev, { 
         role: 'assistant', 
-        content: data.response || data.error || 'No response'
+        content: assistantMessage
       }])
     } catch (error) {
       setMessages(prev => [...prev, { 
