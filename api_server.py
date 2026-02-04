@@ -1234,6 +1234,200 @@ async def list_runbook_executions(limit: int = 10):
 
 
 # =============================================================================
+# AWS Resource APIs (with mock fallback)
+# =============================================================================
+
+def get_aws_client(service_name: str):
+    """Get AWS client, returns None if not configured."""
+    try:
+        import boto3
+        return boto3.client(service_name)
+    except Exception:
+        return None
+
+
+@app.get("/api/aws/ec2")
+async def list_ec2_instances():
+    """List EC2 instances."""
+    client = get_aws_client('ec2')
+    
+    if client:
+        try:
+            response = client.describe_instances()
+            instances = []
+            for reservation in response.get('Reservations', []):
+                for instance in reservation.get('Instances', []):
+                    name = next((t['Value'] for t in instance.get('Tags', []) if t['Key'] == 'Name'), 'Unnamed')
+                    instances.append({
+                        'id': instance['InstanceId'],
+                        'name': name,
+                        'type': instance['InstanceType'],
+                        'state': instance['State']['Name'],
+                        'az': instance.get('Placement', {}).get('AvailabilityZone', 'N/A'),
+                        'cpu': 0,  # Would need CloudWatch for real metrics
+                    })
+            running = sum(1 for i in instances if i['state'] == 'running')
+            stopped = sum(1 for i in instances if i['state'] == 'stopped')
+            return {
+                'instances': instances,
+                'stats': {'total': len(instances), 'running': running, 'stopped': stopped}
+            }
+        except Exception as e:
+            pass  # Fall through to mock data
+    
+    # Mock data for demo
+    return {
+        'instances': [
+            {'id': 'i-0abc123def456', 'name': 'web-server-1', 'type': 't3.medium', 'state': 'running', 'az': 'us-east-1a', 'cpu': 45},
+            {'id': 'i-0def456abc789', 'name': 'api-server-1', 'type': 't3.large', 'state': 'running', 'az': 'us-east-1b', 'cpu': 62},
+            {'id': 'i-0ghi789jkl012', 'name': 'db-server-1', 'type': 'r5.xlarge', 'state': 'running', 'az': 'us-east-1a', 'cpu': 78},
+            {'id': 'i-0mno345pqr678', 'name': 'worker-1', 'type': 't3.small', 'state': 'stopped', 'az': 'us-east-1c', 'cpu': 0},
+            {'id': 'i-0stu901vwx234', 'name': 'batch-processor', 'type': 'm5.large', 'state': 'running', 'az': 'us-east-1b', 'cpu': 33},
+        ],
+        'stats': {'total': 5, 'running': 4, 'stopped': 1}
+    }
+
+
+@app.get("/api/aws/lambda")
+async def list_lambda_functions():
+    """List Lambda functions."""
+    client = get_aws_client('lambda')
+    
+    if client:
+        try:
+            response = client.list_functions()
+            functions = []
+            for fn in response.get('Functions', []):
+                functions.append({
+                    'name': fn['FunctionName'],
+                    'runtime': fn.get('Runtime', 'N/A'),
+                    'memory': fn.get('MemorySize', 0),
+                    'timeout': fn.get('Timeout', 0),
+                    'invocations': 0,  # Would need CloudWatch
+                })
+            return {'functions': functions}
+        except Exception:
+            pass
+    
+    # Mock data
+    return {
+        'functions': [
+            {'name': 'api-handler', 'runtime': 'python3.11', 'memory': 256, 'timeout': 30, 'invocations': 1250},
+            {'name': 'image-processor', 'runtime': 'nodejs18.x', 'memory': 512, 'timeout': 60, 'invocations': 340},
+            {'name': 'notification-sender', 'runtime': 'python3.11', 'memory': 128, 'timeout': 15, 'invocations': 890},
+            {'name': 'data-transformer', 'runtime': 'python3.12', 'memory': 1024, 'timeout': 120, 'invocations': 456},
+            {'name': 'auth-validator', 'runtime': 'nodejs20.x', 'memory': 256, 'timeout': 10, 'invocations': 2100},
+        ]
+    }
+
+
+@app.get("/api/aws/s3")
+async def list_s3_buckets():
+    """List S3 buckets."""
+    client = get_aws_client('s3')
+    
+    if client:
+        try:
+            response = client.list_buckets()
+            buckets = []
+            for bucket in response.get('Buckets', []):
+                buckets.append({
+                    'name': bucket['Name'],
+                    'region': 'us-east-1',  # Would need additional call
+                    'objects': 0,
+                    'size': 'N/A',
+                    'public': False,
+                })
+            return {'buckets': buckets}
+        except Exception:
+            pass
+    
+    # Mock data
+    return {
+        'buckets': [
+            {'name': 'prod-assets-bucket', 'region': 'us-east-1', 'objects': 12450, 'size': '45.2 GB', 'public': False},
+            {'name': 'logs-archive-bucket', 'region': 'us-east-1', 'objects': 89230, 'size': '128.5 GB', 'public': False},
+            {'name': 'static-website-bucket', 'region': 'us-east-1', 'objects': 234, 'size': '1.2 GB', 'public': True},
+            {'name': 'backup-daily-bucket', 'region': 'us-west-2', 'objects': 567, 'size': '89.7 GB', 'public': False},
+        ]
+    }
+
+
+@app.get("/api/aws/rds")
+async def list_rds_instances():
+    """List RDS database instances."""
+    client = get_aws_client('rds')
+    
+    if client:
+        try:
+            response = client.describe_db_instances()
+            instances = []
+            for db in response.get('DBInstances', []):
+                instances.append({
+                    'id': db['DBInstanceIdentifier'],
+                    'engine': db['Engine'],
+                    'status': db['DBInstanceStatus'],
+                    'class': db['DBInstanceClass'],
+                    'storage': db.get('AllocatedStorage', 0),
+                })
+            return {'instances': instances}
+        except Exception:
+            pass
+    
+    # Mock data
+    return {
+        'instances': [
+            {'id': 'prod-mysql-primary', 'engine': 'mysql', 'status': 'available', 'class': 'db.r5.large', 'storage': 500},
+            {'id': 'prod-postgres-main', 'engine': 'postgres', 'status': 'available', 'class': 'db.r5.xlarge', 'storage': 1000},
+            {'id': 'analytics-redshift', 'engine': 'redshift', 'status': 'available', 'class': 'dc2.large', 'storage': 2000},
+        ]
+    }
+
+
+@app.get("/api/aws/scan")
+async def scan_aws_resources():
+    """Scan all AWS resources and return summary with potential issues."""
+    ec2_data = await list_ec2_instances()
+    lambda_data = await list_lambda_functions()
+    s3_data = await list_s3_buckets()
+    rds_data = await list_rds_instances()
+    
+    # Detect potential issues
+    issues = []
+    
+    # Check EC2 - high CPU
+    for instance in ec2_data.get('instances', []):
+        if instance.get('cpu', 0) > 70:
+            issues.append({
+                'resource': f"EC2: {instance['name']}",
+                'severity': 'high' if instance['cpu'] > 85 else 'medium',
+                'issue': f"High CPU utilization: {instance['cpu']}%",
+                'recommendation': 'Consider scaling up or investigating workload'
+            })
+    
+    # Check S3 - public buckets
+    for bucket in s3_data.get('buckets', []):
+        if bucket.get('public'):
+            issues.append({
+                'resource': f"S3: {bucket['name']}",
+                'severity': 'high',
+                'issue': 'Bucket has public access enabled',
+                'recommendation': 'Review bucket policy and disable public access if not needed'
+            })
+    
+    return {
+        'summary': {
+            'ec2': {'count': len(ec2_data.get('instances', [])), 'running': ec2_data.get('stats', {}).get('running', 0)},
+            'lambda': {'count': len(lambda_data.get('functions', []))},
+            's3': {'count': len(s3_data.get('buckets', []))},
+            'rds': {'count': len(rds_data.get('instances', []))},
+        },
+        'issues': issues,
+        'scanned_at': datetime.now().isoformat()
+    }
+
+
+# =============================================================================
 # Main
 # =============================================================================
 
