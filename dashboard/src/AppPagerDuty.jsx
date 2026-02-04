@@ -10,6 +10,7 @@ import {
   UserOutlined,
   RobotOutlined,
   CloseOutlined,
+  CloudServerOutlined,
 } from '@ant-design/icons'
 import ChatPanelPD from './components/ChatPanelPD'
 
@@ -19,6 +20,7 @@ const IssueCenter = lazy(() => import('./pages/IssueCenterPD'))
 const Diagnosis = lazy(() => import('./pages/Diagnosis'))
 const Metrics = lazy(() => import('./pages/Metrics'))
 const Settings = lazy(() => import('./pages/Settings'))
+const CloudServices = lazy(() => import('./pages/CloudServices'))
 
 const { Header, Content, Footer } = Layout
 
@@ -80,6 +82,7 @@ function App() {
         </Space>
       ),
     },
+    { key: 'cloud', icon: <CloudServerOutlined />, label: 'Cloud Services' },
     { key: 'diagnosis', icon: <SearchOutlined />, label: 'Diagnostics' },
     { key: 'metrics', icon: <LineChartOutlined />, label: 'Analytics' },
     { key: 'settings', icon: <SettingOutlined />, label: 'Settings' },
@@ -98,6 +101,7 @@ function App() {
       <Suspense fallback={<PageLoading />}>
         {currentPage === 'overview' && <Overview {...props} />}
         {currentPage === 'issues' && <IssueCenter {...props} />}
+        {currentPage === 'cloud' && <CloudServices {...props} />}
         {currentPage === 'diagnosis' && <Diagnosis {...props} />}
         {currentPage === 'metrics' && <Metrics {...props} />}
         {currentPage === 'settings' && <Settings {...props} />}
