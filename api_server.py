@@ -8,7 +8,7 @@ FastAPI server providing REST endpoints for the React dashboard.
 import os
 import json
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
