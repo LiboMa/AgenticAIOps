@@ -1428,6 +1428,87 @@ async def scan_aws_resources():
 
 
 # =============================================================================
+# Proactive Agent System (OpenClaw-inspired)
+# =============================================================================
+
+from src.proactive_agent import get_proactive_system, ProactiveResult
+
+# Initialize proactive system
+proactive_system = get_proactive_system()
+
+@app.on_event("startup")
+async def startup_proactive_system():
+    """Start proactive agent system on server startup."""
+    await proactive_system.start()
+    print("🚀 Proactive Agent System started")
+
+@app.on_event("shutdown")
+async def shutdown_proactive_system():
+    """Stop proactive agent system on server shutdown."""
+    await proactive_system.stop()
+    print("🛑 Proactive Agent System stopped")
+
+@app.get("/api/proactive/status")
+async def get_proactive_status():
+    """Get proactive system status."""
+    return proactive_system.get_status()
+
+class ProactiveToggleRequest(BaseModel):
+    task_name: str
+    enabled: bool
+
+@app.post("/api/proactive/toggle")
+async def toggle_proactive_task(request: ProactiveToggleRequest):
+    """Enable or disable a proactive task."""
+    proactive_system.enable_task(request.task_name, request.enabled)
+    return {"status": "ok", "task": request.task_name, "enabled": request.enabled}
+
+class ProactiveIntervalRequest(BaseModel):
+    task_name: str
+    interval_seconds: int
+
+@app.post("/api/proactive/interval")
+async def update_proactive_interval(request: ProactiveIntervalRequest):
+    """Update proactive task interval."""
+    proactive_system.update_task_interval(request.task_name, request.interval_seconds)
+    return {"status": "ok", "task": request.task_name, "interval": request.interval_seconds}
+
+class EventTriggerRequest(BaseModel):
+    event_type: str
+    event_data: dict = {}
+
+@app.post("/api/proactive/trigger")
+async def trigger_proactive_event(request: EventTriggerRequest):
+    """Trigger an event-driven proactive task (e.g., CloudWatch alert)."""
+    result = await proactive_system.trigger_event(request.event_type, request.event_data)
+    return {
+        "task_name": result.task_name,
+        "status": result.status,
+        "summary": result.summary,
+        "findings": result.findings,
+        "timestamp": result.timestamp.isoformat()
+    }
+
+@app.get("/api/proactive/results")
+async def get_proactive_results():
+    """Get pending proactive results (alerts)."""
+    results = []
+    while not proactive_system.results_queue.empty():
+        try:
+            result: ProactiveResult = proactive_system.results_queue.get_nowait()
+            results.append({
+                "task_name": result.task_name,
+                "status": result.status,
+                "summary": result.summary,
+                "findings": result.findings,
+                "timestamp": result.timestamp.isoformat()
+            })
+        except:
+            break
+    return {"results": results, "count": len(results)}
+
+
+# =============================================================================
 # Main
 # =============================================================================
 
