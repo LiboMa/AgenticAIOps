@@ -89,66 +89,27 @@ function ObservabilityList({ apiUrl }) {
 
   const fetchIssues = async () => {
     setLoading(true)
+    console.log('Fetching from:', apiUrl)
     try {
-      const response = await fetch(`${apiUrl}/api/issues/dashboard`)
-      const data = await response.json()
-      // Combine active_issues and resolved_today for display
-      let allIssues = [
-        ...(data.active_issues || []),
-        ...(data.resolved_today || []),
-        ...(data.issues || [])
-      ]
+      // Fetch all issues from the main endpoint
+      const [issuesRes, dashboardRes] = await Promise.all([
+        fetch(`${apiUrl}/api/issues`),
+        fetch(`${apiUrl}/api/issues/dashboard`)
+      ])
       
-      // If no real issues, add demo data
-      if (allIssues.length === 0) {
-        allIssues = [
-          {
-            id: 'demo-1',
-            title: 'EC2 High CPU Utilization',
-            description: 'Instance i-0a1b2c3d showing sustained CPU above 85%',
-            severity: 'high',
-            status: 'detected',
-            resource_type: 'ec2',
-            resource_name: 'prod-api-server',
-            namespace: 'production',
-            root_cause: 'Heavy API traffic causing resource exhaustion',
-            pattern_id: 'ec2_high_cpu',
-            created_at: new Date().toISOString(),
-          },
-          {
-            id: 'demo-2',
-            title: 'S3 Bucket Public Access',
-            description: 'Bucket allows public read access',
-            severity: 'high',
-            status: 'detected',
-            resource_type: 's3',
-            resource_name: 'company-data-bucket',
-            namespace: 'storage',
-            root_cause: 'Bucket ACL misconfigured',
-            pattern_id: 's3_public_bucket',
-            created_at: new Date(Date.now() - 3600000).toISOString(),
-          },
-          {
-            id: 'demo-3',
-            title: 'Lambda Deprecated Runtime',
-            description: 'Function using Python 3.8 (deprecated)',
-            severity: 'medium',
-            status: 'detected',
-            resource_type: 'lambda',
-            resource_name: 'data-processor',
-            namespace: 'compute',
-            root_cause: 'Runtime needs upgrade to Python 3.12',
-            pattern_id: 'lambda_deprecated_runtime',
-            created_at: new Date(Date.now() - 7200000).toISOString(),
-          },
-        ]
-      }
+      const issuesData = await issuesRes.json()
+      const dashboardData = await dashboardRes.json()
+      
+      console.log('Issues fetched:', issuesData.issues?.length)
+      
+      // Use issues from /api/issues endpoint
+      const allIssues = issuesData.issues || []
       
       setIssues(allIssues)
-      setStats(data.stats || { 
+      setStats(dashboardData.stats || { 
         total: allIssues.length, 
-        by_severity: { high: 2, medium: 1 }, 
-        by_status: { detected: allIssues.length } 
+        by_severity: {}, 
+        by_status: {} 
       })
     } catch (error) {
       console.error('Failed to fetch issues:', error)
