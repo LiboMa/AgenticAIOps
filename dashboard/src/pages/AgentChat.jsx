@@ -148,13 +148,14 @@ Scanned 5 AWS services:
   return (
     <Card 
       style={{ 
-        height: '100%', 
+        height: 'calc(100vh - 48px)', 
         display: 'flex', 
         flexDirection: 'column',
         borderRadius: 12,
-        boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+        boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+        border: '1px solid #d9d9d9',
       }}
-      bodyStyle={{ padding: 0, flex: 1, display: 'flex', flexDirection: 'column' }}
+      styles={{ body: { padding: 0, flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' } }}
     >
       {/* Header */}
       <div style={{ 
