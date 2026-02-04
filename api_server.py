@@ -1509,6 +1509,103 @@ async def get_proactive_results():
 
 
 # =============================================================================
+# S3 Knowledge Base (Pattern Storage + RCA)
+# =============================================================================
+
+from src.s3_knowledge_base import get_knowledge_base, AnomalyPattern
+
+@app.get("/api/kb/stats")
+async def get_kb_stats():
+    """Get knowledge base statistics."""
+    kb = await get_knowledge_base()
+    return kb.get_stats()
+
+@app.get("/api/kb/patterns")
+async def list_patterns(
+    resource_type: Optional[str] = None,
+    severity: Optional[str] = None,
+    limit: int = 50
+):
+    """List patterns in the knowledge base."""
+    kb = await get_knowledge_base()
+    patterns = await kb.search_patterns(
+        resource_type=resource_type,
+        severity=severity,
+        limit=limit
+    )
+    return {
+        "patterns": [p.to_dict() for p in patterns],
+        "count": len(patterns)
+    }
+
+@app.get("/api/kb/patterns/{pattern_id}")
+async def get_pattern(pattern_id: str):
+    """Get a specific pattern by ID."""
+    kb = await get_knowledge_base()
+    pattern = await kb.get_pattern(pattern_id)
+    if not pattern:
+        raise HTTPException(status_code=404, detail="Pattern not found")
+    return pattern.to_dict()
+
+class PatternAddRequest(BaseModel):
+    title: str
+    description: str
+    resource_type: str
+    severity: str = "medium"
+    symptoms: List[str] = []
+    root_cause: str = ""
+    remediation: str = ""
+    tags: List[str] = []
+    quality_score: float = 0.8
+
+@app.post("/api/kb/patterns")
+async def add_pattern(request: PatternAddRequest):
+    """Add a new pattern to the knowledge base."""
+    kb = await get_knowledge_base()
+    pattern = AnomalyPattern(
+        pattern_id="",  # Will be generated
+        title=request.title,
+        description=request.description,
+        resource_type=request.resource_type,
+        severity=request.severity,
+        symptoms=request.symptoms,
+        root_cause=request.root_cause,
+        remediation=request.remediation,
+        tags=request.tags,
+    )
+    success = await kb.add_pattern(pattern, quality_score=request.quality_score)
+    if not success:
+        raise HTTPException(status_code=400, detail="Pattern rejected: quality score too low (< 0.7)")
+    return {"status": "ok", "pattern_id": pattern.pattern_id}
+
+class RCARequest(BaseModel):
+    id: str = ""
+    title: str
+    description: str = ""
+    resource_type: str
+
+@app.post("/api/kb/rca")
+async def perform_rca(request: RCARequest):
+    """Perform Root Cause Analysis using pattern matching."""
+    kb = await get_knowledge_base()
+    issue = {
+        "id": request.id or "unknown",
+        "title": request.title,
+        "description": request.description,
+        "resource_type": request.resource_type,
+    }
+    result = await kb.match_pattern(issue)
+    return {
+        "issue_id": result.issue_id,
+        "matched_pattern": result.matched_pattern.to_dict() if result.matched_pattern else None,
+        "confidence": result.confidence,
+        "analysis": result.analysis,
+        "recommendations": result.recommendations,
+        "timestamp": result.timestamp
+    }
+
+
+# =============================================================================
 # Main
 # =============================================================================
 
