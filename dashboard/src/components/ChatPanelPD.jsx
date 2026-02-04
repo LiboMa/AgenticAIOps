@@ -1,10 +1,20 @@
-import { useState, useRef, useEffect } from 'react'
-import { Input, Button, Avatar, Spin, Card, Typography, Space, message as antMessage } from 'antd'
-import { SendOutlined, RobotOutlined, UserOutlined } from '@ant-design/icons'
+import { useState, useRef, useEffect, useCallback } from 'react'
+import { Input, Button, Avatar, Spin, Card, Typography, Space, message as antMessage, Upload, Tooltip } from 'antd'
+import { SendOutlined, RobotOutlined, UserOutlined, PaperClipOutlined, InboxOutlined, CloseOutlined, FileOutlined, FilePdfOutlined, FileImageOutlined, FileTextOutlined } from '@ant-design/icons'
 import ReactMarkdown from 'react-markdown'
 
 const { TextArea } = Input
 const { Text } = Typography
+const { Dragger } = Upload
+
+// Get file icon based on type
+const getFileIcon = (filename) => {
+  const ext = filename?.split('.').pop()?.toLowerCase()
+  if (['png', 'jpg', 'jpeg', 'gif', 'webp'].includes(ext)) return <FileImageOutlined style={{ color: '#52c41a' }} />
+  if (['pdf'].includes(ext)) return <FilePdfOutlined style={{ color: '#ff4d4f' }} />
+  if (['txt', 'md', 'log', 'yaml', 'yml', 'json'].includes(ext)) return <FileTextOutlined style={{ color: '#1890ff' }} />
+  return <FileOutlined style={{ color: '#666' }} />
+}
 
 function ChatPanelPD({ apiUrl }) {
   const [messages, setMessages] = useState([
@@ -16,14 +26,20 @@ I can help you with:
 - 🔍 Diagnose cluster issues
 - 📊 Check pod/node status
 - 🛠️ Analyze OOMKilled, CrashLoop errors
+- 📁 Analyze uploaded files (logs, configs, YAML)
 - 💡 Provide remediation suggestions
 
-Try asking: *"What pods are having issues in stress-test namespace?"*`
+Try asking: *"What pods are having issues in stress-test namespace?"*
+
+**Tip:** You can drag & drop files or click 📎 to upload logs for analysis!`
     }
   ])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
+  const [uploadedFiles, setUploadedFiles] = useState([])
+  const [isDragging, setIsDragging] = useState(false)
   const messagesEndRef = useRef(null)
+  const fileInputRef = useRef(null)
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -33,19 +49,89 @@ Try asking: *"What pods are having issues in stress-test namespace?"*`
     scrollToBottom()
   }, [messages])
 
+  // Handle file upload
+  const handleFileUpload = useCallback(async (file) => {
+    const maxSize = 5 * 1024 * 1024 // 5MB
+    if (file.size > maxSize) {
+      antMessage.error(`File ${file.name} is too large (max 5MB)`)
+      return false
+    }
+
+    // Read file content
+    const reader = new FileReader()
+    reader.onload = (e) => {
+      const content = e.target.result
+      setUploadedFiles(prev => [...prev, {
+        name: file.name,
+        size: file.size,
+        type: file.type,
+        content: content.substring(0, 50000), // Limit content size
+      }])
+      antMessage.success(`File "${file.name}" uploaded`)
+    }
+    reader.readAsText(file)
+    return false // Prevent default upload behavior
+  }, [])
+
+  // Handle drag events
+  const handleDragOver = useCallback((e) => {
+    e.preventDefault()
+    setIsDragging(true)
+  }, [])
+
+  const handleDragLeave = useCallback((e) => {
+    e.preventDefault()
+    setIsDragging(false)
+  }, [])
+
+  const handleDrop = useCallback((e) => {
+    e.preventDefault()
+    setIsDragging(false)
+    const files = Array.from(e.dataTransfer.files)
+    files.forEach(handleFileUpload)
+  }, [handleFileUpload])
+
+  // Remove uploaded file
+  const removeFile = (index) => {
+    setUploadedFiles(prev => prev.filter((_, i) => i !== index))
+  }
+
   const handleSend = async () => {
-    if (!input.trim() || loading) return
+    if ((!input.trim() && uploadedFiles.length === 0) || loading) return
 
     const userMessage = input.trim()
+    const files = [...uploadedFiles]
+    
     setInput('')
-    setMessages(prev => [...prev, { role: 'user', content: userMessage }])
+    setUploadedFiles([])
+    
+    // Build message with file info
+    let displayMessage = userMessage
+    if (files.length > 0) {
+      displayMessage += files.length > 0 && userMessage ? '\n\n' : ''
+      displayMessage += files.map(f => `📎 ${f.name}`).join('\n')
+    }
+    
+    setMessages(prev => [...prev, { role: 'user', content: displayMessage }])
     setLoading(true)
 
     try {
+      // Build request with file content
+      let fullMessage = userMessage
+      if (files.length > 0) {
+        fullMessage += '\n\n--- Attached Files ---\n'
+        files.forEach(f => {
+          fullMessage += `\n### File: ${f.name}\n\`\`\`\n${f.content.substring(0, 10000)}\n\`\`\`\n`
+        })
+        if (!userMessage) {
+          fullMessage = `Please analyze the following uploaded file(s):\n${fullMessage}`
+        }
+      }
+
       const response = await fetch(`${apiUrl}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: userMessage })
+        body: JSON.stringify({ message: fullMessage })
       })
       const data = await response.json()
       setMessages(prev => [...prev, { 
@@ -69,6 +155,13 @@ Try asking: *"What pods are having issues in stress-test namespace?"*`
     }
   }
 
+  const uploadProps = {
+    beforeUpload: handleFileUpload,
+    showUploadList: false,
+    multiple: true,
+    accept: '.txt,.log,.yaml,.yml,.json,.md,.csv,.xml,.conf,.cfg,.ini,.sh,.py,.js',
+  }
+
   return (
     <Card 
       title={
@@ -81,15 +174,47 @@ Try asking: *"What pods are having issues in stress-test namespace?"*`
       style={{ height: '100%', display: 'flex', flexDirection: 'column' }}
       bodyStyle={{ flex: 1, display: 'flex', flexDirection: 'column', padding: 12, overflow: 'hidden' }}
     >
-      {/* Messages */}
-      <div style={{ 
-        flex: 1, 
-        overflowY: 'auto', 
-        marginBottom: 12,
-        padding: 8,
-        background: '#fafafa',
-        borderRadius: 8,
-      }}>
+      {/* Messages with drag-drop zone */}
+      <div 
+        style={{ 
+          flex: 1, 
+          overflowY: 'auto', 
+          marginBottom: 12,
+          padding: 8,
+          background: isDragging ? '#e6f7ff' : '#fafafa',
+          borderRadius: 8,
+          border: isDragging ? '2px dashed #06AC38' : '2px solid transparent',
+          transition: 'all 0.2s',
+          position: 'relative',
+        }}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+      >
+        {/* Drag overlay */}
+        {isDragging && (
+          <div style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: 'rgba(6, 172, 56, 0.1)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 10,
+            borderRadius: 8,
+          }}>
+            <div style={{ textAlign: 'center' }}>
+              <InboxOutlined style={{ fontSize: 48, color: '#06AC38' }} />
+              <div style={{ marginTop: 8, color: '#06AC38', fontWeight: 500 }}>
+                Drop files here to upload
+              </div>
+            </div>
+          </div>
+        )}
+
         {messages.map((msg, index) => (
           <div
             key={index}
@@ -122,7 +247,7 @@ Try asking: *"What pods are having issues in stress-test namespace?"*`
                   <ReactMarkdown>{msg.content}</ReactMarkdown>
                 </div>
               ) : (
-                <Text style={{ fontSize: 13 }}>{msg.content}</Text>
+                <Text style={{ fontSize: 13, whiteSpace: 'pre-wrap' }}>{msg.content}</Text>
               )}
             </div>
           </div>
@@ -142,13 +267,59 @@ Try asking: *"What pods are having issues in stress-test namespace?"*`
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Input */}
-      <div style={{ display: 'flex', gap: 8 }}>
+      {/* Uploaded files preview */}
+      {uploadedFiles.length > 0 && (
+        <div style={{ 
+          marginBottom: 8, 
+          padding: 8, 
+          background: '#f0f5ff', 
+          borderRadius: 4,
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 8,
+        }}>
+          {uploadedFiles.map((file, index) => (
+            <div 
+              key={index}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 4,
+                background: '#fff',
+                padding: '4px 8px',
+                borderRadius: 4,
+                border: '1px solid #d9d9d9',
+                fontSize: 12,
+              }}
+            >
+              {getFileIcon(file.name)}
+              <span style={{ maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {file.name}
+              </span>
+              <CloseOutlined 
+                style={{ cursor: 'pointer', color: '#999', fontSize: 10 }} 
+                onClick={() => removeFile(index)}
+              />
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Input with file upload */}
+      <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+        <Upload {...uploadProps}>
+          <Tooltip title="Upload file for analysis">
+            <Button 
+              icon={<PaperClipOutlined />} 
+              style={{ borderColor: '#d9d9d9' }}
+            />
+          </Tooltip>
+        </Upload>
         <TextArea
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyPress={handleKeyPress}
-          placeholder="Ask about your cluster..."
+          placeholder="Ask about your cluster or drop files here..."
           disabled={loading}
           autoSize={{ minRows: 1, maxRows: 3 }}
           style={{ flex: 1 }}
@@ -157,7 +328,7 @@ Try asking: *"What pods are having issues in stress-test namespace?"*`
           type="primary"
           icon={<SendOutlined />}
           onClick={handleSend}
-          disabled={loading || !input.trim()}
+          disabled={loading || (!input.trim() && uploadedFiles.length === 0)}
           style={{ background: '#06AC38', borderColor: '#06AC38' }}
         />
       </div>

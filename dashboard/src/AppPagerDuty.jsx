@@ -55,6 +55,7 @@ function App() {
   const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
   const [openIssues, setOpenIssues] = useState(0)
   const [chatVisible, setChatVisible] = useState(false)
+  const [chatWidth, setChatWidth] = useState(420)
 
   useEffect(() => {
     // Fetch open issues count
@@ -214,21 +215,66 @@ function App() {
           AgenticAIOps Platform © 2026 | Powered by AI-driven Operations
         </Footer>
 
-        {/* Chat Drawer */}
+        {/* Resizable Chat Drawer */}
         <Drawer
           title={
-            <Space>
-              <RobotOutlined style={{ color: '#06AC38' }} />
-              <span>AI Assistant</span>
-            </Space>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+              <Space>
+                <RobotOutlined style={{ color: '#06AC38' }} />
+                <span>AI Assistant</span>
+              </Space>
+              <Space size="small">
+                <Button 
+                  size="small" 
+                  type="text"
+                  onClick={() => setChatWidth(chatWidth === 420 ? 600 : 420)}
+                  style={{ fontSize: 12, color: '#666' }}
+                >
+                  {chatWidth === 420 ? '↔️ Expand' : '↔️ Collapse'}
+                </Button>
+              </Space>
+            </div>
           }
           placement="right"
-          width={420}
+          width={chatWidth}
           onClose={() => setChatVisible(false)}
           open={chatVisible}
           closeIcon={<CloseOutlined />}
           bodyStyle={{ padding: 0, height: 'calc(100vh - 55px)' }}
+          style={{ transition: 'width 0.2s' }}
         >
+          {/* Resize handle */}
+          <div
+            style={{
+              position: 'absolute',
+              left: 0,
+              top: 0,
+              bottom: 0,
+              width: 6,
+              cursor: 'ew-resize',
+              background: 'transparent',
+              zIndex: 10,
+            }}
+            onMouseDown={(e) => {
+              e.preventDefault()
+              const startX = e.clientX
+              const startWidth = chatWidth
+              
+              const onMouseMove = (moveEvent) => {
+                const diff = startX - moveEvent.clientX
+                const newWidth = Math.min(800, Math.max(320, startWidth + diff))
+                setChatWidth(newWidth)
+              }
+              
+              const onMouseUp = () => {
+                document.removeEventListener('mousemove', onMouseMove)
+                document.removeEventListener('mouseup', onMouseUp)
+              }
+              
+              document.addEventListener('mousemove', onMouseMove)
+              document.addEventListener('mouseup', onMouseUp)
+            }}
+          />
           <div style={{ height: '100%', padding: 12 }}>
             <ChatPanelPD apiUrl={API_URL} />
           </div>

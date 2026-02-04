@@ -5,8 +5,13 @@
 
 ==== Core =================
 未来的实现是 - 将云视为操作系统,
+0. !! 启动Web或桌面应用，进入Overall 的Dashboard窗口
 1. !! 初始化Agent应用，全云扫描 
 2. !! 选择要纳管的服务[EKS,VPC,EC2...]，后期来选择要加入的Agent数量
-3. 统一抽象架构 每个服务都会有 get-events、get-metrics、abnormal predirection，RCS，以及Auto remidition
+3. 健康报告中心
+4. 统一抽象架构 每个服务都会有 get-events、get-metrics、abnormal predirection，RCS，
+5. Issue Overall Dashboard - List all existing issues, and RCA(Possibilities)
+6. 自动修复 - Auto remidition(Optional)
+7. 集成MCP、SKills的主动试维护Agent
 
-==========================
+====UI Features======================
