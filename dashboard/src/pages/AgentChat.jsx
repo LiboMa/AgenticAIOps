@@ -146,7 +146,16 @@ Scanned 5 AWS services:
   }
 
   return (
-    <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+    <Card 
+      style={{ 
+        height: '100%', 
+        display: 'flex', 
+        flexDirection: 'column',
+        borderRadius: 12,
+        boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+      }}
+      bodyStyle={{ padding: 0, flex: 1, display: 'flex', flexDirection: 'column' }}
+    >
       {/* Header */}
       <div style={{ 
         padding: '16px 24px', 
@@ -154,6 +163,8 @@ Scanned 5 AWS services:
         display: 'flex',
         justifyContent: 'space-between',
         alignItems: 'center',
+        background: '#fff',
+        borderRadius: '12px 12px 0 0',
       }}>
         <Space>
           <RobotOutlined style={{ fontSize: 24, color: '#06AC38' }} />
@@ -248,7 +259,7 @@ Scanned 5 AWS services:
           </Button>
         </div>
       </div>
-    </div>
+    </Card>
   )
 }
 

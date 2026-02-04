@@ -172,9 +172,10 @@ function App() {
         {/* Main Content */}
         <Layout>
           <Content style={{ 
-            background: currentPage === 'chat' ? '#fff' : '#f5f7fa',
+            background: '#f5f7fa',
             height: 'calc(100vh)',
             overflow: 'auto',
+            padding: currentPage === 'chat' ? 16 : 0,
           }}>
             {renderContent()}
           </Content>
