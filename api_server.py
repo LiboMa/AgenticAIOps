@@ -174,10 +174,38 @@ def get_agent():
                 region_name=AWS_REGION
             )
             
-            system_prompt = """You are an expert SRE AI assistant for Amazon EKS clusters.
-            
-You help diagnose issues, check cluster health, and provide recommendations.
-Be concise but thorough. Always check relevant data before making conclusions."""
+            system_prompt = """You are an expert Cloud Operations AI assistant for AWS infrastructure.
+
+## Your Capabilities
+
+### AWS Resource Discovery & Scanning
+- List EC2 instances, Lambda functions, S3 buckets, RDS databases
+- Scan all AWS resources in a region
+- Get account and region information
+
+### CloudWatch Monitoring
+- Query CloudWatch metrics (CPU, Memory, Network, etc.)
+- Check CloudWatch alarms
+- Search CloudWatch logs
+
+### Operations
+- Diagnose issues and provide recommendations
+- Root cause analysis using knowledge base patterns
+- Security posture assessment
+
+## Response Format
+When listing resources, use clear tables or lists.
+When reporting issues, include severity and recommendations.
+Always be concise but thorough.
+
+## Available Commands (via Chat)
+- "Scan my AWS resources" → Full cloud scan
+- "List EC2 instances" → EC2 inventory
+- "Show S3 buckets" → S3 bucket list
+- "Check CloudWatch metrics for [instance-id]" → Metrics query
+- "Analyze security status" → Security assessment
+
+Use the available tools to gather data before making conclusions."""
             
             _agent = Agent(
                 model=model,
@@ -200,6 +228,17 @@ Be concise but thorough. Always check relevant data before making conclusions.""
 async def chat(request: ChatRequest):
     """Chat with the AIOps agent."""
     try:
+        message_lower = request.message.lower()
+        
+        # Check for AWS operation intents
+        aws_response = await handle_aws_chat_intent(request.message)
+        if aws_response:
+            return ChatResponse(
+                response=aws_response,
+                intent="aws_operation",
+                confidence=0.9,
+            )
+        
         # Classify intent
         analysis = analyze_query(request.message)
         
@@ -230,6 +269,158 @@ Recommended tools: {', '.join(analysis['recommended_tools'][:3])}
     except Exception as e:
         import traceback
         return ChatResponse(response=f"Error: {str(e)}\n{traceback.format_exc()}")
+
+
+async def handle_aws_chat_intent(message: str) -> Optional[str]:
+    """Handle AWS-related chat intents directly."""
+    message_lower = message.lower()
+    
+    scanner = get_scanner(_current_region)
+    
+    # Scan all resources
+    if any(kw in message_lower for kw in ['scan', '扫描', 'all resources', '所有资源']):
+        try:
+            results = scanner.scan_all_resources()
+            
+            response = f"""📊 **AWS 资源扫描报告**
+Account: {results['account'].get('account_id', 'N/A')}
+Region: {results['region']}
+
+| 服务 | 数量 | 状态 |
+|------|------|------|"""
+            
+            for service, data in results.get('services', {}).items():
+                if 'error' not in data:
+                    count = data.get('count', 0)
+                    status = ""
+                    if 'status' in data:
+                        status = f"{data['status'].get('running', 0)} running"
+                    elif 'public_count' in data and data['public_count'] > 0:
+                        status = f"⚠️ {data['public_count']} public"
+                    else:
+                        status = "OK"
+                    response += f"\n| {service.upper()} | {count} | {status} |"
+            
+            issues = results.get('summary', {}).get('issues_found', [])
+            if issues:
+                response += f"\n\n⚠️ **发现 {len(issues)} 个潜在问题**"
+                for issue in issues[:3]:
+                    response += f"\n- [{issue['severity'].upper()}] {issue['service']}: {issue['type']}"
+            
+            return response
+        except Exception as e:
+            return f"❌ 扫描失败: {str(e)}"
+    
+    # List EC2 instances
+    if any(kw in message_lower for kw in ['ec2', 'instance', '实例']):
+        try:
+            data = scanner._scan_ec2()
+            response = f"""🖥️ **EC2 Instances** (Region: {_current_region})
+
+Total: {data['count']} | Running: {data['status']['running']} | Stopped: {data['status']['stopped']}
+
+| Name | ID | Type | State | IP |
+|------|----|----- |-------|-----|"""
+            
+            for inst in data.get('instances', [])[:10]:
+                response += f"\n| {inst['name'][:20]} | {inst['id']} | {inst['type']} | {inst['state']} | {inst.get('private_ip', 'N/A')} |"
+            
+            if data['count'] > 10:
+                response += f"\n\n... 还有 {data['count'] - 10} 个实例"
+            
+            return response
+        except Exception as e:
+            return f"❌ 获取 EC2 失败: {str(e)}"
+    
+    # List Lambda functions
+    if any(kw in message_lower for kw in ['lambda', '函数', 'function']):
+        try:
+            data = scanner._scan_lambda()
+            response = f"""⚡ **Lambda Functions** (Region: {_current_region})
+
+Total: {data['count']}
+
+| Function | Runtime | Memory | Timeout |
+|----------|---------|--------|---------|"""
+            
+            for func in data.get('functions', [])[:10]:
+                response += f"\n| {func['name'][:30]} | {func['runtime']} | {func['memory']}MB | {func['timeout']}s |"
+            
+            return response
+        except Exception as e:
+            return f"❌ 获取 Lambda 失败: {str(e)}"
+    
+    # List S3 buckets
+    if any(kw in message_lower for kw in ['s3', 'bucket', '桶', '存储']):
+        try:
+            data = scanner._scan_s3()
+            response = f"""📁 **S3 Buckets**
+
+Total: {data['count']} | Public: {data.get('public_count', 0)} ⚠️
+
+| Bucket Name | Public |
+|-------------|--------|"""
+            
+            for bucket in data.get('buckets', [])[:15]:
+                public_tag = "⚠️ Yes" if bucket.get('public') else "No"
+                response += f"\n| {bucket['name'][:40]} | {public_tag} |"
+            
+            if data['count'] > 15:
+                response += f"\n\n... 还有 {data['count'] - 15} 个桶"
+            
+            return response
+        except Exception as e:
+            return f"❌ 获取 S3 失败: {str(e)}"
+    
+    # List RDS instances
+    if any(kw in message_lower for kw in ['rds', 'database', '数据库']):
+        try:
+            data = scanner._scan_rds()
+            response = f"""🗄️ **RDS Databases** (Region: {_current_region})
+
+Total: {data['count']}
+
+| ID | Engine | Class | Status | Public |
+|----|--------|-------|--------|--------|"""
+            
+            for db in data.get('instances', []):
+                public_tag = "⚠️ Yes" if db.get('public') else "No"
+                response += f"\n| {db['id']} | {db['engine']} | {db['class']} | {db['status']} | {public_tag} |"
+            
+            return response
+        except Exception as e:
+            return f"❌ 获取 RDS 失败: {str(e)}"
+    
+    # Account info
+    if any(kw in message_lower for kw in ['account', '账号', '账户', 'who am i']):
+        try:
+            data = scanner.get_account_info()
+            return f"""🔐 **AWS Account Info**
+
+- Account ID: `{data.get('account_id', 'N/A')}`
+- ARN: `{data.get('arn', 'N/A')}`
+- Current Region: `{_current_region}`"""
+        except Exception as e:
+            return f"❌ 获取账号信息失败: {str(e)}"
+    
+    # Help
+    if any(kw in message_lower for kw in ['help', '帮助', 'commands', '命令']):
+        return """📚 **可用命令**
+
+- **扫描资源**: "Scan my AWS resources" 或 "扫描 AWS"
+- **EC2 实例**: "List EC2 instances" 或 "显示 EC2"
+- **Lambda 函数**: "Show Lambda functions" 或 "显示 Lambda"
+- **S3 桶**: "List S3 buckets" 或 "显示 S3"
+- **RDS 数据库**: "Show RDS databases" 或 "显示 RDS"
+- **账号信息**: "Show account info" 或 "显示账号"
+
+也可以直接提问，例如：
+- "检查是否有公开的 S3 桶"
+- "分析 EC2 实例状态"
+- "有什么安全问题？"
+"""
+    
+    return None
 
 
 def detect_ui_action(message: str) -> Optional[dict]:

@@ -14,12 +14,14 @@ import {
   AlertOutlined,
   SafetyCertificateOutlined,
   BellOutlined,
+  ScanOutlined,
 } from '@ant-design/icons'
 
 // Lazy load pages
 const AgentChat = lazy(() => import('./pages/AgentChat'))
 const ObservabilityList = lazy(() => import('./pages/ObservabilityList'))
 const SecurityDashboard = lazy(() => import('./pages/SecurityDashboard'))
+const ScanConfig = lazy(() => import('./pages/ScanConfig'))
 
 const { Header, Content, Sider } = Layout
 
@@ -86,6 +88,11 @@ function App() {
       label: 'AI Assistant',
     },
     { 
+      key: 'scan', 
+      icon: <ScanOutlined />, 
+      label: 'Scan & Monitor',
+    },
+    { 
       key: 'observability', 
       icon: <AlertOutlined />, 
       label: (
@@ -106,6 +113,7 @@ function App() {
     return (
       <Suspense fallback={<PageLoading />}>
         {currentPage === 'chat' && <AgentChat apiUrl={API_URL} onNewAlert={handleNewAlert} />}
+        {currentPage === 'scan' && <ScanConfig apiUrl={API_URL} />}
         {currentPage === 'observability' && <ObservabilityList apiUrl={API_URL} />}
         {currentPage === 'security' && <SecurityDashboard apiUrl={API_URL} />}
       </Suspense>
