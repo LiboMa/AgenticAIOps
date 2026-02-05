@@ -1,109 +1,127 @@
-import { useState, useEffect } from 'react'
-import { Card, Select, Button, Checkbox, Row, Col, Spin, Alert, Typography, Space, Tag, Table, Progress, Badge, message, Tabs } from 'antd'
+import { useState, useEffect, useMemo } from 'react'
+import { Card, Select, Button, Checkbox, Row, Col, Spin, Alert, Typography, Space, Tag, Table, Progress, Badge, message } from 'antd'
 import { 
   CloudServerOutlined, 
   GlobalOutlined, 
   ScanOutlined,
-  CheckCircleOutlined,
-  ReloadOutlined,
   DatabaseOutlined,
-  CodeOutlined,
   LockOutlined,
   FolderOutlined,
-  ClusterOutlined,
-  CloudOutlined,
-  ApiOutlined,
-  HddOutlined,
   WifiOutlined,
+  CloudOutlined,
 } from '@ant-design/icons'
 
 const { Title, Text, Paragraph } = Typography
 const { Option } = Select
 
-// All AWS Services organized by category (from AWS API)
-const ALL_SERVICES = [
-  // Compute
-  { key: 'ec2', name: 'Amazon EC2', category: 'Compute', description: 'Elastic Compute Cloud - Virtual servers' },
-  { key: 'lambda', name: 'AWS Lambda', category: 'Compute', description: 'Serverless compute' },
-  { key: 'eks', name: 'Amazon EKS', category: 'Compute', description: 'Elastic Kubernetes Service' },
-  { key: 'ecs', name: 'Amazon ECS', category: 'Compute', description: 'Elastic Container Service' },
-  { key: 'lightsail', name: 'Amazon Lightsail', category: 'Compute', description: 'Simple virtual servers' },
-  { key: 'batch', name: 'AWS Batch', category: 'Compute', description: 'Batch computing' },
-  { key: 'elasticbeanstalk', name: 'Elastic Beanstalk', category: 'Compute', description: 'Web app deployment' },
-  
-  // Storage
-  { key: 's3', name: 'Amazon S3', category: 'Storage', description: 'Simple Storage Service' },
-  { key: 'ebs', name: 'Amazon EBS', category: 'Storage', description: 'Elastic Block Store' },
-  { key: 'efs', name: 'Amazon EFS', category: 'Storage', description: 'Elastic File System' },
-  { key: 'glacier', name: 'S3 Glacier', category: 'Storage', description: 'Archive storage' },
-  { key: 'fsx', name: 'Amazon FSx', category: 'Storage', description: 'Managed file systems' },
-  
-  // Database
-  { key: 'rds', name: 'Amazon RDS', category: 'Database', description: 'Relational Database Service' },
-  { key: 'dynamodb', name: 'Amazon DynamoDB', category: 'Database', description: 'NoSQL database' },
-  { key: 'elasticache', name: 'Amazon ElastiCache', category: 'Database', description: 'In-memory caching' },
-  { key: 'redshift', name: 'Amazon Redshift', category: 'Database', description: 'Data warehouse' },
-  { key: 'aurora', name: 'Amazon Aurora', category: 'Database', description: 'MySQL/PostgreSQL compatible' },
-  { key: 'documentdb', name: 'Amazon DocumentDB', category: 'Database', description: 'MongoDB compatible' },
-  
-  // Networking
-  { key: 'vpc', name: 'Amazon VPC', category: 'Networking', description: 'Virtual Private Cloud' },
-  { key: 'elb', name: 'Elastic Load Balancing', category: 'Networking', description: 'Load balancers' },
-  { key: 'cloudfront', name: 'Amazon CloudFront', category: 'Networking', description: 'CDN' },
-  { key: 'route53', name: 'Amazon Route 53', category: 'Networking', description: 'DNS service' },
-  { key: 'apigateway', name: 'Amazon API Gateway', category: 'Networking', description: 'API management' },
-  { key: 'directconnect', name: 'AWS Direct Connect', category: 'Networking', description: 'Dedicated network' },
-  
-  // Monitoring
-  { key: 'cloudwatch', name: 'Amazon CloudWatch', category: 'Monitoring', description: 'Monitoring and observability' },
-  { key: 'cloudtrail', name: 'AWS CloudTrail', category: 'Monitoring', description: 'API activity logging' },
-  { key: 'xray', name: 'AWS X-Ray', category: 'Monitoring', description: 'Distributed tracing' },
-  
-  // Security
-  { key: 'iam', name: 'AWS IAM', category: 'Security', description: 'Identity and Access Management' },
-  { key: 'kms', name: 'AWS KMS', category: 'Security', description: 'Key Management Service' },
-  { key: 'secretsmanager', name: 'AWS Secrets Manager', category: 'Security', description: 'Secret management' },
-  { key: 'waf', name: 'AWS WAF', category: 'Security', description: 'Web Application Firewall' },
-  { key: 'guardduty', name: 'Amazon GuardDuty', category: 'Security', description: 'Threat detection' },
-]
-
-// Services that are currently supported (can be selected)
+// Services that are currently supported (can be selected and scanned)
 const SUPPORTED_SERVICES = ['ec2', 'lambda', 'eks', 's3', 'rds', 'iam', 'cloudwatch']
 
-// Initial selected services
-const INITIAL_SERVICES = ['ec2', 'lambda', 'eks', 's3', 'rds']
-
-// Category colors
-const CATEGORY_COLORS = {
-  'Compute': '#1890ff',
-  'Storage': '#52c41a',
-  'Database': '#722ed1',
-  'Networking': '#fa8c16',
-  'Monitoring': '#eb2f96',
-  'Security': '#f5222d',
+// Service to category mapping
+const SERVICE_CATEGORY_MAP = {
+  'Amazon EC2': 'Compute',
+  'Amazon Elastic Compute Cloud (Amazon EC2)': 'Compute',
+  'AWS Lambda': 'Compute',
+  'Amazon Elastic Kubernetes Service (EKS)': 'Compute',
+  'Amazon EKS': 'Compute',
+  'Amazon Elastic Container Service': 'Compute',
+  'Amazon ECS': 'Compute',
+  'AWS Batch': 'Compute',
+  'Amazon Lightsail': 'Compute',
+  'AWS Elastic Beanstalk': 'Compute',
+  
+  'Amazon Simple Storage Service (S3)': 'Storage',
+  'Amazon S3': 'Storage',
+  'Amazon Elastic Block Store (EBS)': 'Storage',
+  'Amazon EBS': 'Storage',
+  'Amazon Elastic File System (EFS)': 'Storage',
+  'Amazon EFS': 'Storage',
+  'Amazon S3 Glacier': 'Storage',
+  'AWS Storage Gateway': 'Storage',
+  
+  'Amazon RDS': 'Database',
+  'Amazon Relational Database Service (RDS)': 'Database',
+  'Amazon DynamoDB': 'Database',
+  'Amazon ElastiCache': 'Database',
+  'Amazon Redshift': 'Database',
+  'Amazon Aurora': 'Database',
+  'Amazon DocumentDB': 'Database',
+  'Amazon Neptune': 'Database',
+  
+  'Amazon Virtual Private Cloud (VPC)': 'Networking',
+  'Amazon VPC': 'Networking',
+  'Elastic Load Balancing': 'Networking',
+  'Amazon CloudFront': 'Networking',
+  'Amazon Route 53': 'Networking',
+  'Amazon API Gateway': 'Networking',
+  'AWS Direct Connect': 'Networking',
+  'AWS Transit Gateway': 'Networking',
+  
+  'Amazon CloudWatch': 'Monitoring',
+  'AWS CloudTrail': 'Monitoring',
+  'AWS X-Ray': 'Monitoring',
+  'AWS Config': 'Monitoring',
+  
+  'AWS Identity and Access Management (IAM)': 'Security',
+  'AWS IAM': 'Security',
+  'AWS Key Management Service (KMS)': 'Security',
+  'AWS KMS': 'Security',
+  'AWS Secrets Manager': 'Security',
+  'AWS WAF': 'Security',
+  'Amazon GuardDuty': 'Security',
+  'AWS Shield': 'Security',
 }
 
-// Category icons
-const CATEGORY_ICONS = {
-  'Compute': <CloudServerOutlined />,
-  'Storage': <FolderOutlined />,
-  'Database': <DatabaseOutlined />,
-  'Networking': <WifiOutlined />,
-  'Monitoring': <ScanOutlined />,
-  'Security': <LockOutlined />,
+// Service name to key mapping
+const SERVICE_KEY_MAP = {
+  'Amazon EC2': 'ec2',
+  'Amazon Elastic Compute Cloud (Amazon EC2)': 'ec2',
+  'AWS Lambda': 'lambda',
+  'Amazon Elastic Kubernetes Service (EKS)': 'eks',
+  'Amazon EKS': 'eks',
+  'Amazon Simple Storage Service (S3)': 's3',
+  'Amazon S3': 's3',
+  'Amazon RDS': 'rds',
+  'Amazon Relational Database Service (RDS)': 'rds',
+  'Amazon CloudWatch': 'cloudwatch',
+  'AWS Identity and Access Management (IAM)': 'iam',
+  'AWS IAM': 'iam',
+  'Amazon DynamoDB': 'dynamodb',
+  'Amazon ElastiCache': 'elasticache',
+  'Amazon VPC': 'vpc',
+  'Amazon Virtual Private Cloud (VPC)': 'vpc',
+  'Elastic Load Balancing': 'elb',
+  'Amazon CloudFront': 'cloudfront',
+  'Amazon Route 53': 'route53',
+  'Amazon ECS': 'ecs',
+  'Amazon Elastic Container Service': 'ecs',
+}
+
+// Category colors and icons
+const CATEGORY_CONFIG = {
+  'Compute': { color: '#1890ff', icon: <CloudServerOutlined /> },
+  'Storage': { color: '#52c41a', icon: <FolderOutlined /> },
+  'Database': { color: '#722ed1', icon: <DatabaseOutlined /> },
+  'Networking': { color: '#fa8c16', icon: <WifiOutlined /> },
+  'Monitoring': { color: '#eb2f96', icon: <ScanOutlined /> },
+  'Security': { color: '#f5222d', icon: <LockOutlined /> },
+  'Other': { color: '#666', icon: <CloudOutlined /> },
 }
 
 function ScanConfig({ apiUrl, onScanComplete }) {
   const [account, setAccount] = useState(null)
+  const [awsServices, setAwsServices] = useState([])
+  const [loadingServices, setLoadingServices] = useState(true)
   const [selectedRegion, setSelectedRegion] = useState('ap-southeast-1')
-  const [selectedServices, setSelectedServices] = useState(INITIAL_SERVICES)
+  const [selectedServices, setSelectedServices] = useState(['ec2', 's3', 'rds', 'lambda', 'eks'])
   const [scanning, setScanning] = useState(false)
   const [scanResults, setScanResults] = useState(null)
   const [error, setError] = useState(null)
 
-  // Fetch account info on mount
+  // Fetch account info and AWS services on mount
   useEffect(() => {
     fetchAccountInfo()
+    fetchAwsServices()
   }, [apiUrl])
 
   const fetchAccountInfo = async () => {
@@ -114,6 +132,64 @@ function ScanConfig({ apiUrl, onScanComplete }) {
     } catch (err) {
       console.error('Failed to fetch account:', err)
       setError('无法获取 AWS 账号信息，请检查 IAM 权限')
+    }
+  }
+
+  const fetchAwsServices = async () => {
+    setLoadingServices(true)
+    try {
+      // Fetch from AWS Regional Services API
+      const response = await fetch('https://api.regional-table.region-services.aws.a2z.com/index.json')
+      const data = await response.json()
+      
+      // Parse and deduplicate services
+      const servicesMap = new Map()
+      
+      for (const item of data.prices || []) {
+        const serviceName = item.attributes?.['aws:serviceName']
+        const serviceUrl = item.attributes?.['aws:serviceUrl']
+        
+        if (serviceName && !servicesMap.has(serviceName)) {
+          const category = SERVICE_CATEGORY_MAP[serviceName] || 'Other'
+          const key = SERVICE_KEY_MAP[serviceName] || serviceName.toLowerCase().replace(/[^a-z0-9]/g, '')
+          
+          servicesMap.set(serviceName, {
+            key,
+            name: serviceName,
+            category,
+            url: serviceUrl,
+            supported: SUPPORTED_SERVICES.includes(key),
+          })
+        }
+      }
+      
+      // Convert to array and sort by category then name
+      const services = Array.from(servicesMap.values())
+        .filter(s => ['Compute', 'Storage', 'Database', 'Networking', 'Monitoring', 'Security'].includes(s.category))
+        .sort((a, b) => {
+          const categoryOrder = ['Compute', 'Storage', 'Database', 'Networking', 'Monitoring', 'Security']
+          const catDiff = categoryOrder.indexOf(a.category) - categoryOrder.indexOf(b.category)
+          if (catDiff !== 0) return catDiff
+          return a.name.localeCompare(b.name)
+        })
+      
+      setAwsServices(services)
+      console.log(`Loaded ${services.length} AWS services from API`)
+    } catch (err) {
+      console.error('Failed to fetch AWS services:', err)
+      message.warning('无法加载 AWS 服务列表，使用默认列表')
+      // Fallback to minimal list
+      setAwsServices([
+        { key: 'ec2', name: 'Amazon EC2', category: 'Compute', supported: true },
+        { key: 'lambda', name: 'AWS Lambda', category: 'Compute', supported: true },
+        { key: 'eks', name: 'Amazon EKS', category: 'Compute', supported: true },
+        { key: 's3', name: 'Amazon S3', category: 'Storage', supported: true },
+        { key: 'rds', name: 'Amazon RDS', category: 'Database', supported: true },
+        { key: 'cloudwatch', name: 'Amazon CloudWatch', category: 'Monitoring', supported: true },
+        { key: 'iam', name: 'AWS IAM', category: 'Security', supported: true },
+      ])
+    } finally {
+      setLoadingServices(false)
     }
   }
 
@@ -138,7 +214,7 @@ function ScanConfig({ apiUrl, onScanComplete }) {
     }
   }
 
-  const handleSelectAll = () => {
+  const handleSelectAllSupported = () => {
     setSelectedServices(SUPPORTED_SERVICES)
   }
 
@@ -158,15 +234,15 @@ function ScanConfig({ apiUrl, onScanComplete }) {
 
     try {
       const results = {}
-      for (const service of selectedServices) {
-        if (SUPPORTED_SERVICES.includes(service)) {
-          try {
-            const response = await fetch(`${apiUrl}/api/scanner/service/${service}`)
-            const data = await response.json()
-            results[service] = data.data || data
-          } catch (err) {
-            results[service] = { error: err.message }
-          }
+      const servicesToScan = selectedServices.filter(s => SUPPORTED_SERVICES.includes(s))
+      
+      for (const service of servicesToScan) {
+        try {
+          const response = await fetch(`${apiUrl}/api/scanner/service/${service}`)
+          const data = await response.json()
+          results[service] = data.data || data
+        } catch (err) {
+          results[service] = { error: err.message }
         }
       }
 
@@ -183,6 +259,13 @@ function ScanConfig({ apiUrl, onScanComplete }) {
     }
   }
 
+  // Statistics
+  const stats = useMemo(() => {
+    const supported = awsServices.filter(s => s.supported).length
+    const total = awsServices.length
+    return { supported, total, coming: total - supported }
+  }, [awsServices])
+
   // Table columns for service selection
   const serviceColumns = [
     {
@@ -193,7 +276,7 @@ function ScanConfig({ apiUrl, onScanComplete }) {
       render: (_, record) => (
         <Checkbox
           checked={selectedServices.includes(record.key)}
-          disabled={!SUPPORTED_SERVICES.includes(record.key)}
+          disabled={!record.supported}
           onChange={(e) => handleServiceToggle(record.key, e.target.checked)}
         />
       ),
@@ -202,46 +285,49 @@ function ScanConfig({ apiUrl, onScanComplete }) {
       title: '分类',
       dataIndex: 'category',
       key: 'category',
-      width: 120,
-      render: (category) => (
-        <Space>
-          <span style={{ color: CATEGORY_COLORS[category] }}>{CATEGORY_ICONS[category]}</span>
-          <Text style={{ color: CATEGORY_COLORS[category] }}>{category}</Text>
-        </Space>
-      ),
-      filters: [...new Set(ALL_SERVICES.map(s => s.category))].map(c => ({ text: c, value: c })),
+      width: 130,
+      render: (category) => {
+        const config = CATEGORY_CONFIG[category] || CATEGORY_CONFIG['Other']
+        return (
+          <Space>
+            <span style={{ color: config.color }}>{config.icon}</span>
+            <Text style={{ color: config.color }}>{category}</Text>
+          </Space>
+        )
+      },
+      filters: ['Compute', 'Storage', 'Database', 'Networking', 'Monitoring', 'Security'].map(c => ({ text: c, value: c })),
       onFilter: (value, record) => record.category === value,
     },
     {
-      title: '服务',
+      title: '服务名称',
       dataIndex: 'name',
       key: 'name',
       render: (name, record) => (
-        <span style={{ color: SUPPORTED_SERVICES.includes(record.key) ? 'inherit' : '#999' }}>
+        <a 
+          href={record.url} 
+          target="_blank" 
+          rel="noopener noreferrer"
+          style={{ color: record.supported ? '#1890ff' : '#999' }}
+        >
           {name}
-        </span>
-      ),
-    },
-    {
-      title: '描述',
-      dataIndex: 'description',
-      key: 'description',
-      render: (desc, record) => (
-        <Text type="secondary" style={{ color: SUPPORTED_SERVICES.includes(record.key) ? undefined : '#ccc' }}>
-          {desc}
-        </Text>
+        </a>
       ),
     },
     {
       title: '状态',
       dataIndex: 'status',
       key: 'status',
-      width: 120,
+      width: 130,
       render: (_, record) => (
-        SUPPORTED_SERVICES.includes(record.key) 
+        record.supported 
           ? <Tag color="green">✅ 已支持</Tag>
           : <Tag color="default">⏳ Coming Soon</Tag>
       ),
+      filters: [
+        { text: '已支持', value: true },
+        { text: 'Coming Soon', value: false },
+      ],
+      onFilter: (value, record) => record.supported === value,
     },
   ]
 
@@ -288,10 +374,15 @@ function ScanConfig({ apiUrl, onScanComplete }) {
       render: (_, record) => {
         if (record.error) return <Text type="danger">{record.error}</Text>
         if (record.data?.status) {
-          return `Running: ${record.data.status.running || 0}, Stopped: ${record.data.status.stopped || 0}`
+          return (
+            <Space>
+              <Tag color="green">Running: {record.data.status.running || 0}</Tag>
+              <Tag color="default">Stopped: {record.data.status.stopped || 0}</Tag>
+            </Space>
+          )
         }
         if (record.data?.public_count > 0) {
-          return <Tag color="orange">⚠️ {record.data.public_count} 公开</Tag>
+          return <Tag color="orange">⚠️ {record.data.public_count} 公开访问</Tag>
         }
         return '-'
       },
@@ -306,7 +397,7 @@ function ScanConfig({ apiUrl, onScanComplete }) {
     error: data.error,
   })) : []
 
-  // Popular regions for quick selection
+  // Popular regions
   const popularRegions = [
     { value: 'ap-southeast-1', label: 'Asia Pacific (Singapore)' },
     { value: 'us-east-1', label: 'US East (N. Virginia)' },
@@ -327,10 +418,10 @@ function ScanConfig({ apiUrl, onScanComplete }) {
           <Title level={3} style={{ margin: 0 }}>AWS 资源扫描与监控</Title>
         </Space>
         <Paragraph type="secondary" style={{ marginTop: 8 }}>
-          选择账号、区域和服务，扫描 AWS 资源并添加到监控
-          <Text type="secondary" style={{ marginLeft: 8 }}>
-            (数据源: AWS Regional Services API)
-          </Text>
+          数据来源: <a href="https://api.regional-table.region-services.aws.a2z.com/index.json" target="_blank" rel="noopener noreferrer">
+            AWS Regional Services API
+          </a>
+          {!loadingServices && ` (${stats.total} 服务, ${stats.supported} 已支持)`}
         </Paragraph>
       </div>
 
@@ -391,9 +482,9 @@ function ScanConfig({ apiUrl, onScanComplete }) {
               <div>
                 <Text type="secondary">已选择: </Text>
                 <Badge count={selectedServices.length} style={{ backgroundColor: '#06AC38' }} />
-                <Text type="secondary"> / {SUPPORTED_SERVICES.length} 个服务</Text>
+                <Text type="secondary"> / {stats.supported} 可用</Text>
               </div>
-              <Button block size="small" onClick={handleSelectAll}>全选已支持</Button>
+              <Button block size="small" onClick={handleSelectAllSupported}>全选已支持</Button>
               <Button block size="small" onClick={handleSelectNone}>清空选择</Button>
               <Button 
                 type="primary" 
@@ -418,23 +509,33 @@ function ScanConfig({ apiUrl, onScanComplete }) {
               <Space>
                 <CloudOutlined />
                 <span>AWS 服务列表</span>
-                <Tag color="green">{SUPPORTED_SERVICES.length} 个已支持</Tag>
-                <Tag color="default">{ALL_SERVICES.length - SUPPORTED_SERVICES.length} 个 Coming Soon</Tag>
+                {loadingServices ? (
+                  <Spin size="small" />
+                ) : (
+                  <>
+                    <Tag color="green">{stats.supported} 已支持</Tag>
+                    <Tag color="default">{stats.coming} Coming Soon</Tag>
+                  </>
+                )}
               </Space>
             }
             size="small"
           >
-            <Table
-              columns={serviceColumns}
-              dataSource={ALL_SERVICES}
-              rowKey="key"
-              size="small"
-              pagination={false}
-              scroll={{ y: 400 }}
-              rowClassName={(record) => 
-                SUPPORTED_SERVICES.includes(record.key) ? '' : 'disabled-row'
-              }
-            />
+            {loadingServices ? (
+              <div style={{ textAlign: 'center', padding: 40 }}>
+                <Spin size="large" tip="正在从 AWS API 加载服务列表..." />
+              </div>
+            ) : (
+              <Table
+                columns={serviceColumns}
+                dataSource={awsServices}
+                rowKey="key"
+                size="small"
+                pagination={{ pageSize: 20, showSizeChanger: true, showTotal: (total) => `共 ${total} 个服务` }}
+                scroll={{ y: 400 }}
+                rowClassName={(record) => record.supported ? '' : 'disabled-row'}
+              />
+            )}
           </Card>
         </Col>
       </Row>
@@ -449,7 +550,7 @@ function ScanConfig({ apiUrl, onScanComplete }) {
 
       {/* Scan Results Table */}
       {scanResults && (
-        <Card title="📊 扫描结果" style={{ marginTop: 16 }}>
+        <Card title={`📊 扫描结果 (${selectedRegion})`} style={{ marginTop: 16 }}>
           <Table
             columns={resultColumns}
             dataSource={resultData}
