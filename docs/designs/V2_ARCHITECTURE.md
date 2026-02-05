@@ -304,19 +304,106 @@ Agent → Proactive Report → Chat UI
 
 ---
 
-## 9. Implementation Status
+## 9. Full Ops Support Per Service
+
+Every monitored service needs complete operational capabilities:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│          Per-Service Ops Matrix                              │
+├─────────────────────────────────────────────────────────────┤
+│                                                              │
+│  Capability      | EC2 | RDS | Lambda | S3  | EKS | IAM    │
+│  ─────────────────────────────────────────────────────────  │
+│  Scan/Discovery  | ✅  | ✅  | ✅     | ✅  | ✅  | ✅     │
+│  Health Check    | ⏳  | ⏳  | ⏳     | ⏳  | ✅  | ⏳     │
+│  Metrics         | ⏳  | ⏳  | ⏳     | ⏳  | ✅  | N/A    │
+│  Logs            | ⏳  | ⏳  | ⏳     | N/A | ✅  | N/A    │
+│  Anomaly Detect  | ⏳  | ⏳  | ⏳     | ⏳  | ✅  | ⏳     │
+│  Operations      | ⏳  | ⏳  | ⏳     | N/A | ⏳  | N/A    │
+│                                                              │
+└─────────────────────────────────────────────────────────────┘
+
+Legend: ✅ Done | ⏳ In Progress | N/A Not Applicable
+```
+
+### Per-Service Details
+
+**EC2**:
+- Health Check: Instance status, system checks, reachability
+- Metrics: CPUUtilization, NetworkIn/Out, DiskReadOps, StatusCheckFailed
+- Logs: /var/log/messages, CloudWatch Agent logs
+- Operations: Start, Stop, Reboot
+
+**RDS**:
+- Health Check: Connection status, replica lag, storage space
+- Metrics: CPUUtilization, FreeStorageSpace, DatabaseConnections, ReadIOPS
+- Logs: Error logs, Slow query logs, General logs
+- Operations: Reboot, Failover
+
+**Lambda**:
+- Health Check: Error rate, throttle rate, concurrent executions
+- Metrics: Invocations, Errors, Duration, Throttles, ConcurrentExecutions
+- Logs: /aws/lambda/{function-name}
+- Operations: Invoke, Update configuration
+
+**S3**:
+- Health Check: ACL check, public access, encryption status
+- Metrics: NumberOfObjects, BucketSizeBytes, 4xxErrors, 5xxErrors
+- Operations: N/A (read-only for safety)
+
+---
+
+## 10. Chatbot Commands (Expanded)
+
+```
+# EC2 Commands
+"list ec2"                    → List all EC2 instances
+"check ec2 health"            → Health check all EC2
+"show ec2 metrics {id}"       → CloudWatch metrics
+"show ec2 logs {id}"          → Instance logs
+"start ec2 {id}"              → Start instance
+"stop ec2 {id}"               → Stop instance
+"detect ec2 anomalies"        → Anomaly detection
+
+# RDS Commands
+"list rds"                    → List all RDS instances
+"check rds health"            → Health check all RDS
+"show rds metrics {id}"       → CloudWatch metrics
+"show rds logs {id}"          → Error/slow query logs
+"reboot rds {id}"             → Reboot database
+
+# Lambda Commands
+"list lambda"                 → List all Lambda functions
+"check lambda health"         → Health check all functions
+"show lambda metrics {name}"  → CloudWatch metrics
+"show lambda logs {name}"     → Function logs
+"invoke lambda {name}"        → Invoke function
+
+# General Commands
+"detect anomalies"            → All services anomaly detection
+"generate health report"      → Full system health report
+"scan all"                    → Full cloud scan
+```
+
+---
+
+## 11. Implementation Status
 
 | Component | Status |
 |-----------|--------|
 | Frontend (3 pages) | ✅ Done |
+| Frontend Scan Config | ✅ Done |
 | Proactive Agent | ✅ Done |
 | S3 Knowledge Base | ✅ Done |
-| Account Management | ⏳ In Progress |
-| Full Scan API | ⏳ In Progress |
-| CloudWatch Integration | ⏳ In Progress |
+| Scan/Discovery (all services) | ✅ Done |
+| **EC2 Full Ops** | ⏳ In Progress |
+| **RDS Full Ops** | ⏳ In Progress |
+| **Lambda Full Ops** | ⏳ In Progress |
+| **S3 Full Ops** | ⏳ In Progress |
 | Multi-region | ⏳ Planned |
 
 ---
 
-**Last Updated**: 2026-02-04  
-**Next Steps**: Implement Account Management + Full Scan API
+**Last Updated**: 2026-02-05  
+**Next Steps**: Implement Full Ops (Health/Metrics/Logs/Anomaly) for EC2, RDS, Lambda, S3

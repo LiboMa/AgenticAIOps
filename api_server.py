@@ -290,6 +290,323 @@ async def handle_aws_chat_intent(message: str) -> Optional[str]:
     
     scanner = get_scanner(_current_region)
     
+    # Import AWS Ops for health/metrics/logs
+    try:
+        from src.aws_ops import get_aws_ops
+        ops = get_aws_ops(_current_region)
+    except ImportError:
+        ops = None
+    
+    # ===========================================
+    # Health Check Commands
+    # ===========================================
+    
+    # EC2 Health Check
+    if any(kw in message_lower for kw in ['ec2 health', 'ec2 健康', 'check ec2', '检查 ec2', 'ec2 status']):
+        if not ops:
+            return "❌ AWS Ops module not available"
+        try:
+            health = ops.ec2_health_check()
+            response = f"""🏥 **EC2 健康检查** (Region: {_current_region})
+
+**整体状态:** {'✅ Healthy' if health['overall_status'] == 'healthy' else '⚠️ ' + health['overall_status'].upper()}
+
+| Name | ID | State | Health | CPU | Issues |
+|------|----| ------|--------|-----|--------|"""
+            
+            for inst in health.get('instances', [])[:10]:
+                health_icon = "✅" if inst['health'] == 'healthy' else "⚠️" if inst['health'] == 'warning' else "❌"
+                issues_str = ", ".join(inst.get('issues', [])[:2]) or "None"
+                response += f"\n| {inst['name'][:15]} | {inst['id']} | {inst['state']} | {health_icon} | {inst.get('cpu_avg', 0):.1f}% | {issues_str[:20]} |"
+            
+            if health.get('issues'):
+                response += f"\n\n**发现问题 ({len(health['issues'])}):**"
+                for issue in health['issues'][:5]:
+                    response += f"\n- {issue['resource']}: {issue['issue']}"
+            
+            return response
+        except Exception as e:
+            return f"❌ EC2 健康检查失败: {str(e)}"
+    
+    # RDS Health Check
+    if any(kw in message_lower for kw in ['rds health', 'rds 健康', 'check rds', '检查 rds', 'database health', '数据库健康']):
+        if not ops:
+            return "❌ AWS Ops module not available"
+        try:
+            health = ops.rds_health_check()
+            response = f"""🏥 **RDS 健康检查** (Region: {_current_region})
+
+**整体状态:** {'✅ Healthy' if health['overall_status'] == 'healthy' else '⚠️ ' + health['overall_status'].upper()}
+
+| ID | Engine | Status | Health | CPU | Connections | Issues |
+|----|--------|--------|--------|-----|-------------|--------|"""
+            
+            for db in health.get('databases', []):
+                health_icon = "✅" if db['health'] == 'healthy' else "⚠️" if db['health'] == 'warning' else "❌"
+                issues_str = ", ".join(db.get('issues', [])[:2]) or "None"
+                response += f"\n| {db['id']} | {db['engine'][:15]} | {db['status']} | {health_icon} | {db.get('cpu_avg', 0):.1f}% | {db.get('connections', 0):.0f} | {issues_str[:15]} |"
+            
+            if health.get('issues'):
+                response += f"\n\n**发现问题 ({len(health['issues'])}):**"
+                for issue in health['issues'][:5]:
+                    response += f"\n- {issue['resource']}: {issue['issue']}"
+            
+            return response
+        except Exception as e:
+            return f"❌ RDS 健康检查失败: {str(e)}"
+    
+    # Lambda Health Check
+    if any(kw in message_lower for kw in ['lambda health', 'lambda 健康', 'check lambda', '检查 lambda', 'function health']):
+        if not ops:
+            return "❌ AWS Ops module not available"
+        try:
+            health = ops.lambda_health_check()
+            response = f"""🏥 **Lambda 健康检查** (Region: {_current_region})
+
+**整体状态:** {'✅ Healthy' if health['overall_status'] == 'healthy' else '⚠️ ' + health['overall_status'].upper()}
+
+| Function | Health | Invocations | Errors | Error Rate | Throttles |
+|----------|--------|-------------|--------|------------|-----------|"""
+            
+            for func in health.get('functions', [])[:10]:
+                health_icon = "✅" if func['health'] == 'healthy' else "⚠️" if func['health'] == 'warning' else "❌"
+                response += f"\n| {func['name'][:25]} | {health_icon} | {func.get('invocations', 0):.0f} | {func.get('errors', 0):.0f} | {func.get('error_rate', 0):.1f}% | {func.get('throttles', 0):.0f} |"
+            
+            if health.get('issues'):
+                response += f"\n\n**发现问题 ({len(health['issues'])}):**"
+                for issue in health['issues'][:5]:
+                    response += f"\n- {issue['resource']}: {issue['issue']}"
+            
+            return response
+        except Exception as e:
+            return f"❌ Lambda 健康检查失败: {str(e)}"
+    
+    # S3 Health Check
+    if any(kw in message_lower for kw in ['s3 health', 's3 健康', 'check s3', '检查 s3', 'bucket health', 's3 security']):
+        if not ops:
+            return "❌ AWS Ops module not available"
+        try:
+            health = ops.s3_health_check()
+            response = f"""🏥 **S3 健康检查**
+
+**整体状态:** {'✅ Healthy' if health['overall_status'] == 'healthy' else '⚠️ ' + health['overall_status'].upper()}
+**公开桶数量:** {health.get('public_buckets', 0)} {'⚠️' if health.get('public_buckets', 0) > 0 else ''}
+
+| Bucket | Public | Encryption | Versioning | Issues |
+|--------|--------|------------|------------|--------|"""
+            
+            for bucket in health.get('buckets', [])[:15]:
+                public_icon = "⚠️ Yes" if bucket['public'] else "No"
+                issues_str = ", ".join(bucket.get('issues', [])) or "None"
+                response += f"\n| {bucket['name'][:30]} | {public_icon} | {bucket.get('encryption', 'N/A')} | {bucket.get('versioning', 'N/A')} | {issues_str[:15]} |"
+            
+            return response
+        except Exception as e:
+            return f"❌ S3 健康检查失败: {str(e)}"
+    
+    # ===========================================
+    # Anomaly Detection
+    # ===========================================
+    
+    if any(kw in message_lower for kw in ['anomaly', '异常', 'detect', '检测问题', '发现问题']):
+        if not ops:
+            return "❌ AWS Ops module not available"
+        try:
+            response = f"""🔍 **异常检测报告** (Region: {_current_region})
+
+"""
+            total_anomalies = []
+            
+            # Check each service
+            for service in ['ec2', 'rds', 'lambda']:
+                anomalies = ops.detect_anomalies(service)
+                if anomalies.get('anomalies'):
+                    total_anomalies.extend(anomalies['anomalies'])
+            
+            if total_anomalies:
+                response += f"**发现 {len(total_anomalies)} 个异常:**\n\n"
+                response += "| 服务 | 资源 | 类型 | 值 | 严重性 |\n"
+                response += "|------|------|------|-----|--------|\n"
+                
+                for a in total_anomalies[:10]:
+                    severity_icon = "🔴" if a['severity'] == 'critical' else "🟠" if a['severity'] == 'high' else "🟡"
+                    response += f"| {a.get('type', 'N/A').split('_')[0]} | {a['resource'][:20]} | {a['type']} | {a.get('value', 'N/A')} | {severity_icon} {a['severity']} |\n"
+            else:
+                response += "✅ **未发现异常！所有服务运行正常。**"
+            
+            return response
+        except Exception as e:
+            return f"❌ 异常检测失败: {str(e)}"
+    
+    # ===========================================
+    # Metrics Commands
+    # ===========================================
+    
+    # EC2 Metrics
+    if any(kw in message_lower for kw in ['ec2 metrics', 'ec2 指标', 'ec2 监控']):
+        if not ops:
+            return "❌ AWS Ops module not available"
+        
+        # Extract instance ID if provided
+        import re
+        instance_match = re.search(r'i-[a-f0-9]+', message)
+        
+        if instance_match:
+            instance_id = instance_match.group()
+            try:
+                metrics = ops.ec2_get_metrics(instance_id)
+                response = f"""📊 **EC2 Metrics** - {instance_id}
+
+| Metric | Average | Max | Min |
+|--------|---------|-----|-----|"""
+                
+                for metric_name, data in metrics.get('metrics', {}).items():
+                    if data:
+                        response += f"\n| {metric_name} | {data.get('avg', 0):.2f} | {data.get('max', 0):.2f} | {data.get('min', 0):.2f} |"
+                
+                return response
+            except Exception as e:
+                return f"❌ 获取 EC2 指标失败: {str(e)}"
+        else:
+            return "请指定实例 ID，例如: `EC2 metrics i-0123456789abcdef0`"
+    
+    # RDS Metrics
+    if any(kw in message_lower for kw in ['rds metrics', 'rds 指标', 'rds 监控', 'database metrics']):
+        if not ops:
+            return "❌ AWS Ops module not available"
+        
+        # Extract DB ID if provided (simplified)
+        words = message.split()
+        db_id = None
+        for i, word in enumerate(words):
+            if word.lower() in ['metrics', 'for', '指标']:
+                if i + 1 < len(words):
+                    db_id = words[i + 1]
+                    break
+        
+        if db_id and not db_id.startswith(('metrics', 'for')):
+            try:
+                metrics = ops.rds_get_metrics(db_id)
+                response = f"""📊 **RDS Metrics** - {db_id}
+
+| Metric | Average | Max |
+|--------|---------|-----|"""
+                
+                for metric_name, data in metrics.get('metrics', {}).items():
+                    if data:
+                        value = data.get('avg', 0)
+                        # Format storage in GB
+                        if 'Storage' in metric_name or 'Memory' in metric_name:
+                            value = value / (1024**3)
+                            response += f"\n| {metric_name} | {value:.2f} GB | {data.get('max', 0) / (1024**3):.2f} GB |"
+                        else:
+                            response += f"\n| {metric_name} | {value:.2f} | {data.get('max', 0):.2f} |"
+                
+                return response
+            except Exception as e:
+                return f"❌ 获取 RDS 指标失败: {str(e)}"
+        else:
+            # Show all RDS metrics summary
+            health = ops.rds_health_check()
+            response = f"""📊 **RDS Metrics Summary** (Region: {_current_region})
+
+| Database | CPU Avg | CPU Max | Connections |
+|----------|---------|---------|-------------|"""
+            
+            for db in health.get('databases', []):
+                response += f"\n| {db['id']} | {db.get('cpu_avg', 0):.1f}% | {db.get('cpu_max', 0):.1f}% | {db.get('connections', 0):.0f} |"
+            
+            response += "\n\n💡 查看详细指标: `RDS metrics <db-id>`"
+            return response
+    
+    # ===========================================
+    # Logs Commands
+    # ===========================================
+    
+    # Lambda Logs
+    if any(kw in message_lower for kw in ['lambda logs', 'lambda 日志', 'function logs']):
+        if not ops:
+            return "❌ AWS Ops module not available"
+        
+        # Extract function name
+        words = message.split()
+        func_name = None
+        for i, word in enumerate(words):
+            if word.lower() in ['logs', 'log', '日志', 'for']:
+                if i + 1 < len(words) and words[i + 1].lower() not in ['logs', 'log', '日志', 'for']:
+                    func_name = words[i + 1]
+                    break
+        
+        if func_name:
+            try:
+                filter_errors = 'error' in message_lower
+                logs = ops.lambda_get_logs(func_name, hours=1, filter_errors=filter_errors)
+                
+                response = f"""📜 **Lambda Logs** - {func_name}
+{'(Filtered: ERRORS only)' if filter_errors else ''}
+
+"""
+                events = logs.get('events', [])
+                if events:
+                    for event in events[:20]:
+                        response += f"**{event['timestamp']}**\n```\n{event['message'][:200]}\n```\n\n"
+                else:
+                    response += "📭 没有找到日志记录"
+                
+                return response
+            except Exception as e:
+                return f"❌ 获取 Lambda 日志失败: {str(e)}"
+        else:
+            return "请指定函数名，例如: `Lambda logs my-function` 或 `Lambda error logs my-function`"
+    
+    # ===========================================
+    # General Health Check (all services)
+    # ===========================================
+    
+    if any(kw in message_lower for kw in ['health', '健康', '状态检查', 'status check', '诊断', 'diagnose']):
+        if not ops:
+            return "❌ AWS Ops module not available"
+        try:
+            response = f"""🏥 **AWS 服务健康状态** (Region: {_current_region})
+
+"""
+            all_issues = []
+            
+            # EC2 Health
+            ec2_health = ops.ec2_health_check()
+            ec2_status = "✅" if ec2_health['overall_status'] == 'healthy' else "⚠️" if ec2_health['overall_status'] == 'warning' else "❌"
+            response += f"**EC2:** {ec2_status} {len(ec2_health.get('instances', []))} instances | Issues: {len(ec2_health.get('issues', []))}\n"
+            all_issues.extend(ec2_health.get('issues', []))
+            
+            # RDS Health
+            rds_health = ops.rds_health_check()
+            rds_status = "✅" if rds_health['overall_status'] == 'healthy' else "⚠️" if rds_health['overall_status'] == 'warning' else "❌"
+            response += f"**RDS:** {rds_status} {len(rds_health.get('databases', []))} databases | Issues: {len(rds_health.get('issues', []))}\n"
+            all_issues.extend(rds_health.get('issues', []))
+            
+            # Lambda Health
+            lambda_health = ops.lambda_health_check()
+            lambda_status = "✅" if lambda_health['overall_status'] == 'healthy' else "⚠️" if lambda_health['overall_status'] == 'warning' else "❌"
+            response += f"**Lambda:** {lambda_status} {len(lambda_health.get('functions', []))} functions | Issues: {len(lambda_health.get('issues', []))}\n"
+            all_issues.extend(lambda_health.get('issues', []))
+            
+            # S3 Health
+            s3_health = ops.s3_health_check()
+            s3_status = "✅" if s3_health['overall_status'] == 'healthy' else "⚠️"
+            response += f"**S3:** {s3_status} {len(s3_health.get('buckets', []))} buckets | Public: {s3_health.get('public_buckets', 0)}\n"
+            all_issues.extend(s3_health.get('issues', []))
+            
+            if all_issues:
+                response += f"\n---\n**⚠️ 发现 {len(all_issues)} 个问题:**\n"
+                for issue in all_issues[:10]:
+                    response += f"- {issue['resource']}: {issue['issue']}\n"
+            else:
+                response += "\n---\n✅ **所有服务运行正常！**"
+            
+            return response
+        except Exception as e:
+            return f"❌ 健康检查失败: {str(e)}"
+    
     # Scan all resources
     if any(kw in message_lower for kw in ['scan', '扫描', 'all resources', '所有资源']):
         try:
@@ -418,19 +735,38 @@ Total: {data['count']}
     
     # Help
     if any(kw in message_lower for kw in ['help', '帮助', 'commands', '命令']):
-        return """📚 **可用命令**
+        return """📚 **AWS 运维命令**
 
-- **扫描资源**: "Scan my AWS resources" 或 "扫描 AWS"
-- **EC2 实例**: "List EC2 instances" 或 "显示 EC2"
-- **Lambda 函数**: "Show Lambda functions" 或 "显示 Lambda"
-- **S3 桶**: "List S3 buckets" 或 "显示 S3"
-- **RDS 数据库**: "Show RDS databases" 或 "显示 RDS"
-- **账号信息**: "Show account info" 或 "显示账号"
+**🏥 健康检查:**
+- `health` / `健康` / `诊断` - 全服务健康检查
+- `EC2 health` - EC2 健康检查
+- `RDS health` - RDS 健康检查
+- `Lambda health` - Lambda 健康检查
+- `S3 health` - S3 安全检查
 
-也可以直接提问，例如：
-- "检查是否有公开的 S3 桶"
-- "分析 EC2 实例状态"
-- "有什么安全问题？"
+**📊 指标监控:**
+- `EC2 metrics i-xxx` - EC2 实例指标
+- `RDS metrics db-name` - RDS 数据库指标
+
+**📜 日志查询:**
+- `Lambda logs function-name` - Lambda 函数日志
+- `Lambda error logs function-name` - Lambda 错误日志
+
+**🔍 异常检测:**
+- `anomaly` / `异常` / `检测问题` - 异常检测
+
+**📋 资源列表:**
+- `scan` / `扫描` - 全资源扫描
+- `show EC2` / `显示 EC2` - EC2 实例列表
+- `show Lambda` / `显示 Lambda` - Lambda 函数
+- `show S3` / `显示 S3` - S3 桶列表
+- `show RDS` / `显示 RDS` - RDS 数据库
+- `show account` - 账号信息
+
+💡 **示例:**
+- "检查 EC2 健康状态"
+- "RDS metrics my-database"
+- "有什么异常吗？"
 """
     
     return None
