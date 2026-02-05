@@ -14,6 +14,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
 
+# AWS Scanner imports (early import for chat handler)
+try:
+    from src.aws_scanner import get_scanner, AWSCloudScanner
+    AWS_SCANNER_AVAILABLE = True
+    print("✅ AWS Scanner loaded successfully")
+except ImportError as e:
+    AWS_SCANNER_AVAILABLE = False
+    print(f"❌ AWS Scanner not available: {e}")
+    def get_scanner(region): return None
+
+# Global state for scanner
+_current_region = "ap-southeast-1"
+
 # Import our modules (handle import errors gracefully)
 K8S_TOOLS_AVAILABLE = False
 
@@ -1800,10 +1813,8 @@ async def perform_rca(request: RCARequest):
 # AWS Cloud Scanner (Full Resource Discovery)
 # =============================================================================
 
-from src.aws_scanner import get_scanner, AWSCloudScanner
 
 # Current scanner state
-_current_region = "ap-southeast-1"
 _monitored_resources: List[Dict[str, Any]] = []
 
 @app.get("/api/scanner/account")
