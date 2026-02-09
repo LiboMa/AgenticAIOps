@@ -1029,6 +1029,9 @@ Total: {data['count']} | Active: {data.get('status', {}).get('active', 0)}
     if any(kw in message_lower for kw in ['dynamodb', 'ddb', 'dynamo', '表']):
         try:
             data = scanner._scan_dynamodb()
+            if data.get('error'):
+                return f"⚠️ **DynamoDB 访问受限**\n\n{data['error']}\n\n*需要 IAM 权限: dynamodb:ListTables, dynamodb:DescribeTable*"
+            
             response = f"""📊 **DynamoDB Tables** (Region: {_current_region})
 
 Total: {data['count']}
@@ -1076,6 +1079,9 @@ Total: {data['count']}
     if any(kw in message_lower for kw in ['ecs', 'container', '容器']):
         try:
             data = scanner._scan_ecs()
+            if data.get('error'):
+                return f"⚠️ **ECS 访问受限**\n\n{data['error']}\n\n*需要 IAM 权限: ecs:ListClusters, ecs:DescribeClusters*"
+            
             response = f"""🐳 **ECS Clusters** (Region: {_current_region})
 
 Total: {data['count']}
