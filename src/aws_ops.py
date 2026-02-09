@@ -422,6 +422,45 @@ class AWSServiceOps:
         except ClientError as e:
             return {"error": str(e)}
     
+    def rds_operations(self, db_id: str, action: str, force: bool = False) -> Dict[str, Any]:
+        """
+        Perform RDS operations (reboot, failover).
+        
+        Actions:
+        - reboot: Reboot the DB instance
+        - failover: Force failover (Multi-AZ only)
+        """
+        rds = self._get_client('rds')
+        
+        try:
+            if action == 'reboot':
+                response = rds.reboot_db_instance(
+                    DBInstanceIdentifier=db_id,
+                    ForceFailover=force
+                )
+                return {
+                    "success": True,
+                    "action": "reboot",
+                    "db_id": db_id,
+                    "status": response['DBInstance']['DBInstanceStatus'],
+                }
+            elif action == 'failover':
+                # Only works for Multi-AZ deployments
+                response = rds.reboot_db_instance(
+                    DBInstanceIdentifier=db_id,
+                    ForceFailover=True
+                )
+                return {
+                    "success": True,
+                    "action": "failover",
+                    "db_id": db_id,
+                    "status": response['DBInstance']['DBInstanceStatus'],
+                }
+            else:
+                return {"success": False, "error": f"Unknown action: {action}"}
+        except ClientError as e:
+            return {"success": False, "error": str(e)}
+    
     # =========================================================================
     # Lambda Operations
     # =========================================================================
@@ -573,6 +612,52 @@ class AWSServiceOps:
             }
         except ClientError as e:
             return {"error": str(e)}
+    
+    def lambda_invoke(self, function_name: str, payload: Optional[Dict] = None, async_invoke: bool = False) -> Dict[str, Any]:
+        """
+        Invoke a Lambda function.
+        
+        Args:
+            function_name: Name of the function
+            payload: JSON payload to send
+            async_invoke: If True, invoke asynchronously (Event type)
+        """
+        lambda_client = self._get_client('lambda')
+        
+        try:
+            import json
+            
+            invoke_params = {
+                'FunctionName': function_name,
+                'InvocationType': 'Event' if async_invoke else 'RequestResponse',
+            }
+            
+            if payload:
+                invoke_params['Payload'] = json.dumps(payload)
+            
+            response = lambda_client.invoke(**invoke_params)
+            
+            result = {
+                "success": True,
+                "function_name": function_name,
+                "status_code": response['StatusCode'],
+                "invocation_type": 'async' if async_invoke else 'sync',
+            }
+            
+            if not async_invoke and 'Payload' in response:
+                try:
+                    result["response"] = json.loads(response['Payload'].read().decode())
+                except:
+                    result["response"] = "Unable to parse response"
+            
+            if response.get('FunctionError'):
+                result["success"] = False
+                result["error"] = response['FunctionError']
+            
+            return result
+            
+        except ClientError as e:
+            return {"success": False, "error": str(e)}
     
     # =========================================================================
     # S3 Operations

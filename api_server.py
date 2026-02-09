@@ -340,6 +340,17 @@ async def handle_aws_chat_intent(message: str) -> Optional[str]:
 | `ec2 stop i-xxx` | 停止实例 |
 | `ec2 reboot i-xxx` | 重启实例 |
 
+**⚙️ RDS 操作:**
+| Command | Description |
+|---------|-------------|
+| `rds reboot xxx` | 重启 RDS 实例 |
+| `rds failover xxx` | RDS 故障转移 (Multi-AZ) |
+
+**⚙️ Lambda 操作:**
+| Command | Description |
+|---------|-------------|
+| `lambda invoke xxx` | 调用 Lambda 函数 |
+
 **📊 监控:**
 | Command | Description |
 |---------|-------------|
@@ -413,6 +424,73 @@ async def handle_aws_chat_intent(message: str) -> Optional[str]:
         except Exception as e:
             return f"❌ RDS 健康检查失败: {str(e)}"
     
+    # RDS Reboot
+    if any(kw in message_lower for kw in ['rds reboot', 'reboot rds', 'restart rds', '重启 rds', '重启数据库']):
+        if not ops:
+            return "❌ AWS Ops module not available"
+        
+        import re
+        # Extract DB identifier (usually lowercase with hyphens)
+        match = re.search(r'([a-z0-9][a-z0-9-]*[a-z0-9])', message_lower)
+        if not match or match.group(1) in ['rds', 'reboot', 'restart']:
+            return """⚠️ **请提供 DB Identifier**
+
+用法: `rds reboot mydb-instance`
+
+示例:
+- `rds reboot production-mysql`
+- `restart rds test-postgres`"""
+        
+        db_id = match.group(1)
+        try:
+            result = ops.rds_operations(db_id, 'reboot')
+            if result.get('success'):
+                return f"""🔄 **RDS Reboot 命令已发送**
+
+| 项目 | 值 |
+|------|-----|
+| DB ID | `{db_id}` |
+| Action | Reboot |
+| Status | {result.get('status', 'rebooting')} |
+
+⏳ 数据库重启需要几分钟，请稍后检查状态。"""
+            else:
+                return f"❌ 重启失败: {result.get('error')}"
+        except Exception as e:
+            return f"❌ RDS 重启失败: {str(e)}"
+    
+    # RDS Failover
+    if any(kw in message_lower for kw in ['rds failover', 'failover rds', '故障转移']):
+        if not ops:
+            return "❌ AWS Ops module not available"
+        
+        import re
+        match = re.search(r'([a-z0-9][a-z0-9-]*[a-z0-9])', message_lower)
+        if not match or match.group(1) in ['rds', 'failover']:
+            return """⚠️ **请提供 DB Identifier**
+
+用法: `rds failover mydb-instance`
+
+注意: 仅适用于 Multi-AZ 部署"""
+        
+        db_id = match.group(1)
+        try:
+            result = ops.rds_operations(db_id, 'failover')
+            if result.get('success'):
+                return f"""⚠️ **RDS Failover 命令已发送**
+
+| 项目 | 值 |
+|------|-----|
+| DB ID | `{db_id}` |
+| Action | Failover |
+| Status | {result.get('status', 'failing-over')} |
+
+⏳ 故障转移进行中..."""
+            else:
+                return f"❌ Failover 失败: {result.get('error')}"
+        except Exception as e:
+            return f"❌ RDS Failover 失败: {str(e)}"
+    
     # Lambda Health Check
     if any(kw in message_lower for kw in ['lambda health', 'lambda 健康', 'check lambda', '检查 lambda', 'function health']):
         if not ops:
@@ -438,6 +516,48 @@ async def handle_aws_chat_intent(message: str) -> Optional[str]:
             return response
         except Exception as e:
             return f"❌ Lambda 健康检查失败: {str(e)}"
+    
+    # Lambda Invoke
+    if any(kw in message_lower for kw in ['lambda invoke', 'invoke lambda', '调用 lambda', '执行 lambda']):
+        if not ops:
+            return "❌ AWS Ops module not available"
+        
+        import re
+        # Extract function name
+        match = re.search(r'invoke\s+([a-zA-Z0-9_-]+)|([a-zA-Z0-9_-]+)\s+invoke', message)
+        if not match:
+            return """⚠️ **请提供 Function Name**
+
+用法: `lambda invoke my-function`
+
+示例:
+- `lambda invoke hello-world`
+- `invoke lambda process-data`"""
+        
+        function_name = match.group(1) or match.group(2)
+        if function_name.lower() in ['lambda', 'invoke']:
+            return "⚠️ 请提供函数名称"
+        
+        try:
+            result = ops.lambda_invoke(function_name)
+            if result.get('success'):
+                response_preview = str(result.get('response', ''))[:200]
+                return f"""✅ **Lambda Invoke 成功**
+
+| 项目 | 值 |
+|------|-----|
+| Function | `{function_name}` |
+| Status Code | {result.get('status_code', 'N/A')} |
+| Type | {result.get('invocation_type', 'sync')} |
+
+**Response Preview:**
+```
+{response_preview}...
+```"""
+            else:
+                return f"❌ 调用失败: {result.get('error')}"
+        except Exception as e:
+            return f"❌ Lambda Invoke 失败: {str(e)}"
     
     # S3 Health Check
     if any(kw in message_lower for kw in ['s3 health', 's3 健康', 'check s3', '检查 s3', 'bucket health', 's3 security']):
