@@ -799,6 +799,421 @@ class AWSServiceOps:
         return results
 
 
+    # =========================================================================
+    # VPC Operations
+    # =========================================================================
+    
+    def vpc_health_check(self, vpc_id: Optional[str] = None) -> Dict[str, Any]:
+        """
+        VPC health check.
+        
+        Checks:
+        - VPC state
+        - Subnets availability
+        - Internet Gateway attachment
+        - NAT Gateways status
+        - Route tables
+        """
+        ec2 = self._get_client('ec2')
+        
+        results = {
+            "service": "VPC",
+            "checked_at": datetime.utcnow().isoformat(),
+            "overall_status": "healthy",
+            "vpcs": [],
+            "issues": [],
+        }
+        
+        try:
+            if vpc_id:
+                response = ec2.describe_vpcs(VpcIds=[vpc_id])
+            else:
+                response = ec2.describe_vpcs()
+            
+            for vpc in response.get('Vpcs', []):
+                vid = vpc['VpcId']
+                state = vpc['State']
+                is_default = vpc.get('IsDefault', False)
+                
+                # Get VPC name
+                name = vid
+                for tag in vpc.get('Tags', []):
+                    if tag['Key'] == 'Name':
+                        name = tag['Value']
+                        break
+                
+                health = "healthy"
+                issues = []
+                
+                if state != 'available':
+                    health = "unhealthy"
+                    issues.append(f"VPC state: {state}")
+                
+                # Check subnets
+                subnets_response = ec2.describe_subnets(Filters=[{'Name': 'vpc-id', 'Values': [vid]}])
+                subnets = subnets_response.get('Subnets', [])
+                available_subnets = [s for s in subnets if s['State'] == 'available']
+                
+                if len(available_subnets) < len(subnets):
+                    issues.append(f"Subnets: {len(available_subnets)}/{len(subnets)} available")
+                    if health == "healthy":
+                        health = "warning"
+                
+                # Check Internet Gateway
+                igw_response = ec2.describe_internet_gateways(
+                    Filters=[{'Name': 'attachment.vpc-id', 'Values': [vid]}]
+                )
+                igws = igw_response.get('InternetGateways', [])
+                has_igw = len(igws) > 0
+                
+                # Check NAT Gateways
+                nat_response = ec2.describe_nat_gateways(
+                    Filters=[{'Name': 'vpc-id', 'Values': [vid]}, {'Name': 'state', 'Values': ['available', 'pending']}]
+                )
+                nat_gateways = nat_response.get('NatGateways', [])
+                nat_available = [n for n in nat_gateways if n['State'] == 'available']
+                
+                if nat_gateways and len(nat_available) < len(nat_gateways):
+                    issues.append(f"NAT Gateways: {len(nat_available)}/{len(nat_gateways)} available")
+                    if health == "healthy":
+                        health = "warning"
+                
+                vpc_health = {
+                    "id": vid,
+                    "name": name,
+                    "state": state,
+                    "health": health,
+                    "is_default": is_default,
+                    "cidr": vpc.get('CidrBlock', ''),
+                    "subnets_count": len(subnets),
+                    "subnets_available": len(available_subnets),
+                    "has_igw": has_igw,
+                    "nat_gateways": len(nat_gateways),
+                    "issues": issues,
+                }
+                
+                results["vpcs"].append(vpc_health)
+                
+                if issues:
+                    results["issues"].extend([{
+                        "resource": f"{name} ({vid})",
+                        "issue": issue
+                    } for issue in issues])
+            
+            # Overall status
+            if any(v["health"] == "unhealthy" for v in results["vpcs"]):
+                results["overall_status"] = "unhealthy"
+            elif any(v["health"] == "warning" for v in results["vpcs"]):
+                results["overall_status"] = "warning"
+            
+            return results
+            
+        except ClientError as e:
+            return {"error": str(e), "overall_status": "error"}
+    
+    def vpc_scan(self) -> Dict[str, Any]:
+        """Scan all VPCs in the region."""
+        ec2 = self._get_client('ec2')
+        
+        try:
+            response = ec2.describe_vpcs()
+            vpcs = []
+            
+            for vpc in response.get('Vpcs', []):
+                vid = vpc['VpcId']
+                name = vid
+                for tag in vpc.get('Tags', []):
+                    if tag['Key'] == 'Name':
+                        name = tag['Value']
+                        break
+                
+                vpcs.append({
+                    "id": vid,
+                    "name": name,
+                    "state": vpc['State'],
+                    "cidr": vpc.get('CidrBlock', ''),
+                    "is_default": vpc.get('IsDefault', False),
+                })
+            
+            return {
+                "count": len(vpcs),
+                "vpcs": vpcs,
+            }
+        except ClientError as e:
+            return {"error": str(e)}
+    
+    # =========================================================================
+    # ELB (Elastic Load Balancer) Operations
+    # =========================================================================
+    
+    def elb_health_check(self, lb_name: Optional[str] = None) -> Dict[str, Any]:
+        """
+        ELB/ALB/NLB health check.
+        
+        Checks:
+        - Load balancer state
+        - Target group health
+        - Listener configuration
+        - Unhealthy targets
+        """
+        elbv2 = self._get_client('elbv2')
+        
+        results = {
+            "service": "ELB",
+            "checked_at": datetime.utcnow().isoformat(),
+            "overall_status": "healthy",
+            "load_balancers": [],
+            "issues": [],
+        }
+        
+        try:
+            if lb_name:
+                response = elbv2.describe_load_balancers(Names=[lb_name])
+            else:
+                response = elbv2.describe_load_balancers()
+            
+            for lb in response.get('LoadBalancers', []):
+                lb_arn = lb['LoadBalancerArn']
+                lb_name = lb['LoadBalancerName']
+                state = lb['State']['Code']
+                lb_type = lb['Type']
+                
+                health = "healthy"
+                issues = []
+                
+                if state != 'active':
+                    health = "warning" if state == 'provisioning' else "unhealthy"
+                    issues.append(f"State: {state}")
+                
+                # Check target groups
+                tg_response = elbv2.describe_target_groups(LoadBalancerArn=lb_arn)
+                target_groups = tg_response.get('TargetGroups', [])
+                
+                unhealthy_targets = 0
+                total_targets = 0
+                
+                for tg in target_groups:
+                    tg_arn = tg['TargetGroupArn']
+                    try:
+                        health_response = elbv2.describe_target_health(TargetGroupArn=tg_arn)
+                        for target in health_response.get('TargetHealthDescriptions', []):
+                            total_targets += 1
+                            if target['TargetHealth']['State'] != 'healthy':
+                                unhealthy_targets += 1
+                    except:
+                        pass
+                
+                if unhealthy_targets > 0:
+                    issues.append(f"Unhealthy targets: {unhealthy_targets}/{total_targets}")
+                    if health == "healthy":
+                        health = "warning"
+                
+                if total_targets == 0:
+                    issues.append("No registered targets")
+                    if health == "healthy":
+                        health = "warning"
+                
+                lb_health = {
+                    "name": lb_name,
+                    "arn": lb_arn,
+                    "type": lb_type,
+                    "scheme": lb.get('Scheme', ''),
+                    "state": state,
+                    "health": health,
+                    "dns_name": lb.get('DNSName', ''),
+                    "target_groups": len(target_groups),
+                    "total_targets": total_targets,
+                    "unhealthy_targets": unhealthy_targets,
+                    "issues": issues,
+                }
+                
+                results["load_balancers"].append(lb_health)
+                
+                if issues:
+                    results["issues"].extend([{
+                        "resource": lb_name,
+                        "issue": issue
+                    } for issue in issues])
+            
+            # Overall status
+            if any(lb["health"] == "unhealthy" for lb in results["load_balancers"]):
+                results["overall_status"] = "unhealthy"
+            elif any(lb["health"] == "warning" for lb in results["load_balancers"]):
+                results["overall_status"] = "warning"
+            
+            return results
+            
+        except ClientError as e:
+            return {"error": str(e), "overall_status": "error"}
+    
+    def elb_scan(self) -> Dict[str, Any]:
+        """Scan all load balancers in the region."""
+        elbv2 = self._get_client('elbv2')
+        
+        try:
+            response = elbv2.describe_load_balancers()
+            lbs = []
+            
+            for lb in response.get('LoadBalancers', []):
+                lbs.append({
+                    "name": lb['LoadBalancerName'],
+                    "arn": lb['LoadBalancerArn'],
+                    "type": lb['Type'],
+                    "scheme": lb.get('Scheme', ''),
+                    "state": lb['State']['Code'],
+                    "dns_name": lb.get('DNSName', ''),
+                    "vpc_id": lb.get('VpcId', ''),
+                })
+            
+            return {
+                "count": len(lbs),
+                "load_balancers": lbs,
+            }
+        except ClientError as e:
+            return {"error": str(e)}
+    
+    def elb_get_metrics(self, lb_name: str, lb_type: str = "application", hours: int = 1) -> Dict[str, Any]:
+        """Get ELB/ALB metrics from CloudWatch."""
+        namespace = "AWS/ApplicationELB" if lb_type == "application" else "AWS/NetworkELB"
+        
+        metrics_to_fetch = [
+            'RequestCount',
+            'TargetResponseTime',
+            'HTTPCode_Target_2XX_Count',
+            'HTTPCode_Target_4XX_Count',
+            'HTTPCode_Target_5XX_Count',
+            'UnHealthyHostCount',
+            'HealthyHostCount',
+        ]
+        
+        results = {
+            "load_balancer": lb_name,
+            "period_hours": hours,
+            "metrics": {},
+        }
+        
+        for metric in metrics_to_fetch:
+            try:
+                data = self._get_metric_stats(
+                    namespace, metric,
+                    [{'Name': 'LoadBalancer', 'Value': lb_name}],
+                    minutes=hours * 60
+                )
+                results["metrics"][metric] = data
+            except:
+                pass
+        
+        return results
+    
+    # =========================================================================
+    # Route 53 Operations
+    # =========================================================================
+    
+    def route53_health_check(self) -> Dict[str, Any]:
+        """
+        Route 53 health check.
+        
+        Checks:
+        - Hosted zones
+        - Health checks status
+        - DNS records
+        """
+        route53 = self._get_client('route53')
+        
+        results = {
+            "service": "Route53",
+            "checked_at": datetime.utcnow().isoformat(),
+            "overall_status": "healthy",
+            "hosted_zones": [],
+            "health_checks": [],
+            "issues": [],
+        }
+        
+        try:
+            # List hosted zones
+            zones_response = route53.list_hosted_zones()
+            
+            for zone in zones_response.get('HostedZones', []):
+                zone_id = zone['Id'].split('/')[-1]
+                zone_name = zone['Name']
+                
+                # Get record count
+                record_count = zone.get('ResourceRecordSetCount', 0)
+                
+                results["hosted_zones"].append({
+                    "id": zone_id,
+                    "name": zone_name,
+                    "private": zone.get('Config', {}).get('PrivateZone', False),
+                    "record_count": record_count,
+                })
+            
+            # List health checks
+            health_response = route53.list_health_checks()
+            
+            unhealthy_count = 0
+            for hc in health_response.get('HealthChecks', []):
+                hc_id = hc['Id']
+                hc_config = hc.get('HealthCheckConfig', {})
+                
+                # Get health check status
+                try:
+                    status_response = route53.get_health_check_status(HealthCheckId=hc_id)
+                    statuses = status_response.get('HealthCheckObservations', [])
+                    
+                    healthy_count = sum(1 for s in statuses if s.get('StatusReport', {}).get('Status') == 'Success')
+                    total = len(statuses)
+                    
+                    health_status = "healthy" if healthy_count == total else "unhealthy"
+                    if health_status == "unhealthy":
+                        unhealthy_count += 1
+                except:
+                    health_status = "unknown"
+                
+                results["health_checks"].append({
+                    "id": hc_id,
+                    "type": hc_config.get('Type', ''),
+                    "fqdn": hc_config.get('FullyQualifiedDomainName', ''),
+                    "port": hc_config.get('Port'),
+                    "path": hc_config.get('ResourcePath', ''),
+                    "status": health_status,
+                })
+            
+            if unhealthy_count > 0:
+                results["issues"].append({
+                    "resource": "Route53 Health Checks",
+                    "issue": f"{unhealthy_count} unhealthy health checks"
+                })
+                results["overall_status"] = "warning"
+            
+            return results
+            
+        except ClientError as e:
+            return {"error": str(e), "overall_status": "error"}
+    
+    def route53_scan(self) -> Dict[str, Any]:
+        """Scan Route 53 hosted zones and health checks."""
+        route53 = self._get_client('route53')
+        
+        try:
+            zones_response = route53.list_hosted_zones()
+            health_response = route53.list_health_checks()
+            
+            return {
+                "hosted_zones_count": len(zones_response.get('HostedZones', [])),
+                "health_checks_count": len(health_response.get('HealthChecks', [])),
+                "hosted_zones": [
+                    {
+                        "id": z['Id'].split('/')[-1],
+                        "name": z['Name'],
+                        "private": z.get('Config', {}).get('PrivateZone', False),
+                    }
+                    for z in zones_response.get('HostedZones', [])
+                ],
+            }
+        except ClientError as e:
+            return {"error": str(e)}
+
+
 # Singleton instance
 _ops: Optional[AWSServiceOps] = None
 

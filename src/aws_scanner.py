@@ -125,6 +125,9 @@ class AWSCloudScanner:
             ("s3", self._scan_s3),
             ("rds", self._scan_rds),
             ("iam", self._scan_iam),
+            ("vpc", self._scan_vpc),
+            ("elb", self._scan_elb),
+            ("route53", self._scan_route53),
             ("eks", self._scan_eks),
             ("cloudwatch", self._scan_cloudwatch_alarms),
         ]
@@ -299,6 +302,98 @@ class AWSCloudScanner:
                 "users_count": len(users),
                 "roles_count": len(roles),
                 "users_without_mfa": users_without_mfa,
+            }
+        except ClientError as e:
+            return {"error": str(e)}
+    
+    def _scan_vpc(self) -> Dict[str, Any]:
+        """Scan VPCs."""
+        ec2 = self._get_client('ec2')
+        
+        try:
+            response = ec2.describe_vpcs()
+            vpcs = []
+            
+            for vpc in response.get('Vpcs', []):
+                vid = vpc['VpcId']
+                name = vid
+                for tag in vpc.get('Tags', []):
+                    if tag['Key'] == 'Name':
+                        name = tag['Value']
+                        break
+                
+                vpcs.append({
+                    "id": vid,
+                    "name": name,
+                    "state": vpc['State'],
+                    "cidr": vpc.get('CidrBlock', ''),
+                    "is_default": vpc.get('IsDefault', False),
+                })
+            
+            return {
+                "count": len(vpcs),
+                "vpcs": vpcs,
+            }
+        except ClientError as e:
+            return {"error": str(e)}
+    
+    def _scan_elb(self) -> Dict[str, Any]:
+        """Scan Elastic Load Balancers (ALB/NLB)."""
+        elbv2 = self._get_client('elbv2')
+        
+        try:
+            response = elbv2.describe_load_balancers()
+            lbs = []
+            status_counts = {"active": 0, "provisioning": 0, "other": 0}
+            
+            for lb in response.get('LoadBalancers', []):
+                state = lb['State']['Code']
+                if state == 'active':
+                    status_counts['active'] += 1
+                elif state == 'provisioning':
+                    status_counts['provisioning'] += 1
+                else:
+                    status_counts['other'] += 1
+                
+                lbs.append({
+                    "name": lb['LoadBalancerName'],
+                    "type": lb['Type'],
+                    "scheme": lb.get('Scheme', ''),
+                    "state": state,
+                    "dns_name": lb.get('DNSName', ''),
+                    "vpc_id": lb.get('VpcId', ''),
+                })
+            
+            return {
+                "count": len(lbs),
+                "status": status_counts,
+                "load_balancers": lbs,
+            }
+        except ClientError as e:
+            return {"error": str(e)}
+    
+    def _scan_route53(self) -> Dict[str, Any]:
+        """Scan Route 53 hosted zones."""
+        route53 = self._get_client('route53')
+        
+        try:
+            zones_response = route53.list_hosted_zones()
+            health_response = route53.list_health_checks()
+            
+            zones = [
+                {
+                    "id": z['Id'].split('/')[-1],
+                    "name": z['Name'],
+                    "private": z.get('Config', {}).get('PrivateZone', False),
+                    "record_count": z.get('ResourceRecordSetCount', 0),
+                }
+                for z in zones_response.get('HostedZones', [])
+            ]
+            
+            return {
+                "count": len(zones),
+                "health_checks_count": len(health_response.get('HealthChecks', [])),
+                "hosted_zones": zones,
             }
         except ClientError as e:
             return {"error": str(e)}

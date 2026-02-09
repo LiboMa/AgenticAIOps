@@ -721,6 +721,121 @@ Total: {data['count']}
         except Exception as e:
             return f"❌ 获取 RDS 失败: {str(e)}"
     
+    # ===========================================
+    # Networking Commands (VPC, ELB, Route53)
+    # ===========================================
+    
+    # VPC Health Check
+    if any(kw in message_lower for kw in ['vpc health', 'vpc 健康', 'check vpc']):
+        if not ops:
+            return "❌ AWS Ops module not available"
+        try:
+            health = ops.vpc_health_check()
+            response = f"""🏥 **VPC 健康检查** (Region: {_current_region})
+
+**整体状态:** {'✅ Healthy' if health['overall_status'] == 'healthy' else '⚠️ ' + health['overall_status'].upper()}
+
+| Name | ID | State | Subnets | IGW | NAT | Issues |
+|------|----| ------|---------|-----|-----|--------|"""
+            
+            for vpc in health.get('vpcs', [])[:10]:
+                health_icon = "✅" if vpc['health'] == 'healthy' else "⚠️"
+                igw = "✅" if vpc['has_igw'] else "❌"
+                issues_str = ", ".join(vpc.get('issues', [])[:2]) or "None"
+                response += f"\n| {vpc['name'][:15]} | {vpc['id']} | {vpc['state']} | {vpc['subnets_available']}/{vpc['subnets_count']} | {igw} | {vpc['nat_gateways']} | {issues_str[:15]} |"
+            
+            return response
+        except Exception as e:
+            return f"❌ VPC 健康检查失败: {str(e)}"
+    
+    # List VPCs
+    if any(kw in message_lower for kw in ['vpc', '网络', 'network']):
+        try:
+            data = scanner._scan_vpc()
+            response = f"""🌐 **VPCs** (Region: {_current_region})
+
+Total: {data['count']}
+
+| Name | ID | CIDR | State | Default |
+|------|----| -----|-------|---------|"""
+            
+            for vpc in data.get('vpcs', []):
+                default_tag = "✅" if vpc.get('is_default') else ""
+                response += f"\n| {vpc['name'][:20]} | {vpc['id']} | {vpc['cidr']} | {vpc['state']} | {default_tag} |"
+            
+            return response
+        except Exception as e:
+            return f"❌ 获取 VPC 失败: {str(e)}"
+    
+    # ELB Health Check
+    if any(kw in message_lower for kw in ['elb health', 'lb health', 'load balancer health']):
+        if not ops:
+            return "❌ AWS Ops module not available"
+        try:
+            health = ops.elb_health_check()
+            response = f"""🏥 **ELB 健康检查** (Region: {_current_region})
+
+**整体状态:** {'✅ Healthy' if health['overall_status'] == 'healthy' else '⚠️ ' + health['overall_status'].upper()}
+
+| Name | Type | State | Targets | Unhealthy | Issues |
+|------|------|-------|---------|-----------|--------|"""
+            
+            for lb in health.get('load_balancers', [])[:10]:
+                health_icon = "✅" if lb['health'] == 'healthy' else "⚠️"
+                issues_str = ", ".join(lb.get('issues', [])[:2]) or "None"
+                response += f"\n| {lb['name'][:20]} | {lb['type']} | {lb['state']} | {lb['total_targets']} | {lb['unhealthy_targets']} | {issues_str[:15]} |"
+            
+            return response
+        except Exception as e:
+            return f"❌ ELB 健康检查失败: {str(e)}"
+    
+    # List ELBs
+    if any(kw in message_lower for kw in ['elb', 'load balancer', '负载均衡']):
+        try:
+            data = scanner._scan_elb()
+            response = f"""⚖️ **Load Balancers** (Region: {_current_region})
+
+Total: {data['count']} | Active: {data.get('status', {}).get('active', 0)}
+
+| Name | Type | Scheme | State | DNS |
+|------|------|--------|-------|-----|"""
+            
+            for lb in data.get('load_balancers', [])[:10]:
+                response += f"\n| {lb['name'][:20]} | {lb['type']} | {lb['scheme']} | {lb['state']} | {lb['dns_name'][:30]}... |"
+            
+            return response
+        except Exception as e:
+            return f"❌ 获取 ELB 失败: {str(e)}"
+    
+    # Route53 Health Check
+    if any(kw in message_lower for kw in ['route53 health', 'dns health', 'route 53']):
+        if not ops:
+            return "❌ AWS Ops module not available"
+        try:
+            health = ops.route53_health_check()
+            response = f"""🏥 **Route 53 健康检查**
+
+**整体状态:** {'✅ Healthy' if health['overall_status'] == 'healthy' else '⚠️ ' + health['overall_status'].upper()}
+
+**Hosted Zones:** {len(health.get('hosted_zones', []))}
+| Name | ID | Private | Records |
+|------|----| --------|---------|"""
+            
+            for zone in health.get('hosted_zones', [])[:10]:
+                private_tag = "✅" if zone.get('private') else ""
+                response += f"\n| {zone['name'][:30]} | {zone['id']} | {private_tag} | {zone.get('record_count', 0)} |"
+            
+            hcs = health.get('health_checks', [])
+            if hcs:
+                response += f"\n\n**Health Checks:** {len(hcs)}"
+                unhealthy = [hc for hc in hcs if hc['status'] != 'healthy']
+                if unhealthy:
+                    response += f"\n⚠️ {len(unhealthy)} unhealthy health checks"
+            
+            return response
+        except Exception as e:
+            return f"❌ Route53 健康检查失败: {str(e)}"
+    
     # Account info
     if any(kw in message_lower for kw in ['account', '账号', '账户', 'who am i']):
         try:

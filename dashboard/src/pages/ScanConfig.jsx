@@ -15,7 +15,7 @@ const { Title, Text, Paragraph } = Typography
 const { Option } = Select
 
 // Services that are currently supported (can be selected and scanned)
-const SUPPORTED_SERVICES = ['ec2', 'lambda', 'eks', 's3', 'rds', 'iam', 'cloudwatch']
+const SUPPORTED_SERVICES = ['ec2', 'lambda', 'eks', 's3', 'rds', 'iam', 'cloudwatch', 'vpc', 'elb', 'route53']
 
 // Service to category mapping
 const SERVICE_CATEGORY_MAP = {
