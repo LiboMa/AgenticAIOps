@@ -298,6 +298,58 @@ async def handle_aws_chat_intent(message: str) -> Optional[str]:
         ops = None
     
     # ===========================================
+    # Help Command
+    # ===========================================
+    if any(kw in message_lower for kw in ['help', 'commands', '帮助', '命令']):
+        return """📚 **AgenticAIOps Chat Commands**
+
+**🔍 资源查询:**
+| Command | Description |
+|---------|-------------|
+| `ec2` | 列出 EC2 实例 |
+| `lambda` | 列出 Lambda 函数 |
+| `s3` | 列出 S3 存储桶 |
+| `rds` | 列出 RDS 数据库 |
+| `vpc` | 列出 VPCs |
+| `elb` | 列出负载均衡器 |
+| `scan` | 扫描所有资源 |
+
+**🏥 健康检查:**
+| Command | Description |
+|---------|-------------|
+| `ec2 health` | EC2 健康检查 |
+| `rds health` | RDS 健康检查 |
+| `lambda health` | Lambda 健康检查 |
+| `s3 health` | S3 健康检查 |
+| `vpc health` | VPC 健康检查 |
+| `elb health` | ELB 健康检查 |
+| `route53 health` | Route53 健康检查 |
+| `health` | 全服务健康检查 |
+| `anomaly` | 异常检测 |
+
+**⚙️ EC2 操作:**
+| Command | Description |
+|---------|-------------|
+| `ec2 start i-xxx` | 启动实例 |
+| `ec2 stop i-xxx` | 停止实例 |
+| `ec2 reboot i-xxx` | 重启实例 |
+
+**📊 监控:**
+| Command | Description |
+|---------|-------------|
+| `ec2 metrics i-xxx` | EC2 指标 |
+| `rds metrics xxx` | RDS 指标 |
+| `lambda logs xxx` | Lambda 日志 |
+
+**🔧 其他:**
+| Command | Description |
+|---------|-------------|
+| `account` | AWS 账号信息 |
+| `region us-east-1` | 切换 Region |
+
+当前 Region: **{_current_region}**"""
+    
+    # ===========================================
     # Health Check Commands
     # ===========================================
     
@@ -640,6 +692,113 @@ Region: {results['region']}
             return response
         except Exception as e:
             return f"❌ 扫描失败: {str(e)}"
+    
+    # ===========================================
+    # EC2 Operations (Start/Stop/Reboot)
+    # ===========================================
+    
+    # EC2 Start
+    if any(kw in message_lower for kw in ['ec2 start', 'start ec2', 'start instance', '启动实例', '启动 ec2']):
+        if not ops:
+            return "❌ AWS Ops module not available"
+        
+        # Extract instance ID
+        import re
+        match = re.search(r'(i-[a-f0-9]+)', message)
+        if not match:
+            return """⚠️ **请提供 Instance ID**
+
+用法: `ec2 start i-xxxxxxxxx`
+
+示例:
+- `ec2 start i-0abc123def456`
+- `start instance i-0abc123def456`"""
+        
+        instance_id = match.group(1)
+        try:
+            result = ops.ec2_operations(instance_id, 'start')
+            if result.get('success'):
+                return f"""✅ **EC2 Start 命令已发送**
+
+| 项目 | 值 |
+|------|-----|
+| Instance ID | `{instance_id}` |
+| Action | Start |
+| Status | 启动中... |
+
+⏳ 实例启动需要 1-2 分钟，请稍后使用 `ec2 health {instance_id}` 检查状态。"""
+            else:
+                return f"❌ 启动失败: {result.get('error')}"
+        except Exception as e:
+            return f"❌ 启动 EC2 失败: {str(e)}"
+    
+    # EC2 Stop
+    if any(kw in message_lower for kw in ['ec2 stop', 'stop ec2', 'stop instance', '停止实例', '停止 ec2']):
+        if not ops:
+            return "❌ AWS Ops module not available"
+        
+        import re
+        match = re.search(r'(i-[a-f0-9]+)', message)
+        if not match:
+            return """⚠️ **请提供 Instance ID**
+
+用法: `ec2 stop i-xxxxxxxxx`
+
+示例:
+- `ec2 stop i-0abc123def456`
+- `stop instance i-0abc123def456`"""
+        
+        instance_id = match.group(1)
+        try:
+            result = ops.ec2_operations(instance_id, 'stop')
+            if result.get('success'):
+                return f"""🛑 **EC2 Stop 命令已发送**
+
+| 项目 | 值 |
+|------|-----|
+| Instance ID | `{instance_id}` |
+| Action | Stop |
+| Status | 停止中... |
+
+⏳ 实例停止需要 30-60 秒。"""
+            else:
+                return f"❌ 停止失败: {result.get('error')}"
+        except Exception as e:
+            return f"❌ 停止 EC2 失败: {str(e)}"
+    
+    # EC2 Reboot
+    if any(kw in message_lower for kw in ['ec2 reboot', 'reboot ec2', 'reboot instance', '重启实例', '重启 ec2']):
+        if not ops:
+            return "❌ AWS Ops module not available"
+        
+        import re
+        match = re.search(r'(i-[a-f0-9]+)', message)
+        if not match:
+            return """⚠️ **请提供 Instance ID**
+
+用法: `ec2 reboot i-xxxxxxxxx`
+
+示例:
+- `ec2 reboot i-0abc123def456`
+- `reboot instance i-0abc123def456`"""
+        
+        instance_id = match.group(1)
+        try:
+            result = ops.ec2_operations(instance_id, 'reboot')
+            if result.get('success'):
+                return f"""🔄 **EC2 Reboot 命令已发送**
+
+| 项目 | 值 |
+|------|-----|
+| Instance ID | `{instance_id}` |
+| Action | Reboot |
+| Status | 重启中... |
+
+⏳ 实例重启需要 1-2 分钟。"""
+            else:
+                return f"❌ 重启失败: {result.get('error')}"
+        except Exception as e:
+            return f"❌ 重启 EC2 失败: {str(e)}"
     
     # List EC2 instances
     if any(kw in message_lower for kw in ['ec2', 'instance', '实例']):
