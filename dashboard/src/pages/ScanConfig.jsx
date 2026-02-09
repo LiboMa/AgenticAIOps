@@ -359,11 +359,17 @@ function ScanConfig({ apiUrl, onScanComplete }) {
       dataIndex: 'count',
       key: 'count',
       render: (_, record) => {
-        const count = record.data?.count || 
-                     record.data?.instances?.length || 
-                     record.data?.functions?.length || 
-                     record.data?.buckets?.length ||
-                     record.data?.clusters?.length || 0
+        const data = record.data
+        if (record.error) return <Text type="danger">-</Text>
+        const count = data?.count || 
+                     data?.instances?.length || 
+                     data?.functions?.length || 
+                     data?.buckets?.length ||
+                     data?.clusters?.length ||
+                     data?.vpcs?.length ||
+                     data?.load_balancers?.length ||
+                     data?.hosted_zones?.length ||
+                     data?.alarms?.length || 0
         return <Text strong>{count}</Text>
       },
     },
@@ -373,18 +379,38 @@ function ScanConfig({ apiUrl, onScanComplete }) {
       key: 'details',
       render: (_, record) => {
         if (record.error) return <Text type="danger">{record.error}</Text>
-        if (record.data?.status) {
+        const data = record.data
+        
+        // EC2
+        if (data?.status) {
           return (
             <Space>
-              <Tag color="green">Running: {record.data.status.running || 0}</Tag>
-              <Tag color="default">Stopped: {record.data.status.stopped || 0}</Tag>
+              <Tag color="green">Running: {data.status.running || 0}</Tag>
+              <Tag color="default">Stopped: {data.status.stopped || 0}</Tag>
             </Space>
           )
         }
-        if (record.data?.public_count > 0) {
-          return <Tag color="orange">⚠️ {record.data.public_count} 公开访问</Tag>
+        // S3
+        if (data?.public_count > 0) {
+          return <Tag color="orange">⚠️ {data.public_count} 公开访问</Tag>
         }
-        return '-'
+        // ELB
+        if (data?.status?.active !== undefined) {
+          return <Tag color="green">Active: {data.status.active}</Tag>
+        }
+        // IAM
+        if (data?.users_without_mfa?.length > 0) {
+          return <Tag color="orange">⚠️ {data.users_without_mfa.length} 用户无 MFA</Tag>
+        }
+        // CloudWatch
+        if (data?.by_state?.ALARM > 0) {
+          return <Tag color="red">🚨 {data.by_state.ALARM} 告警</Tag>
+        }
+        // Route53
+        if (data?.health_checks_count > 0) {
+          return <Tag color="blue">{data.health_checks_count} Health Checks</Tag>
+        }
+        return <Tag color="green">✅ 正常</Tag>
       },
     },
   ]
@@ -557,6 +583,216 @@ function ScanConfig({ apiUrl, onScanComplete }) {
             rowKey="key"
             size="small"
             pagination={false}
+            expandable={{
+              expandedRowRender: (record) => {
+                const data = record.data
+                if (record.error) return <Text type="danger">{record.error}</Text>
+                
+                // EC2 instances
+                if (record.service === 'ec2' && data.instances) {
+                  return (
+                    <Table
+                      columns={[
+                        { title: 'Instance ID', dataIndex: 'id', key: 'id', render: (text) => <Text copyable>{text}</Text> },
+                        { title: 'Name', dataIndex: 'name', key: 'name' },
+                        { title: 'Type', dataIndex: 'type', key: 'type' },
+                        { title: 'State', dataIndex: 'state', key: 'state', render: (state) => (
+                          <Tag color={state === 'running' ? 'green' : state === 'stopped' ? 'default' : 'orange'}>{state}</Tag>
+                        )},
+                        { title: 'Private IP', dataIndex: 'private_ip', key: 'private_ip' },
+                      ]}
+                      dataSource={data.instances}
+                      rowKey="id"
+                      size="small"
+                      pagination={false}
+                    />
+                  )
+                }
+                
+                // Lambda functions
+                if (record.service === 'lambda' && data.functions) {
+                  return (
+                    <Table
+                      columns={[
+                        { title: 'Function Name', dataIndex: 'name', key: 'name' },
+                        { title: 'Runtime', dataIndex: 'runtime', key: 'runtime' },
+                        { title: 'Memory', dataIndex: 'memory', key: 'memory', render: (m) => `${m} MB` },
+                        { title: 'Timeout', dataIndex: 'timeout', key: 'timeout', render: (t) => `${t}s` },
+                      ]}
+                      dataSource={data.functions}
+                      rowKey="name"
+                      size="small"
+                      pagination={false}
+                    />
+                  )
+                }
+                
+                // S3 buckets
+                if (record.service === 's3' && data.buckets) {
+                  return (
+                    <Table
+                      columns={[
+                        { title: 'Bucket Name', dataIndex: 'name', key: 'name' },
+                        { title: 'Public', dataIndex: 'public', key: 'public', render: (p) => (
+                          p ? <Tag color="orange">⚠️ Public</Tag> : <Tag color="green">Private</Tag>
+                        )},
+                      ]}
+                      dataSource={data.buckets}
+                      rowKey="name"
+                      size="small"
+                      pagination={false}
+                    />
+                  )
+                }
+                
+                // RDS instances
+                if (record.service === 'rds' && data.instances) {
+                  return (
+                    <Table
+                      columns={[
+                        { title: 'DB Identifier', dataIndex: 'id', key: 'id' },
+                        { title: 'Engine', dataIndex: 'engine', key: 'engine' },
+                        { title: 'Class', dataIndex: 'class', key: 'class' },
+                        { title: 'Status', dataIndex: 'status', key: 'status', render: (s) => (
+                          <Tag color={s === 'available' ? 'green' : 'orange'}>{s}</Tag>
+                        )},
+                        { title: 'Public', dataIndex: 'public', key: 'public', render: (p) => (
+                          p ? <Tag color="orange">⚠️ Yes</Tag> : <Tag>No</Tag>
+                        )},
+                      ]}
+                      dataSource={data.instances}
+                      rowKey="id"
+                      size="small"
+                      pagination={false}
+                    />
+                  )
+                }
+                
+                // VPC
+                if (record.service === 'vpc' && data.vpcs) {
+                  return (
+                    <Table
+                      columns={[
+                        { title: 'VPC ID', dataIndex: 'id', key: 'id', render: (text) => <Text copyable>{text}</Text> },
+                        { title: 'Name', dataIndex: 'name', key: 'name' },
+                        { title: 'CIDR', dataIndex: 'cidr', key: 'cidr' },
+                        { title: 'State', dataIndex: 'state', key: 'state' },
+                        { title: 'Default', dataIndex: 'is_default', key: 'is_default', render: (d) => d ? '✅' : '' },
+                      ]}
+                      dataSource={data.vpcs}
+                      rowKey="id"
+                      size="small"
+                      pagination={false}
+                    />
+                  )
+                }
+                
+                // ELB
+                if (record.service === 'elb' && data.load_balancers) {
+                  return (
+                    <Table
+                      columns={[
+                        { title: 'Name', dataIndex: 'name', key: 'name' },
+                        { title: 'Type', dataIndex: 'type', key: 'type' },
+                        { title: 'Scheme', dataIndex: 'scheme', key: 'scheme' },
+                        { title: 'State', dataIndex: 'state', key: 'state', render: (s) => (
+                          <Tag color={s === 'active' ? 'green' : 'orange'}>{s}</Tag>
+                        )},
+                        { title: 'DNS', dataIndex: 'dns_name', key: 'dns_name', ellipsis: true },
+                      ]}
+                      dataSource={data.load_balancers}
+                      rowKey="name"
+                      size="small"
+                      pagination={false}
+                    />
+                  )
+                }
+                
+                // EKS
+                if (record.service === 'eks' && data.clusters) {
+                  return (
+                    <Table
+                      columns={[
+                        { title: 'Cluster Name', dataIndex: 'name', key: 'name' },
+                        { title: 'Version', dataIndex: 'version', key: 'version' },
+                        { title: 'Status', dataIndex: 'status', key: 'status', render: (s) => (
+                          <Tag color={s === 'ACTIVE' ? 'green' : 'orange'}>{s}</Tag>
+                        )},
+                      ]}
+                      dataSource={data.clusters}
+                      rowKey="name"
+                      size="small"
+                      pagination={false}
+                    />
+                  )
+                }
+                
+                // IAM
+                if (record.service === 'iam') {
+                  return (
+                    <Space direction="vertical" style={{ width: '100%' }}>
+                      <div><Text strong>Users:</Text> {data.users_count || 0}</div>
+                      <div><Text strong>Roles:</Text> {data.roles_count || 0}</div>
+                      {data.users_without_mfa?.length > 0 && (
+                        <div>
+                          <Text type="danger" strong>⚠️ Users without MFA:</Text>
+                          {data.users_without_mfa.map((u, i) => <Tag key={i} color="orange">{u}</Tag>)}
+                        </div>
+                      )}
+                    </Space>
+                  )
+                }
+                
+                // Route53
+                if (record.service === 'route53' && data.hosted_zones) {
+                  return (
+                    <Table
+                      columns={[
+                        { title: 'Zone ID', dataIndex: 'id', key: 'id' },
+                        { title: 'Name', dataIndex: 'name', key: 'name' },
+                        { title: 'Private', dataIndex: 'private', key: 'private', render: (p) => p ? '✅' : '' },
+                        { title: 'Records', dataIndex: 'record_count', key: 'record_count' },
+                      ]}
+                      dataSource={data.hosted_zones}
+                      rowKey="id"
+                      size="small"
+                      pagination={false}
+                    />
+                  )
+                }
+                
+                // CloudWatch
+                if (record.service === 'cloudwatch' && data.alarms) {
+                  return (
+                    <div>
+                      <Space style={{ marginBottom: 8 }}>
+                        <Tag color="green">OK: {data.by_state?.OK || 0}</Tag>
+                        <Tag color="red">ALARM: {data.by_state?.ALARM || 0}</Tag>
+                        <Tag color="default">Insufficient: {data.by_state?.INSUFFICIENT_DATA || 0}</Tag>
+                      </Space>
+                      <Table
+                        columns={[
+                          { title: 'Alarm Name', dataIndex: 'name', key: 'name' },
+                          { title: 'State', dataIndex: 'state', key: 'state', render: (s) => (
+                            <Tag color={s === 'OK' ? 'green' : s === 'ALARM' ? 'red' : 'default'}>{s}</Tag>
+                          )},
+                          { title: 'Metric', dataIndex: 'metric', key: 'metric' },
+                          { title: 'Namespace', dataIndex: 'namespace', key: 'namespace' },
+                        ]}
+                        dataSource={data.alarms}
+                        rowKey="name"
+                        size="small"
+                        pagination={false}
+                      />
+                    </div>
+                  )
+                }
+                
+                // Default: show JSON
+                return <pre style={{ fontSize: 12, maxHeight: 200, overflow: 'auto' }}>{JSON.stringify(data, null, 2)}</pre>
+              },
+              rowExpandable: (record) => !record.error,
+            }}
           />
         </Card>
       )}
