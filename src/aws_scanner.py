@@ -128,6 +128,8 @@ class AWSCloudScanner:
             ("vpc", self._scan_vpc),
             ("elb", self._scan_elb),
             ("route53", self._scan_route53),
+            ("dynamodb", self._scan_dynamodb),
+            ("ecs", self._scan_ecs),
             ("eks", self._scan_eks),
             ("cloudwatch", self._scan_cloudwatch_alarms),
         ]
@@ -394,6 +396,69 @@ class AWSCloudScanner:
                 "count": len(zones),
                 "health_checks_count": len(health_response.get('HealthChecks', [])),
                 "hosted_zones": zones,
+            }
+        except ClientError as e:
+            return {"error": str(e)}
+    
+    def _scan_dynamodb(self) -> Dict[str, Any]:
+        """Scan DynamoDB tables."""
+        dynamodb = self._get_client('dynamodb')
+        
+        try:
+            response = dynamodb.list_tables()
+            table_names = response.get('TableNames', [])
+            tables = []
+            
+            for tname in table_names[:30]:
+                try:
+                    table = dynamodb.describe_table(TableName=tname)['Table']
+                    billing_mode = table.get('BillingModeSummary', {}).get('BillingMode', 'PROVISIONED')
+                    throughput = table.get('ProvisionedThroughput', {})
+                    
+                    tables.append({
+                        "name": tname,
+                        "status": table.get('TableStatus', 'UNKNOWN'),
+                        "billing_mode": billing_mode,
+                        "read_capacity": throughput.get('ReadCapacityUnits', 0),
+                        "write_capacity": throughput.get('WriteCapacityUnits', 0),
+                        "item_count": table.get('ItemCount', 0),
+                    })
+                except:
+                    tables.append({"name": tname, "status": "ERROR"})
+            
+            return {
+                "count": len(table_names),
+                "tables": tables,
+            }
+        except ClientError as e:
+            return {"error": str(e)}
+    
+    def _scan_ecs(self) -> Dict[str, Any]:
+        """Scan ECS clusters."""
+        ecs = self._get_client('ecs')
+        
+        try:
+            response = ecs.list_clusters()
+            cluster_arns = response.get('clusterArns', [])
+            
+            if not cluster_arns:
+                return {"count": 0, "clusters": []}
+            
+            clusters_response = ecs.describe_clusters(clusters=cluster_arns)
+            clusters = []
+            
+            for cluster in clusters_response.get('clusters', []):
+                clusters.append({
+                    "name": cluster['clusterName'],
+                    "status": cluster.get('status', 'UNKNOWN'),
+                    "running_tasks": cluster.get('runningTasksCount', 0),
+                    "pending_tasks": cluster.get('pendingTasksCount', 0),
+                    "active_services": cluster.get('activeServicesCount', 0),
+                })
+            
+            return {
+                "count": len(clusters),
+                "clusters": clusters,
             }
         except ClientError as e:
             return {"error": str(e)}

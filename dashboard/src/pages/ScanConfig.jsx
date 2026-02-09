@@ -15,7 +15,7 @@ const { Title, Text, Paragraph } = Typography
 const { Option } = Select
 
 // Services that are currently supported (can be selected and scanned)
-const SUPPORTED_SERVICES = ['ec2', 'lambda', 'eks', 's3', 'rds', 'iam', 'cloudwatch', 'vpc', 'elb', 'route53']
+const SUPPORTED_SERVICES = ['ec2', 'lambda', 'eks', 's3', 'rds', 'iam', 'cloudwatch', 'vpc', 'elb', 'route53', 'dynamodb', 'ecs']
 
 // Service to category mapping
 const SERVICE_CATEGORY_MAP = {
@@ -701,6 +701,49 @@ function ScanConfig({ apiUrl, onScanComplete }) {
                         { title: 'DNS', dataIndex: 'dns_name', key: 'dns_name', ellipsis: true },
                       ]}
                       dataSource={data.load_balancers}
+                      rowKey="name"
+                      size="small"
+                      pagination={false}
+                    />
+                  )
+                }
+                
+                // DynamoDB
+                if (record.service === 'dynamodb' && data.tables) {
+                  return (
+                    <Table
+                      columns={[
+                        { title: 'Table Name', dataIndex: 'name', key: 'name' },
+                        { title: 'Status', dataIndex: 'status', key: 'status', render: (s) => (
+                          <Tag color={s === 'ACTIVE' ? 'green' : 'orange'}>{s}</Tag>
+                        )},
+                        { title: 'Billing', dataIndex: 'billing_mode', key: 'billing_mode' },
+                        { title: 'RCU', dataIndex: 'read_capacity', key: 'read_capacity' },
+                        { title: 'WCU', dataIndex: 'write_capacity', key: 'write_capacity' },
+                        { title: 'Items', dataIndex: 'item_count', key: 'item_count' },
+                      ]}
+                      dataSource={data.tables}
+                      rowKey="name"
+                      size="small"
+                      pagination={false}
+                    />
+                  )
+                }
+                
+                // ECS
+                if (record.service === 'ecs' && data.clusters) {
+                  return (
+                    <Table
+                      columns={[
+                        { title: 'Cluster', dataIndex: 'name', key: 'name' },
+                        { title: 'Status', dataIndex: 'status', key: 'status', render: (s) => (
+                          <Tag color={s === 'ACTIVE' ? 'green' : 'orange'}>{s}</Tag>
+                        )},
+                        { title: 'Running Tasks', dataIndex: 'running_tasks', key: 'running_tasks' },
+                        { title: 'Pending Tasks', dataIndex: 'pending_tasks', key: 'pending_tasks' },
+                        { title: 'Services', dataIndex: 'active_services', key: 'active_services' },
+                      ]}
+                      dataSource={data.clusters}
                       rowKey="name"
                       size="small"
                       pagination={false}

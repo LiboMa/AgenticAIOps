@@ -301,7 +301,7 @@ async def handle_aws_chat_intent(message: str) -> Optional[str]:
     # Help Command
     # ===========================================
     if any(kw in message_lower for kw in ['help', 'commands', '帮助', '命令']):
-        return """📚 **AgenticAIOps Chat Commands**
+        return f"""📚 **AgenticAIOps Chat Commands**
 
 **🔍 资源查询:**
 | Command | Description |
@@ -310,6 +310,8 @@ async def handle_aws_chat_intent(message: str) -> Optional[str]:
 | `lambda` | 列出 Lambda 函数 |
 | `s3` | 列出 S3 存储桶 |
 | `rds` | 列出 RDS 数据库 |
+| `dynamodb` | 列出 DynamoDB 表 |
+| `ecs` | 列出 ECS 集群 |
 | `vpc` | 列出 VPCs |
 | `elb` | 列出负载均衡器 |
 | `scan` | 扫描所有资源 |
@@ -321,6 +323,8 @@ async def handle_aws_chat_intent(message: str) -> Optional[str]:
 | `rds health` | RDS 健康检查 |
 | `lambda health` | Lambda 健康检查 |
 | `s3 health` | S3 健康检查 |
+| `dynamodb health` | DynamoDB 健康检查 |
+| `ecs health` | ECS 健康检查 |
 | `vpc health` | VPC 健康检查 |
 | `elb health` | ELB 健康检查 |
 | `route53 health` | Route53 健康检查 |
@@ -347,7 +351,7 @@ async def handle_aws_chat_intent(message: str) -> Optional[str]:
 | `account` | AWS 账号信息 |
 | `region us-east-1` | 切换 Region |
 
-当前 Region: **{_current_region}**"""
+当前 Region: **{_current_region}** | 支持服务: **12**"""
     
     # ===========================================
     # Health Check Commands
@@ -994,6 +998,97 @@ Total: {data['count']} | Active: {data.get('status', {}).get('active', 0)}
             return response
         except Exception as e:
             return f"❌ Route53 健康检查失败: {str(e)}"
+    
+    # ===========================================
+    # DynamoDB Commands
+    # ===========================================
+    
+    # DynamoDB Health Check
+    if any(kw in message_lower for kw in ['dynamodb health', 'ddb health', 'dynamo health']):
+        if not ops:
+            return "❌ AWS Ops module not available"
+        try:
+            health = ops.dynamodb_health_check()
+            response = f"""🏥 **DynamoDB 健康检查** (Region: {_current_region})
+
+**整体状态:** {'✅ Healthy' if health['overall_status'] == 'healthy' else '⚠️ ' + health['overall_status'].upper()}
+
+| Table | Status | Billing | RCU | WCU | Items | Issues |
+|-------|--------|---------|-----|-----|-------|--------|"""
+            
+            for table in health.get('tables', [])[:10]:
+                health_icon = "✅" if table['health'] == 'healthy' else "⚠️"
+                issues_str = ", ".join(table.get('issues', [])[:2]) or "None"
+                response += f"\n| {table['name'][:15]} | {table['status']} | {table['billing_mode'][:10]} | {table['read_capacity']} | {table['write_capacity']} | {table['item_count']} | {issues_str[:15]} |"
+            
+            return response
+        except Exception as e:
+            return f"❌ DynamoDB 健康检查失败: {str(e)}"
+    
+    # List DynamoDB tables
+    if any(kw in message_lower for kw in ['dynamodb', 'ddb', 'dynamo', '表']):
+        try:
+            data = scanner._scan_dynamodb()
+            response = f"""📊 **DynamoDB Tables** (Region: {_current_region})
+
+Total: {data['count']}
+
+| Table | Status | Billing | RCU | WCU | Items |
+|-------|--------|---------|-----|-----|-------|"""
+            
+            for table in data.get('tables', [])[:15]:
+                response += f"\n| {table['name'][:20]} | {table['status']} | {table.get('billing_mode', 'N/A')[:10]} | {table.get('read_capacity', 0)} | {table.get('write_capacity', 0)} | {table.get('item_count', 0)} |"
+            
+            if data['count'] > 15:
+                response += f"\n\n... 还有 {data['count'] - 15} 个表"
+            
+            return response
+        except Exception as e:
+            return f"❌ 获取 DynamoDB 失败: {str(e)}"
+    
+    # ===========================================
+    # ECS Commands
+    # ===========================================
+    
+    # ECS Health Check
+    if any(kw in message_lower for kw in ['ecs health', 'container health']):
+        if not ops:
+            return "❌ AWS Ops module not available"
+        try:
+            health = ops.ecs_health_check()
+            response = f"""🏥 **ECS 健康检查** (Region: {_current_region})
+
+**整体状态:** {'✅ Healthy' if health['overall_status'] == 'healthy' else '⚠️ ' + health['overall_status'].upper()}
+
+| Cluster | Status | Running | Pending | Services | Issues |
+|---------|--------|---------|---------|----------|--------|"""
+            
+            for cluster in health.get('clusters', [])[:10]:
+                health_icon = "✅" if cluster['health'] == 'healthy' else "⚠️"
+                issues_str = ", ".join(cluster.get('issues', [])[:2]) or "None"
+                response += f"\n| {cluster['name'][:15]} | {cluster['status']} | {cluster['running_tasks']} | {cluster['pending_tasks']} | {cluster['active_services']} | {issues_str[:15]} |"
+            
+            return response
+        except Exception as e:
+            return f"❌ ECS 健康检查失败: {str(e)}"
+    
+    # List ECS clusters
+    if any(kw in message_lower for kw in ['ecs', 'container', '容器']):
+        try:
+            data = scanner._scan_ecs()
+            response = f"""🐳 **ECS Clusters** (Region: {_current_region})
+
+Total: {data['count']}
+
+| Cluster | Status | Running | Pending | Services |
+|---------|--------|---------|---------|----------|"""
+            
+            for cluster in data.get('clusters', [])[:10]:
+                response += f"\n| {cluster['name'][:20]} | {cluster['status']} | {cluster['running_tasks']} | {cluster['pending_tasks']} | {cluster['active_services']} |"
+            
+            return response
+        except Exception as e:
+            return f"❌ 获取 ECS 失败: {str(e)}"
     
     # Account info
     if any(kw in message_lower for kw in ['account', '账号', '账户', 'who am i']):

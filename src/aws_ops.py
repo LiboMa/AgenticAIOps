@@ -1212,6 +1212,308 @@ class AWSServiceOps:
             }
         except ClientError as e:
             return {"error": str(e)}
+    
+    # =========================================================================
+    # DynamoDB Operations
+    # =========================================================================
+    
+    def dynamodb_health_check(self, table_name: Optional[str] = None) -> Dict[str, Any]:
+        """
+        DynamoDB health check.
+        
+        Checks:
+        - Table status
+        - Read/Write capacity
+        - Item count
+        - CloudWatch metrics (throttling, errors)
+        """
+        dynamodb = self._get_client('dynamodb')
+        
+        results = {
+            "service": "DynamoDB",
+            "checked_at": datetime.utcnow().isoformat(),
+            "overall_status": "healthy",
+            "tables": [],
+            "issues": [],
+        }
+        
+        try:
+            if table_name:
+                table_names = [table_name]
+            else:
+                response = dynamodb.list_tables()
+                table_names = response.get('TableNames', [])
+            
+            for tname in table_names[:20]:  # Limit to 20 tables
+                try:
+                    table = dynamodb.describe_table(TableName=tname)['Table']
+                    status = table.get('TableStatus', 'UNKNOWN')
+                    
+                    health = "healthy"
+                    issues = []
+                    
+                    if status != 'ACTIVE':
+                        health = "warning" if status in ['CREATING', 'UPDATING'] else "unhealthy"
+                        issues.append(f"Table status: {status}")
+                    
+                    # Get capacity info
+                    billing_mode = table.get('BillingModeSummary', {}).get('BillingMode', 'PROVISIONED')
+                    throughput = table.get('ProvisionedThroughput', {})
+                    read_capacity = throughput.get('ReadCapacityUnits', 0)
+                    write_capacity = throughput.get('WriteCapacityUnits', 0)
+                    
+                    # Get CloudWatch metrics (throttling)
+                    throttle_reads = self._get_metric_stats(
+                        'AWS/DynamoDB', 'ReadThrottleEvents',
+                        [{'Name': 'TableName', 'Value': tname}],
+                        minutes=60
+                    )
+                    throttle_writes = self._get_metric_stats(
+                        'AWS/DynamoDB', 'WriteThrottleEvents',
+                        [{'Name': 'TableName', 'Value': tname}],
+                        minutes=60
+                    )
+                    
+                    if throttle_reads.get('sum', 0) > 0:
+                        issues.append(f"Read throttles: {throttle_reads['sum']}")
+                        if health == "healthy":
+                            health = "warning"
+                    
+                    if throttle_writes.get('sum', 0) > 0:
+                        issues.append(f"Write throttles: {throttle_writes['sum']}")
+                        if health == "healthy":
+                            health = "warning"
+                    
+                    table_health = {
+                        "name": tname,
+                        "status": status,
+                        "health": health,
+                        "billing_mode": billing_mode,
+                        "read_capacity": read_capacity,
+                        "write_capacity": write_capacity,
+                        "item_count": table.get('ItemCount', 0),
+                        "size_bytes": table.get('TableSizeBytes', 0),
+                        "issues": issues,
+                    }
+                    
+                    results["tables"].append(table_health)
+                    
+                    if issues:
+                        results["issues"].extend([{
+                            "resource": tname,
+                            "issue": issue
+                        } for issue in issues])
+                        
+                except Exception as e:
+                    results["tables"].append({
+                        "name": tname,
+                        "health": "error",
+                        "issues": [str(e)],
+                    })
+            
+            # Overall status
+            if any(t["health"] == "unhealthy" for t in results["tables"]):
+                results["overall_status"] = "unhealthy"
+            elif any(t["health"] == "warning" for t in results["tables"]):
+                results["overall_status"] = "warning"
+            
+            return results
+            
+        except ClientError as e:
+            return {"error": str(e), "overall_status": "error"}
+    
+    def dynamodb_scan(self) -> Dict[str, Any]:
+        """Scan all DynamoDB tables."""
+        dynamodb = self._get_client('dynamodb')
+        
+        try:
+            response = dynamodb.list_tables()
+            table_names = response.get('TableNames', [])
+            tables = []
+            
+            for tname in table_names[:30]:  # Limit to 30 tables
+                try:
+                    table = dynamodb.describe_table(TableName=tname)['Table']
+                    billing_mode = table.get('BillingModeSummary', {}).get('BillingMode', 'PROVISIONED')
+                    throughput = table.get('ProvisionedThroughput', {})
+                    
+                    tables.append({
+                        "name": tname,
+                        "status": table.get('TableStatus', 'UNKNOWN'),
+                        "billing_mode": billing_mode,
+                        "read_capacity": throughput.get('ReadCapacityUnits', 0),
+                        "write_capacity": throughput.get('WriteCapacityUnits', 0),
+                        "item_count": table.get('ItemCount', 0),
+                    })
+                except:
+                    tables.append({"name": tname, "status": "ERROR"})
+            
+            return {
+                "count": len(table_names),
+                "tables": tables,
+            }
+        except ClientError as e:
+            return {"error": str(e)}
+    
+    def dynamodb_get_metrics(self, table_name: str, hours: int = 1) -> Dict[str, Any]:
+        """Get DynamoDB table metrics from CloudWatch."""
+        metrics_to_fetch = [
+            'ConsumedReadCapacityUnits',
+            'ConsumedWriteCapacityUnits',
+            'ReadThrottleEvents',
+            'WriteThrottleEvents',
+            'SuccessfulRequestLatency',
+        ]
+        
+        results = {
+            "table_name": table_name,
+            "period_hours": hours,
+            "metrics": {},
+        }
+        
+        for metric in metrics_to_fetch:
+            try:
+                data = self._get_metric_stats(
+                    'AWS/DynamoDB', metric,
+                    [{'Name': 'TableName', 'Value': table_name}],
+                    minutes=hours * 60
+                )
+                results["metrics"][metric] = data
+            except:
+                pass
+        
+        return results
+    
+    # =========================================================================
+    # ECS Operations
+    # =========================================================================
+    
+    def ecs_health_check(self, cluster_name: Optional[str] = None) -> Dict[str, Any]:
+        """
+        ECS health check.
+        
+        Checks:
+        - Cluster status
+        - Service health
+        - Running/Desired task count
+        - Container instance health
+        """
+        ecs = self._get_client('ecs')
+        
+        results = {
+            "service": "ECS",
+            "checked_at": datetime.utcnow().isoformat(),
+            "overall_status": "healthy",
+            "clusters": [],
+            "issues": [],
+        }
+        
+        try:
+            if cluster_name:
+                cluster_arns = [cluster_name]
+            else:
+                response = ecs.list_clusters()
+                cluster_arns = response.get('clusterArns', [])
+            
+            if not cluster_arns:
+                return results
+            
+            # Describe clusters
+            clusters_response = ecs.describe_clusters(clusters=cluster_arns)
+            
+            for cluster in clusters_response.get('clusters', []):
+                cname = cluster['clusterName']
+                status = cluster.get('status', 'UNKNOWN')
+                
+                health = "healthy"
+                issues = []
+                
+                if status != 'ACTIVE':
+                    health = "unhealthy"
+                    issues.append(f"Cluster status: {status}")
+                
+                running_tasks = cluster.get('runningTasksCount', 0)
+                pending_tasks = cluster.get('pendingTasksCount', 0)
+                active_services = cluster.get('activeServicesCount', 0)
+                
+                # Check services in cluster
+                services_response = ecs.list_services(cluster=cname)
+                service_arns = services_response.get('serviceArns', [])
+                
+                unhealthy_services = 0
+                if service_arns:
+                    services_detail = ecs.describe_services(
+                        cluster=cname,
+                        services=service_arns[:10]  # Limit to 10 services
+                    )
+                    for svc in services_detail.get('services', []):
+                        desired = svc.get('desiredCount', 0)
+                        running = svc.get('runningCount', 0)
+                        if desired > 0 and running < desired:
+                            unhealthy_services += 1
+                            issues.append(f"Service {svc['serviceName']}: {running}/{desired} tasks")
+                            if health == "healthy":
+                                health = "warning"
+                
+                cluster_health = {
+                    "name": cname,
+                    "status": status,
+                    "health": health,
+                    "running_tasks": running_tasks,
+                    "pending_tasks": pending_tasks,
+                    "active_services": active_services,
+                    "unhealthy_services": unhealthy_services,
+                    "issues": issues,
+                }
+                
+                results["clusters"].append(cluster_health)
+                
+                if issues:
+                    results["issues"].extend([{
+                        "resource": cname,
+                        "issue": issue
+                    } for issue in issues])
+            
+            # Overall status
+            if any(c["health"] == "unhealthy" for c in results["clusters"]):
+                results["overall_status"] = "unhealthy"
+            elif any(c["health"] == "warning" for c in results["clusters"]):
+                results["overall_status"] = "warning"
+            
+            return results
+            
+        except ClientError as e:
+            return {"error": str(e), "overall_status": "error"}
+    
+    def ecs_scan(self) -> Dict[str, Any]:
+        """Scan all ECS clusters."""
+        ecs = self._get_client('ecs')
+        
+        try:
+            response = ecs.list_clusters()
+            cluster_arns = response.get('clusterArns', [])
+            
+            if not cluster_arns:
+                return {"count": 0, "clusters": []}
+            
+            clusters_response = ecs.describe_clusters(clusters=cluster_arns)
+            clusters = []
+            
+            for cluster in clusters_response.get('clusters', []):
+                clusters.append({
+                    "name": cluster['clusterName'],
+                    "status": cluster.get('status', 'UNKNOWN'),
+                    "running_tasks": cluster.get('runningTasksCount', 0),
+                    "pending_tasks": cluster.get('pendingTasksCount', 0),
+                    "active_services": cluster.get('activeServicesCount', 0),
+                })
+            
+            return {
+                "count": len(clusters),
+                "clusters": clusters,
+            }
+        except ClientError as e:
+            return {"error": str(e)}
 
 
 # Singleton instance
