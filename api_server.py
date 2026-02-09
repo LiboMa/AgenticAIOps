@@ -312,6 +312,7 @@ async def handle_aws_chat_intent(message: str) -> Optional[str]:
 | `rds` | 列出 RDS 数据库 |
 | `dynamodb` | 列出 DynamoDB 表 |
 | `ecs` | 列出 ECS 集群 |
+| `elasticache` | 列出 ElastiCache 集群 |
 | `vpc` | 列出 VPCs |
 | `elb` | 列出负载均衡器 |
 | `scan` | 扫描所有资源 |
@@ -325,6 +326,7 @@ async def handle_aws_chat_intent(message: str) -> Optional[str]:
 | `s3 health` | S3 健康检查 |
 | `dynamodb health` | DynamoDB 健康检查 |
 | `ecs health` | ECS 健康检查 |
+| `elasticache health` | ElastiCache 健康检查 |
 | `vpc health` | VPC 健康检查 |
 | `elb health` | ELB 健康检查 |
 | `route53 health` | Route53 健康检查 |
@@ -351,7 +353,7 @@ async def handle_aws_chat_intent(message: str) -> Optional[str]:
 | `account` | AWS 账号信息 |
 | `region us-east-1` | 切换 Region |
 
-当前 Region: **{_current_region}** | 支持服务: **12**"""
+当前 Region: **{_current_region}** | 支持服务: **13**"""
     
     # ===========================================
     # Health Check Commands
@@ -1095,6 +1097,56 @@ Total: {data['count']}
             return response
         except Exception as e:
             return f"❌ 获取 ECS 失败: {str(e)}"
+    
+    # ===========================================
+    # ElastiCache Commands
+    # ===========================================
+    
+    # ElastiCache Health Check
+    if any(kw in message_lower for kw in ['elasticache health', 'cache health', 'redis health', 'memcached health']):
+        if not ops:
+            return "❌ AWS Ops module not available"
+        try:
+            health = ops.elasticache_health_check()
+            if health.get('error'):
+                return f"⚠️ **ElastiCache 访问受限**\n\n{health['error']}"
+            
+            response = f"""🏥 **ElastiCache 健康检查** (Region: {_current_region})
+
+**整体状态:** {'✅ Healthy' if health['overall_status'] == 'healthy' else '⚠️ ' + health['overall_status'].upper()}
+
+| Cluster | Engine | Status | Nodes | Hit Ratio | Issues |
+|---------|--------|--------|-------|-----------|--------|"""
+            
+            for cluster in health.get('clusters', [])[:10]:
+                health_icon = "✅" if cluster['health'] == 'healthy' else "⚠️"
+                issues_str = ", ".join(cluster.get('issues', [])[:2]) or "None"
+                response += f"\n| {cluster['id'][:15]} | {cluster['engine']} | {cluster['status']} | {cluster.get('num_nodes', 0)} | {cluster.get('hit_ratio', '-')}% | {issues_str[:15]} |"
+            
+            return response
+        except Exception as e:
+            return f"❌ ElastiCache 健康检查失败: {str(e)}"
+    
+    # List ElastiCache clusters
+    if any(kw in message_lower for kw in ['elasticache', 'cache', 'redis', 'memcached', '缓存']):
+        try:
+            data = scanner._scan_elasticache()
+            if data.get('error'):
+                return f"⚠️ **ElastiCache 访问受限**\n\n{data['error']}\n\n*需要 IAM 权限: elasticache:DescribeCacheClusters*"
+            
+            response = f"""🗄️ **ElastiCache Clusters** (Region: {_current_region})
+
+Total: {data['count']}
+
+| Cluster | Engine | Version | Status | Type | Nodes |
+|---------|--------|---------|--------|------|-------|"""
+            
+            for cluster in data.get('clusters', [])[:10]:
+                response += f"\n| {cluster['id'][:15]} | {cluster['engine']} | {cluster.get('engine_version', '-')} | {cluster['status']} | {cluster.get('node_type', cluster.get('type', '-'))} | {cluster.get('num_nodes', 0)} |"
+            
+            return response
+        except Exception as e:
+            return f"❌ 获取 ElastiCache 失败: {str(e)}"
     
     # Account info
     if any(kw in message_lower for kw in ['account', '账号', '账户', 'who am i']):

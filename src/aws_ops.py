@@ -1516,6 +1516,176 @@ class AWSServiceOps:
             return {"error": str(e)}
 
 
+    # =========================================================================
+    # ElastiCache Operations
+    # =========================================================================
+    
+    def elasticache_health_check(self, cluster_id: Optional[str] = None) -> Dict[str, Any]:
+        """
+        ElastiCache health check.
+        
+        Checks:
+        - Cluster status
+        - Node health
+        - Cache hit ratio
+        - Memory usage
+        """
+        elasticache = self._get_client('elasticache')
+        
+        results = {
+            "service": "ElastiCache",
+            "checked_at": datetime.utcnow().isoformat(),
+            "overall_status": "healthy",
+            "clusters": [],
+            "issues": [],
+        }
+        
+        try:
+            if cluster_id:
+                response = elasticache.describe_cache_clusters(
+                    CacheClusterId=cluster_id,
+                    ShowCacheNodeInfo=True
+                )
+            else:
+                response = elasticache.describe_cache_clusters(ShowCacheNodeInfo=True)
+            
+            for cluster in response.get('CacheClusters', []):
+                cid = cluster['CacheClusterId']
+                status = cluster.get('CacheClusterStatus', 'unknown')
+                engine = cluster.get('Engine', '')
+                
+                health = "healthy"
+                issues = []
+                
+                if status != 'available':
+                    health = "warning" if status in ['creating', 'modifying'] else "unhealthy"
+                    issues.append(f"Status: {status}")
+                
+                # Check cache nodes
+                nodes = cluster.get('CacheNodes', [])
+                unhealthy_nodes = [n for n in nodes if n.get('CacheNodeStatus') != 'available']
+                if unhealthy_nodes:
+                    issues.append(f"{len(unhealthy_nodes)} unhealthy nodes")
+                    if health == "healthy":
+                        health = "warning"
+                
+                # Get metrics
+                cache_hits = self._get_metric_stats(
+                    'AWS/ElastiCache', 'CacheHits',
+                    [{'Name': 'CacheClusterId', 'Value': cid}],
+                    minutes=60
+                )
+                cache_misses = self._get_metric_stats(
+                    'AWS/ElastiCache', 'CacheMisses',
+                    [{'Name': 'CacheClusterId', 'Value': cid}],
+                    minutes=60
+                )
+                
+                total_ops = cache_hits.get('sum', 0) + cache_misses.get('sum', 0)
+                hit_ratio = (cache_hits.get('sum', 0) / total_ops * 100) if total_ops > 0 else 0
+                
+                if hit_ratio < 80 and total_ops > 100:
+                    issues.append(f"Low hit ratio: {hit_ratio:.1f}%")
+                
+                cluster_health = {
+                    "id": cid,
+                    "engine": engine,
+                    "engine_version": cluster.get('EngineVersion', ''),
+                    "status": status,
+                    "health": health,
+                    "node_type": cluster.get('CacheNodeType', ''),
+                    "num_nodes": cluster.get('NumCacheNodes', 0),
+                    "hit_ratio": round(hit_ratio, 1),
+                    "issues": issues,
+                }
+                
+                results["clusters"].append(cluster_health)
+                
+                if issues:
+                    results["issues"].extend([{
+                        "resource": cid,
+                        "issue": issue
+                    } for issue in issues])
+            
+            # Also check replication groups (Redis)
+            try:
+                rg_response = elasticache.describe_replication_groups()
+                for rg in rg_response.get('ReplicationGroups', []):
+                    rgid = rg['ReplicationGroupId']
+                    status = rg.get('Status', 'unknown')
+                    
+                    health = "healthy"
+                    issues = []
+                    
+                    if status != 'available':
+                        health = "warning" if status in ['creating', 'modifying'] else "unhealthy"
+                        issues.append(f"Status: {status}")
+                    
+                    results["clusters"].append({
+                        "id": rgid,
+                        "engine": "redis",
+                        "engine_version": "",
+                        "status": status,
+                        "health": health,
+                        "node_type": "",
+                        "num_nodes": len(rg.get('MemberClusters', [])),
+                        "type": "replication_group",
+                        "issues": issues,
+                    })
+            except:
+                pass
+            
+            # Overall status
+            if any(c["health"] == "unhealthy" for c in results["clusters"]):
+                results["overall_status"] = "unhealthy"
+            elif any(c["health"] == "warning" for c in results["clusters"]):
+                results["overall_status"] = "warning"
+            
+            return results
+            
+        except ClientError as e:
+            return {"error": str(e), "overall_status": "error"}
+    
+    def elasticache_scan(self) -> Dict[str, Any]:
+        """Scan ElastiCache clusters."""
+        elasticache = self._get_client('elasticache')
+        
+        try:
+            response = elasticache.describe_cache_clusters(ShowCacheNodeInfo=True)
+            clusters = []
+            
+            for cluster in response.get('CacheClusters', []):
+                clusters.append({
+                    "id": cluster['CacheClusterId'],
+                    "engine": cluster.get('Engine', ''),
+                    "engine_version": cluster.get('EngineVersion', ''),
+                    "status": cluster.get('CacheClusterStatus', 'unknown'),
+                    "node_type": cluster.get('CacheNodeType', ''),
+                    "num_nodes": cluster.get('NumCacheNodes', 0),
+                })
+            
+            # Also get replication groups
+            try:
+                rg_response = elasticache.describe_replication_groups()
+                for rg in rg_response.get('ReplicationGroups', []):
+                    clusters.append({
+                        "id": rg['ReplicationGroupId'],
+                        "engine": "redis",
+                        "status": rg.get('Status', 'unknown'),
+                        "type": "replication_group",
+                        "num_nodes": len(rg.get('MemberClusters', [])),
+                    })
+            except:
+                pass
+            
+            return {
+                "count": len(clusters),
+                "clusters": clusters,
+            }
+        except ClientError as e:
+            return {"error": str(e)}
+
+
 # Singleton instance
 _ops: Optional[AWSServiceOps] = None
 

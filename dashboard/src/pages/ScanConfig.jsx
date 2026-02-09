@@ -15,7 +15,7 @@ const { Title, Text, Paragraph } = Typography
 const { Option } = Select
 
 // Services that are currently supported (can be selected and scanned)
-const SUPPORTED_SERVICES = ['ec2', 'lambda', 'eks', 's3', 'rds', 'iam', 'cloudwatch', 'vpc', 'elb', 'route53', 'dynamodb', 'ecs']
+const SUPPORTED_SERVICES = ['ec2', 'lambda', 'eks', 's3', 'rds', 'iam', 'cloudwatch', 'vpc', 'elb', 'route53', 'dynamodb', 'ecs', 'elasticache']
 
 // Service to category mapping
 const SERVICE_CATEGORY_MAP = {
@@ -745,6 +745,28 @@ function ScanConfig({ apiUrl, onScanComplete }) {
                       ]}
                       dataSource={data.clusters}
                       rowKey="name"
+                      size="small"
+                      pagination={false}
+                    />
+                  )
+                }
+                
+                // ElastiCache
+                if (record.service === 'elasticache' && data.clusters) {
+                  return (
+                    <Table
+                      columns={[
+                        { title: 'Cluster ID', dataIndex: 'id', key: 'id' },
+                        { title: 'Engine', dataIndex: 'engine', key: 'engine' },
+                        { title: 'Version', dataIndex: 'engine_version', key: 'engine_version' },
+                        { title: 'Status', dataIndex: 'status', key: 'status', render: (s) => (
+                          <Tag color={s === 'available' ? 'green' : 'orange'}>{s}</Tag>
+                        )},
+                        { title: 'Node Type', dataIndex: 'node_type', key: 'node_type' },
+                        { title: 'Nodes', dataIndex: 'num_nodes', key: 'num_nodes' },
+                      ]}
+                      dataSource={data.clusters}
+                      rowKey="id"
                       size="small"
                       pagination={false}
                     />

@@ -130,6 +130,7 @@ class AWSCloudScanner:
             ("route53", self._scan_route53),
             ("dynamodb", self._scan_dynamodb),
             ("ecs", self._scan_ecs),
+            ("elasticache", self._scan_elasticache),
             ("eks", self._scan_eks),
             ("cloudwatch", self._scan_cloudwatch_alarms),
         ]
@@ -455,6 +456,45 @@ class AWSCloudScanner:
                     "pending_tasks": cluster.get('pendingTasksCount', 0),
                     "active_services": cluster.get('activeServicesCount', 0),
                 })
+            
+            return {
+                "count": len(clusters),
+                "clusters": clusters,
+            }
+        except ClientError as e:
+            return {"error": str(e)}
+    
+    def _scan_elasticache(self) -> Dict[str, Any]:
+        """Scan ElastiCache clusters."""
+        elasticache = self._get_client('elasticache')
+        
+        try:
+            response = elasticache.describe_cache_clusters(ShowCacheNodeInfo=True)
+            clusters = []
+            
+            for cluster in response.get('CacheClusters', []):
+                clusters.append({
+                    "id": cluster['CacheClusterId'],
+                    "engine": cluster.get('Engine', ''),
+                    "engine_version": cluster.get('EngineVersion', ''),
+                    "status": cluster.get('CacheClusterStatus', 'unknown'),
+                    "node_type": cluster.get('CacheNodeType', ''),
+                    "num_nodes": cluster.get('NumCacheNodes', 0),
+                })
+            
+            # Also get replication groups
+            try:
+                rg_response = elasticache.describe_replication_groups()
+                for rg in rg_response.get('ReplicationGroups', []):
+                    clusters.append({
+                        "id": rg['ReplicationGroupId'],
+                        "engine": "redis",
+                        "status": rg.get('Status', 'unknown'),
+                        "type": "replication_group",
+                        "num_nodes": len(rg.get('MemberClusters', [])),
+                    })
+            except:
+                pass
             
             return {
                 "count": len(clusters),
