@@ -2,10 +2,12 @@
 Vector Search Module for Operations Knowledge
 
 Uses OpenSearch with Bedrock embeddings for semantic search.
+Supports both IAM and basic auth for OpenSearch.
 """
 
 import json
 import logging
+import os
 from typing import Optional, Dict, Any, List
 import hashlib
 from datetime import datetime
@@ -13,7 +15,9 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 # OpenSearch Configuration
-OPENSEARCH_ENDPOINT = "search-os2-pr7osiuyxyhawtfnyrwve6o2qe.ap-southeast-1.es.amazonaws.com"
+OPENSEARCH_ENDPOINT = os.getenv("OPENSEARCH_ENDPOINT", "search-os2-pr7osiuyxyhawtfnyrwve6o2qe.ap-southeast-1.es.amazonaws.com")
+OPENSEARCH_USER = os.getenv("OPENSEARCH_USER", "")
+OPENSEARCH_PASSWORD = os.getenv("OPENSEARCH_PASSWORD", "")
 KNOWLEDGE_INDEX = "aiops-knowledge"
 EMBEDDING_MODEL = "amazon.titan-embed-text-v2:0"
 EMBEDDING_DIMENSION = 1024
@@ -26,6 +30,8 @@ class VectorKnowledgeSearch:
     Uses:
     - OpenSearch for vector storage and search
     - Bedrock Titan for embeddings
+    
+    Supports both IAM and basic auth.
     """
     
     def __init__(self):
@@ -34,6 +40,7 @@ class VectorKnowledgeSearch:
         self.client = None
         self.bedrock = None
         self._initialized = False
+        self._auth_mode = "none"
         
         self._init_clients()
     
@@ -41,37 +48,54 @@ class VectorKnowledgeSearch:
         """Initialize OpenSearch and Bedrock clients."""
         try:
             from opensearchpy import OpenSearch, RequestsHttpConnection
-            from requests_aws4auth import AWS4Auth
             import boto3
             
-            # Get AWS credentials
+            # Initialize Bedrock client for embeddings
             session = boto3.Session()
-            credentials = session.get_credentials()
             region = session.region_name or 'ap-southeast-1'
-            
-            awsauth = AWS4Auth(
-                credentials.access_key,
-                credentials.secret_key,
-                region,
-                'es',
-                session_token=credentials.token
-            )
-            
-            # OpenSearch client
-            self.client = OpenSearch(
-                hosts=[{'host': self.endpoint, 'port': 443}],
-                http_auth=awsauth,
-                use_ssl=True,
-                verify_certs=True,
-                connection_class=RequestsHttpConnection,
-                timeout=30
-            )
-            
-            # Bedrock client for embeddings
             self.bedrock = boto3.client('bedrock-runtime', region_name=region)
             
+            # Try basic auth first if credentials provided
+            if OPENSEARCH_USER and OPENSEARCH_PASSWORD:
+                self.client = OpenSearch(
+                    hosts=[{'host': self.endpoint, 'port': 443}],
+                    http_auth=(OPENSEARCH_USER, OPENSEARCH_PASSWORD),
+                    use_ssl=True,
+                    verify_certs=True,
+                    connection_class=RequestsHttpConnection,
+                    timeout=30
+                )
+                self._auth_mode = "basic"
+                logger.info("OpenSearch client initialized with basic auth")
+            else:
+                # Try IAM auth
+                try:
+                    from requests_aws4auth import AWS4Auth
+                    credentials = session.get_credentials()
+                    
+                    awsauth = AWS4Auth(
+                        credentials.access_key,
+                        credentials.secret_key,
+                        region,
+                        'es',
+                        session_token=credentials.token
+                    )
+                    
+                    self.client = OpenSearch(
+                        hosts=[{'host': self.endpoint, 'port': 443}],
+                        http_auth=awsauth,
+                        use_ssl=True,
+                        verify_certs=True,
+                        connection_class=RequestsHttpConnection,
+                        timeout=30
+                    )
+                    self._auth_mode = "iam"
+                    logger.info("OpenSearch client initialized with IAM auth")
+                except Exception as e:
+                    logger.warning(f"IAM auth failed: {e}")
+            
             self._initialized = True
-            logger.info("Vector search clients initialized")
+            logger.info(f"Vector search initialized (auth: {self._auth_mode})")
             
         except ImportError as e:
             logger.warning(f"Missing dependencies for vector search: {e}")
