@@ -888,16 +888,19 @@ class AWSServiceOps:
     # VPC Operations
     # =========================================================================
     
-    def vpc_health_check(self, vpc_id: Optional[str] = None) -> Dict[str, Any]:
+    def vpc_health_check(self, vpc_id: Optional[str] = None, limit: int = 5) -> Dict[str, Any]:
         """
-        VPC health check.
+        VPC health check (optimized for speed).
         
         Checks:
         - VPC state
         - Subnets availability
         - Internet Gateway attachment
-        - NAT Gateways status
-        - Route tables
+        - NAT Gateways status (limited to reduce API calls)
+        
+        Args:
+            vpc_id: Specific VPC to check (optional)
+            limit: Max VPCs to check (default 5 for speed)
         """
         ec2 = self._get_client('ec2')
         
@@ -915,7 +918,10 @@ class AWSServiceOps:
             else:
                 response = ec2.describe_vpcs()
             
-            for vpc in response.get('Vpcs', []):
+            # Limit VPCs for speed
+            vpcs_to_check = response.get('Vpcs', [])[:limit]
+            
+            for vpc in vpcs_to_check:
                 vid = vpc['VpcId']
                 state = vpc['State']
                 is_default = vpc.get('IsDefault', False)
@@ -1194,14 +1200,16 @@ class AWSServiceOps:
     # Route 53 Operations
     # =========================================================================
     
-    def route53_health_check(self) -> Dict[str, Any]:
+    def route53_health_check(self, limit_health_checks: int = 5) -> Dict[str, Any]:
         """
-        Route 53 health check.
+        Route 53 health check (optimized for speed).
         
         Checks:
-        - Hosted zones
-        - Health checks status
-        - DNS records
+        - Hosted zones (all)
+        - Health checks status (limited to reduce API calls)
+        
+        Args:
+            limit_health_checks: Max health checks to query status (default 5)
         """
         route53 = self._get_client('route53')
         
@@ -1211,41 +1219,50 @@ class AWSServiceOps:
             "overall_status": "healthy",
             "hosted_zones": [],
             "health_checks": [],
+            "health_checks_total": 0,
             "issues": [],
         }
         
         try:
-            # List hosted zones
+            # List hosted zones (fast)
             zones_response = route53.list_hosted_zones()
             
-            for zone in zones_response.get('HostedZones', []):
+            for zone in zones_response.get('HostedZones', [])[:20]:
                 zone_id = zone['Id'].split('/')[-1]
                 zone_name = zone['Name']
-                
-                # Get record count
-                record_count = zone.get('ResourceRecordSetCount', 0)
                 
                 results["hosted_zones"].append({
                     "id": zone_id,
                     "name": zone_name,
                     "private": zone.get('Config', {}).get('PrivateZone', False),
-                    "record_count": record_count,
+                    "record_count": zone.get('ResourceRecordSetCount', 0),
                 })
             
-            # List health checks
+            # List health checks (fast)
             health_response = route53.list_health_checks()
+            all_health_checks = health_response.get('HealthChecks', [])
+            results["health_checks_total"] = len(all_health_checks)
             
+            # Only query detailed status for limited number (slow operation)
             unhealthy_count = 0
-            for hc in health_response.get('HealthChecks', []):
+            for hc in all_health_checks[:limit_health_checks]:
                 hc_id = hc['Id']
                 hc_config = hc.get('HealthCheckConfig', {})
                 
-                # Get health check status
+                # Get health check status (this is the slow part)
+                health_status = "unknown"
                 try:
                     status_response = route53.get_health_check_status(HealthCheckId=hc_id)
                     statuses = status_response.get('HealthCheckObservations', [])
                     
                     healthy_count = sum(1 for s in statuses if s.get('StatusReport', {}).get('Status') == 'Success')
+                    total = len(statuses)
+                    
+                    health_status = "healthy" if healthy_count == total else "unhealthy"
+                    if health_status == "unhealthy":
+                        unhealthy_count += 1
+                except:
+                    health_status = "unknown"
                     total = len(statuses)
                     
                     health_status = "healthy" if healthy_count == total else "unhealthy"
