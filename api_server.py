@@ -933,8 +933,8 @@ Region: {results['region']}
         except Exception as e:
             return f"❌ 重启 EC2 失败: {str(e)}"
     
-    # List EC2 instances
-    if any(kw in message_lower for kw in ['ec2', 'instance', '实例']):
+    # List EC2 instances (skip if SOP command)
+    if any(kw in message_lower for kw in ['ec2', 'instance', '实例']) and not any(sop_kw in message_lower for sop_kw in ['sop list', 'sop show', 'sop suggest', 'sop run', 'sop 列表', 'sop 详情', 'sop 推荐', 'sop 执行']):
         try:
             data = scanner._scan_ec2()
             response = f"""🖥️ **EC2 Instances** (Region: {_current_region})
