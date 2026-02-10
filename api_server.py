@@ -1590,11 +1590,8 @@ POST /api/knowledge/learn
 
 """
             for sop in suggested:
-                response += f"**{sop.name}** (`{sop.sop_id}`)
-- {sop.description}
-- 步骤数: {len(sop.steps)} | 预计时间: {sum(s.estimated_minutes if hasattr(s, 'estimated_minutes') else 5 for s in sop.steps)}分钟
-
-"
+                est_time = sum(s.estimated_minutes if hasattr(s, 'estimated_minutes') else 5 for s in sop.steps)
+                response += f"**{sop.name}** (`{sop.sop_id}`)\n- {sop.description}\n- 步骤数: {len(sop.steps)} | 预计时间: {est_time}分钟\n\n"
             return response
         except Exception as e:
             return f"❌ SOP 推荐失败: {str(e)}"
