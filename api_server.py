@@ -1392,8 +1392,8 @@ export SLACK_WEBHOOK_URL=https://hooks.slack.com/services/xxx
         except Exception as e:
             return f"❌ 获取知识库统计失败: {str(e)}"
     
-    # KB Search
-    if any(kw in message_lower for kw in ['kb search', 'knowledge search', '知识搜索']):
+    # KB Search (keyword-based)
+    if any(kw in message_lower for kw in ['kb search', 'knowledge search', '知识搜索']) and 'semantic' not in message_lower:
         try:
             from src.operations_knowledge import get_knowledge_store
             store = get_knowledge_store()
@@ -1407,7 +1407,9 @@ export SLACK_WEBHOOK_URL=https://hooks.slack.com/services/xxx
 
 示例: 
 - `kb search high cpu`
-- `kb search ec2 timeout`"""
+- `kb search ec2 timeout`
+
+**语义搜索:** `kb semantic <问题描述>`"""
             
             query = match.group(1).strip()
             keywords = query.lower().split()
@@ -1415,7 +1417,7 @@ export SLACK_WEBHOOK_URL=https://hooks.slack.com/services/xxx
             patterns = store.search_patterns(keywords=keywords, limit=5)
             
             if not patterns:
-                return f"🔍 未找到匹配 '{query}' 的知识条目"
+                return f"🔍 未找到匹配 '{query}' 的知识条目\n\n💡 试试语义搜索: `kb semantic {query}`"
             
             response = f"""🔍 **知识搜索结果: '{query}'**
 
@@ -1432,6 +1434,64 @@ export SLACK_WEBHOOK_URL=https://hooks.slack.com/services/xxx
             return response
         except Exception as e:
             return f"❌ 知识搜索失败: {str(e)}"
+    
+    # KB Semantic Search (vector-based)
+    if any(kw in message_lower for kw in ['kb semantic', 'semantic search', '语义搜索']):
+        try:
+            import re
+            match = re.search(r'(?:semantic|语义搜索)\s+(.+)', message, re.IGNORECASE)
+            if not match:
+                return """**语义搜索 (AI 驱动)**
+
+用法: `kb semantic <问题描述>`
+
+示例: 
+- `kb semantic 服务器响应很慢怎么办`
+- `kb semantic database connection timeout`
+- `kb semantic lambda 函数执行失败`
+
+使用 AI 向量匹配，支持自然语言查询"""
+            
+            query = match.group(1).strip()
+            
+            from src.vector_search import get_vector_search
+            search = get_vector_search()
+            
+            if not search._initialized:
+                return "⚠️ 向量搜索服务未初始化，请稍后再试"
+            
+            results = search.hybrid_search(query, limit=5)
+            
+            if not results:
+                return f"🔍 未找到与 '{query}' 语义相关的知识"
+            
+            response = f"""🧠 **语义搜索结果: '{query}'**
+
+找到 {len(results)} 条相关知识:
+
+"""
+            for r in results:
+                response += f"""**{r.get('title', 'N/A')}** ({r.get('type', 'unknown')})
+- 服务: {r.get('service', 'N/A')} | 相关度: {r.get('score', 0):.2f}
+- {r.get('description', '')[:100]}...
+
+"""
+            return response
+        except Exception as e:
+            return f"❌ 语义搜索失败: {str(e)}"
+    
+    # KB Index (create OpenSearch index)
+    if any(kw in message_lower for kw in ['kb index', 'kb init', 'create index']):
+        try:
+            from src.vector_search import get_vector_search
+            search = get_vector_search()
+            
+            if search.create_index():
+                return "✅ **知识库向量索引创建成功！**\n\n现在可以使用 `kb semantic <查询>` 进行语义搜索"
+            else:
+                return "❌ 索引创建失败，请检查 OpenSearch 连接"
+        except Exception as e:
+            return f"❌ 索引创建失败: {str(e)}"
     
     # Learn from incident
     if any(kw in message_lower for kw in ['learn incident', '学习故障', 'learn from']):
@@ -3296,6 +3356,111 @@ async def get_sop_execution(execution_id: str):
             return {"error": "Execution not found"}
         
         return execution.to_dict()
+    except Exception as e:
+        return {"error": str(e)}
+
+
+# =============================================================================
+# Vector Search APIs (Semantic Search)
+# =============================================================================
+
+@app.get("/api/vector/stats")
+async def get_vector_stats():
+    """Get vector search index statistics."""
+    try:
+        from src.vector_search import get_vector_search
+        search = get_vector_search()
+        return search.get_stats()
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/api/vector/index/create")
+async def create_vector_index():
+    """Create the knowledge vector index."""
+    try:
+        from src.vector_search import get_vector_search
+        search = get_vector_search()
+        success = search.create_index()
+        return {"success": success}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+class VectorIndexRequest(BaseModel):
+    doc_id: str
+    title: str
+    description: str
+    content: str
+    doc_type: str  # pattern, sop, runbook
+    category: str = ""
+    service: str = ""
+    severity: str = ""
+    tags: List[str] = []
+
+
+@app.post("/api/vector/index")
+async def index_document(request: VectorIndexRequest):
+    """Index a document with embeddings."""
+    try:
+        from src.vector_search import get_vector_search
+        search = get_vector_search()
+        
+        success = search.index_knowledge(
+            doc_id=request.doc_id,
+            title=request.title,
+            description=request.description,
+            content=request.content,
+            doc_type=request.doc_type,
+            category=request.category,
+            service=request.service,
+            severity=request.severity,
+            tags=request.tags
+        )
+        return {"success": success}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+class SemanticSearchRequest(BaseModel):
+    query: str
+    doc_type: Optional[str] = None
+    service: Optional[str] = None
+    limit: int = 5
+
+
+@app.post("/api/vector/search")
+async def semantic_search(request: SemanticSearchRequest):
+    """Semantic search using vector similarity."""
+    try:
+        from src.vector_search import get_vector_search
+        search = get_vector_search()
+        
+        results = search.semantic_search(
+            query=request.query,
+            doc_type=request.doc_type,
+            service=request.service,
+            limit=request.limit
+        )
+        return {"results": results, "count": len(results)}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/api/vector/hybrid-search")
+async def hybrid_search(request: SemanticSearchRequest):
+    """Hybrid search combining keyword and vector similarity."""
+    try:
+        from src.vector_search import get_vector_search
+        search = get_vector_search()
+        
+        results = search.hybrid_search(
+            query=request.query,
+            doc_type=request.doc_type,
+            service=request.service,
+            limit=request.limit
+        )
+        return {"results": results, "count": len(results)}
     except Exception as e:
         return {"error": str(e)}
 
