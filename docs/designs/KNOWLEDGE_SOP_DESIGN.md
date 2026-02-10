@@ -1,236 +1,348 @@
-# Knowledge & SOP System Enhancement Design
+# 运维知识沉淀系统设计
 
-## Overview
-Enhance the AgenticAIOps platform with comprehensive knowledge management, SOP execution, and operations knowledge accumulation capabilities.
+## 1. 概述
 
-## Current State
+构建一个智能运维知识沉淀系统，将日常运维操作、故障处理经验、最佳实践等转化为可复用的知识资产。
 
-### Existing Components
-1. **S3 Knowledge Base** (`src/s3_knowledge_base.py`)
-   - Anomaly pattern storage in S3
-   - Pattern matching for RCA
-   - Basic CRUD operations
+## 2. 系统架构
 
-2. **Runbook System** (`src/runbook/`)
-   - YAML-based runbook definitions
-   - Step executor with multiple action types
-   - Conditional execution support
-
-3. **RCA System** (`src/rca/`)
-   - Root cause analysis models
-   - Pattern matching
-
-## Enhancement Design
-
-### 1. Knowledge Base Optimization
-
-#### 1.1 Pattern Learning from Incidents
-```python
-class IncidentLearner:
-    """Learn patterns from resolved incidents"""
-    
-    def learn_from_incident(self, incident: Dict) -> AnomalyPattern:
-        """Extract pattern from resolved incident"""
-        # Analyze symptoms
-        # Extract root cause
-        # Generate remediation steps
-        # Store as new pattern
-        
-    def improve_pattern(self, pattern_id: str, feedback: Dict):
-        """Improve pattern based on feedback"""
-        # Update confidence score
-        # Refine symptoms/remediation
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    知识沉淀系统架构                            │
+├─────────────────────────────────────────────────────────────┤
+│                                                              │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐    │
+│  │ Runbooks │  │   SOPs   │  │ RCA库    │  │ 最佳实践 │    │
+│  └────┬─────┘  └────┬─────┘  └────┬─────┘  └────┬─────┘    │
+│       │             │             │             │           │
+│       └─────────────┴──────┬──────┴─────────────┘           │
+│                            │                                 │
+│                    ┌───────▼───────┐                        │
+│                    │  S3 知识库     │                        │
+│                    │  (Markdown)    │                        │
+│                    └───────┬───────┘                        │
+│                            │                                 │
+│                    ┌───────▼───────┐                        │
+│                    │ 向量索引       │                        │
+│                    │ (Bedrock KB)   │                        │
+│                    └───────┬───────┘                        │
+│                            │                                 │
+│                    ┌───────▼───────┐                        │
+│                    │ Strands Agent │                        │
+│                    │ (知识检索+推荐)│                        │
+│                    └───────────────┘                        │
+│                                                              │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-#### 1.2 Automatic Knowledge Extraction
-- Extract patterns from CloudWatch Logs
-- Learn from resolved tickets
-- Import from external knowledge sources (AWS docs, Stack Overflow)
+## 3. 知识分类
 
-#### 1.3 Pattern Categories
+### 3.1 Runbooks (运维手册)
+
 ```yaml
-categories:
-  - performance:     # CPU, Memory, Latency issues
-  - availability:    # Downtime, failures
-  - security:        # IAM, encryption, access issues
-  - cost:            # Over-provisioning, unused resources
-  - configuration:   # Misconfigurations
+# runbooks/ec2-high-cpu.md
+---
+title: EC2 高 CPU 使用率处理
+category: compute
+services: [ec2]
+severity: medium
+tags: [cpu, performance, ec2]
+---
+
+## 告警条件
+- CPU > 80% 持续 5 分钟
+
+## 诊断步骤
+1. 检查实例类型和当前负载
+2. 查看 CloudWatch 指标趋势
+3. SSH 登录检查 top/htop
+
+## 处理方案
+### 方案 A: 临时扩容
+- 更换更大实例类型
+
+### 方案 B: 应用优化
+- 分析热点进程
+- 代码优化
+
+## 自动化操作
+- command: `ec2 describe i-xxx`
+- command: `ec2 metrics i-xxx cpu`
 ```
 
-### 2. SOP (Standard Operating Procedure) System
+### 3.2 SOPs (标准操作流程)
 
-#### 2.1 SOP Structure
 ```yaml
-# sop_template.yaml
-sop:
-  id: "sop-ec2-high-cpu"
-  name: "EC2 High CPU Response"
-  trigger:
-    type: "metric_threshold"
-    service: "ec2"
-    metric: "CPUUtilization"
-    threshold: 90
-    
-  steps:
-    - name: "Identify Process"
-      action: "ssh_command"
-      command: "top -bn1 | head -20"
-      
-    - name: "Check Recent Changes"
-      action: "cloudtrail_query"
-      filter: "last_24h"
-      
-    - name: "Scale Decision"
-      action: "human_decision"
-      options:
-        - "Scale Up Instance"
-        - "Kill Process"
-        - "No Action"
-        
-    - name: "Execute Remediation"
-      action: "conditional"
-      based_on: "previous_decision"
-      
-  notification:
-    slack: true
-    email: true
+# sops/rds-failover.md
+---
+title: RDS 故障转移操作流程
+type: sop
+approval_required: true
+rollback_plan: true
+---
+
+## 前置条件
+- [ ] 确认 Multi-AZ 已启用
+- [ ] 通知相关团队
+- [ ] 备份当前配置
+
+## 操作步骤
+
+### Step 1: 预检查
+```bash
+rds describe mydb
+rds health mydb
 ```
 
-#### 2.2 SOP Executor Enhancements
-```python
-class SOPExecutor:
-    """Enhanced SOP execution with learning"""
-    
-    async def execute_sop(self, sop_id: str, context: Dict):
-        """Execute SOP with full context"""
-        
-    def suggest_sop(self, anomaly: Dict) -> List[str]:
-        """Suggest relevant SOPs for anomaly"""
-        
-    def record_execution(self, execution: SOPExecution):
-        """Record execution for learning"""
+### Step 2: 执行 Failover
+```bash
+rds failover mydb
 ```
 
-### 3. Operations Knowledge Accumulation
+### Step 3: 验证
+- [ ] 检查新主库连接
+- [ ] 验证应用正常
+- [ ] 确认复制状态
 
-#### 3.1 Knowledge Sources
-1. **Incident History** - Past incidents and resolutions
-2. **Runbook Executions** - What worked, what didn't
-3. **Chat Conversations** - Q&A between operators and AI
-4. **External Sources** - AWS documentation, best practices
-
-#### 3.2 Knowledge Graph
-```
-[Service: EC2] --has_issue--> [Pattern: High CPU]
-      |                              |
-      v                              v
-[Metric: CPUUtilization]    [SOP: Scale/Optimize]
-      |                              |
-      v                              v
-[Threshold: 90%]            [Runbook: ec2-scale.yaml]
+## 回滚计划
+如果 failover 失败，执行:
+```bash
+rds failover mydb  # 再次切换回原主库
 ```
 
-#### 3.3 Learning Pipeline
-```python
-class KnowledgePipeline:
-    """Continuous knowledge learning"""
-    
-    def ingest_incident(self, incident: Dict):
-        """Ingest resolved incident"""
-        # Extract symptoms
-        # Map to existing patterns or create new
-        # Update knowledge graph
-        
-    def ingest_chat_qa(self, question: str, answer: str, feedback: str):
-        """Learn from chat interactions"""
-        # Extract intent
-        # Store Q&A pair
-        # Update pattern confidence
-        
-    def generate_recommendations(self, context: Dict) -> List[str]:
-        """Generate recommendations from knowledge"""
+## 后续操作
+- 更新监控配置
+- 记录操作日志
 ```
 
-### 4. Chat Integration
+### 3.3 RCA 模式库 (故障根因分析)
 
-#### 4.1 New Commands
+```yaml
+# rca/patterns/connection-timeout.md
+---
+title: 连接超时问题模式
+pattern_id: RCA-001
+symptoms:
+  - Connection timed out
+  - ETIMEDOUT
+  - Socket timeout
+root_causes:
+  - Security Group 规则
+  - Network ACL 限制
+  - 目标服务不可用
+  - DNS 解析问题
+---
+
+## 症状识别
+当出现以下错误时:
+- `Connection timed out`
+- `ETIMEDOUT`
+- `No route to host`
+
+## 诊断树
+
 ```
-Knowledge Commands:
-- `kb search <query>`    - Search knowledge base
-- `kb add pattern`       - Add new pattern interactively
-- `kb stats`             - Show knowledge base statistics
-
-SOP Commands:
-- `sop list`             - List available SOPs
-- `sop run <id>`         - Execute SOP
-- `sop suggest`          - Suggest SOP for current issue
-- `sop create`           - Create new SOP interactively
-
-Learning Commands:
-- `learn incident <id>`  - Learn from incident
-- `feedback <pattern_id> <good/bad>` - Provide pattern feedback
-```
-
-### 5. API Endpoints
-
-```
-Knowledge Base:
-GET    /api/kb/patterns              - List patterns
-GET    /api/kb/patterns/{id}         - Get pattern
-POST   /api/kb/patterns              - Create pattern
-PUT    /api/kb/patterns/{id}         - Update pattern
-DELETE /api/kb/patterns/{id}         - Delete pattern
-POST   /api/kb/search                - Search patterns
-GET    /api/kb/stats                 - Get statistics
-
-SOP:
-GET    /api/sop/list                 - List SOPs
-GET    /api/sop/{id}                 - Get SOP details
-POST   /api/sop/{id}/execute         - Execute SOP
-POST   /api/sop/suggest              - Suggest SOP for anomaly
-GET    /api/sop/executions           - List executions
-
-Learning:
-POST   /api/learn/incident           - Learn from incident
-POST   /api/learn/feedback           - Submit feedback
-GET    /api/learn/stats              - Learning statistics
+连接超时
+├── 检查 Security Group
+│   ├── 入站规则 ✓/✗
+│   └── 出站规则 ✓/✗
+├── 检查 Network ACL
+│   ├── 入站规则 ✓/✗
+│   └── 出站规则 ✓/✗
+├── 检查目标服务
+│   ├── 服务运行状态
+│   └── 端口监听状态
+└── 检查 DNS
+    ├── 解析结果
+    └── VPC DNS 设置
 ```
 
-### 6. Implementation Plan
+## 常见解决方案
+1. 添加 Security Group 规则
+2. 修改 Network ACL
+3. 重启目标服务
+4. 检查 VPC 路由表
+```
 
-#### Phase 1: Knowledge Base Enhancement (2-3 hours)
-- [ ] Pattern learning from incidents
-- [ ] Pattern categories and tagging
-- [ ] Search optimization
-- [ ] Chat commands for KB
+### 3.4 最佳实践
 
-#### Phase 2: SOP System (2-3 hours)
-- [ ] SOP YAML schema
-- [ ] Enhanced executor
-- [ ] SOP suggestion engine
-- [ ] Chat commands for SOP
+```yaml
+# best-practices/ec2-security.md
+---
+title: EC2 安全最佳实践
+category: security
+services: [ec2, vpc]
+---
 
-#### Phase 3: Knowledge Accumulation (2-3 hours)
-- [ ] Learning pipeline
-- [ ] Chat Q&A learning
-- [ ] Knowledge graph basics
-- [ ] Feedback system
+## 安全组配置
+- ✅ 最小权限原则
+- ✅ 使用安全组引用而非 CIDR
+- ❌ 避免 0.0.0.0/0 开放
 
-#### Phase 4: Integration & Testing (1-2 hours)
-- [ ] API endpoints
-- [ ] Frontend integration
-- [ ] End-to-end testing
+## 实例配置
+- ✅ 使用 IMDSv2
+- ✅ 启用 EBS 加密
+- ✅ 定期补丁更新
 
-## Success Metrics
+## 网络配置
+- ✅ 私有子网部署
+- ✅ 通过 NAT Gateway 出网
+- ✅ 使用 VPC Endpoints
+```
 
-1. **Knowledge Coverage** - % of anomalies with patterns
-2. **SOP Automation** - % of incidents auto-handled
-3. **Pattern Accuracy** - Pattern match success rate
-4. **Learning Rate** - New patterns learned per week
+## 4. 知识检索 API
 
-## Dependencies
+### 4.1 Chat 命令
 
-- S3 bucket for knowledge storage ✅
-- Existing runbook system ✅
-- Chat handler integration ✅
-- Frontend dashboard (optional)
+```
+# 搜索知识库
+kb search "ec2 高cpu"
+
+# 查看 Runbook
+kb runbook ec2-high-cpu
+
+# 查看 SOP
+kb sop rds-failover
+
+# 查看 RCA 模式
+kb rca connection-timeout
+
+# 执行 SOP (带审批)
+sop exec rds-failover --db mydb
+```
+
+### 4.2 API Endpoints
+
+```
+GET  /api/knowledge/search?q=xxx     # 知识搜索
+GET  /api/knowledge/runbooks         # Runbook 列表
+GET  /api/knowledge/runbooks/:id     # Runbook 详情
+GET  /api/knowledge/sops             # SOP 列表
+POST /api/knowledge/sops/:id/execute # 执行 SOP
+GET  /api/knowledge/rca/patterns     # RCA 模式列表
+POST /api/knowledge/rca/analyze      # RCA 分析
+```
+
+## 5. 知识自动沉淀
+
+### 5.1 操作记录 → 知识
+
+```
+用户操作: "ec2 stop i-xxx"
+     ↓
+记录操作日志
+     ↓
+分析操作模式
+     ↓
+生成/更新 Runbook
+```
+
+### 5.2 告警处理 → RCA
+
+```
+告警触发: EC2 CPU > 90%
+     ↓
+处理过程记录
+     ↓
+根因分析
+     ↓
+更新 RCA 模式库
+     ↓
+优化告警规则
+```
+
+### 5.3 Chat 对话 → 知识
+
+```
+用户问题: "如何处理 RDS 连接数过高?"
+     ↓
+Agent 回答 + 操作
+     ↓
+标记为有价值问答
+     ↓
+提取为 FAQ/Runbook
+```
+
+## 6. 实现计划
+
+### Phase 1: 基础结构 (P2)
+- [ ] S3 知识库目录结构
+- [ ] Runbook/SOP 模板
+- [ ] 基础搜索 API
+
+### Phase 2: 智能检索 (P2)
+- [ ] 向量索引集成
+- [ ] 上下文感知推荐
+- [ ] Chat 命令集成
+
+### Phase 3: 自动沉淀 (P3)
+- [ ] 操作日志分析
+- [ ] 知识自动生成
+- [ ] 持续优化学习
+
+## 7. 数据模型
+
+### Knowledge Item
+
+```json
+{
+  "id": "kb-001",
+  "type": "runbook|sop|rca|best-practice",
+  "title": "EC2 高 CPU 处理",
+  "category": "compute",
+  "services": ["ec2"],
+  "tags": ["cpu", "performance"],
+  "content": "...",
+  "metadata": {
+    "created_at": "2026-02-10",
+    "updated_at": "2026-02-10",
+    "author": "system",
+    "version": "1.0",
+    "usage_count": 42
+  }
+}
+```
+
+### SOP Execution Record
+
+```json
+{
+  "id": "exec-001",
+  "sop_id": "sop-rds-failover",
+  "executor": "user@example.com",
+  "status": "completed|failed|pending_approval",
+  "steps": [
+    {"step": 1, "status": "completed", "output": "..."},
+    {"step": 2, "status": "completed", "output": "..."}
+  ],
+  "started_at": "2026-02-10T10:00:00Z",
+  "completed_at": "2026-02-10T10:05:00Z"
+}
+```
+
+## 8. 与现有系统集成
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    集成架构                                   │
+├─────────────────────────────────────────────────────────────┤
+│                                                              │
+│  ┌──────────┐     ┌──────────┐     ┌──────────┐            │
+│  │ Chat API │────▶│ Strands  │────▶│ Knowledge│            │
+│  │          │     │  Agent   │     │    DB    │            │
+│  └──────────┘     └────┬─────┘     └──────────┘            │
+│                        │                                     │
+│                        ▼                                     │
+│  ┌──────────┐     ┌──────────┐     ┌──────────┐            │
+│  │ Scanner  │────▶│ aws_ops  │────▶│ Notifier │            │
+│  │          │     │          │     │          │            │
+│  └──────────┘     └──────────┘     └──────────┘            │
+│                                                              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+**作者**: Architect
+**日期**: 2026-02-10
+**版本**: 1.0

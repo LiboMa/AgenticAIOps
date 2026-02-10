@@ -1330,7 +1330,7 @@ export SLACK_WEBHOOK_URL=https://hooks.slack.com/services/xxx
             return f"❌ 测试通知失败: {str(e)}"
     
     # Send custom alert
-    if any(kw in message_lower for kw in ['send alert', '发送告警', 'alert']):
+    if any(kw in message_lower for kw in ['send alert', '发送告警']):
         try:
             from src.notifications import get_notification_manager
             manager = get_notification_manager()
@@ -1360,6 +1360,129 @@ export SLACK_WEBHOOK_URL=https://hooks.slack.com/services/xxx
 示例: `send alert Production DB CPU 超过 90%`"""
         except Exception as e:
             return f"❌ 发送告警失败: {str(e)}"
+    
+    # ===========================================
+    # Knowledge Base Commands
+    # ===========================================
+    
+    # KB Stats
+    if any(kw in message_lower for kw in ['kb stats', 'knowledge stats', '知识库统计']):
+        try:
+            from src.operations_knowledge import get_knowledge_store
+            store = get_knowledge_store()
+            stats = store.get_stats()
+            
+            response = f"""📚 **知识库统计**
+
+| 项目 | 值 |
+|------|-----|
+| 总 Patterns | {stats['total_patterns']} |
+| 平均置信度 | {stats['avg_confidence']:.2f} |
+
+**按分类:**
+"""
+            for cat, count in stats.get('by_category', {}).items():
+                response += f"- {cat}: {count}\n"
+            
+            response += "\n**按服务:**\n"
+            for svc, count in stats.get('by_service', {}).items():
+                response += f"- {svc}: {count}\n"
+            
+            return response
+        except Exception as e:
+            return f"❌ 获取知识库统计失败: {str(e)}"
+    
+    # KB Search
+    if any(kw in message_lower for kw in ['kb search', 'knowledge search', '知识搜索']):
+        try:
+            from src.operations_knowledge import get_knowledge_store
+            store = get_knowledge_store()
+            
+            import re
+            match = re.search(r'search\s+(.+)', message, re.IGNORECASE)
+            if not match:
+                return """**知识搜索**
+
+用法: `kb search <关键词>`
+
+示例: 
+- `kb search high cpu`
+- `kb search ec2 timeout`"""
+            
+            query = match.group(1).strip()
+            keywords = query.lower().split()
+            
+            patterns = store.search_patterns(keywords=keywords, limit=5)
+            
+            if not patterns:
+                return f"🔍 未找到匹配 '{query}' 的知识条目"
+            
+            response = f"""🔍 **知识搜索结果: '{query}'**
+
+找到 {len(patterns)} 条匹配:
+
+"""
+            for p in patterns:
+                response += f"""**{p.title}** ({p.pattern_id})
+- 分类: {p.category} | 服务: {p.service} | 置信度: {p.confidence:.2f}
+- 症状: {', '.join(p.symptoms[:3])}...
+- 解决方案: {p.remediation[:100]}...
+
+"""
+            return response
+        except Exception as e:
+            return f"❌ 知识搜索失败: {str(e)}"
+    
+    # Learn from incident
+    if any(kw in message_lower for kw in ['learn incident', '学习故障', 'learn from']):
+        return """📚 **学习故障/Incident**
+
+用法: 通过 API 提交 Incident 记录
+
+```
+POST /api/knowledge/learn
+{
+  "incident_id": "INC-001",
+  "title": "EC2 High CPU",
+  "description": "Instance CPU utilization exceeded 90%",
+  "service": "ec2",
+  "severity": "high",
+  "symptoms": ["high cpu", "slow response"],
+  "root_cause": "Memory leak in application",
+  "resolution": "Restarted application",
+  "resolution_steps": ["Identified leak", "Restarted app", "Monitored"]
+}
+```
+
+或使用: `POST /api/knowledge/learn`"""
+    
+    # Pattern feedback
+    if any(kw in message_lower for kw in ['feedback', '反馈']):
+        try:
+            import re
+            # Format: feedback <pattern_id> good/bad
+            match = re.search(r'feedback\s+([a-f0-9]+)\s+(good|bad|helpful|not helpful)', message_lower)
+            if not match:
+                return """**提交 Pattern 反馈**
+
+用法: `feedback <pattern_id> good/bad`
+
+示例:
+- `feedback abc123 good` - 标记为有帮助
+- `feedback abc123 bad` - 标记为无帮助"""
+            
+            pattern_id = match.group(1)
+            is_helpful = match.group(2) in ['good', 'helpful']
+            
+            from src.operations_knowledge import get_feedback_handler
+            handler = get_feedback_handler()
+            
+            if handler.submit_feedback(pattern_id, is_helpful):
+                return f"✅ 反馈已提交: Pattern {pattern_id} {'👍 有帮助' if is_helpful else '👎 无帮助'}"
+            else:
+                return f"❌ Pattern {pattern_id} 不存在"
+        except Exception as e:
+            return f"❌ 提交反馈失败: {str(e)}"
     
     # Account info
     if any(kw in message_lower for kw in ['account', '账号', '账户', 'who am i']):
@@ -2744,6 +2867,147 @@ async def send_notification(request: AlertRequest):
             details=request.details
         )
         return result
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+# =============================================================================
+# Operations Knowledge (Incident Learning + Pattern Management)
+# =============================================================================
+
+@app.get("/api/knowledge/stats")
+async def get_ops_knowledge_stats():
+    """Get operations knowledge statistics."""
+    try:
+        from src.operations_knowledge import get_knowledge_store
+        store = get_knowledge_store()
+        return store.get_stats()
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/api/knowledge/patterns")
+async def list_ops_patterns(
+    service: Optional[str] = None,
+    category: Optional[str] = None,
+    severity: Optional[str] = None,
+    limit: int = 50
+):
+    """List learned patterns."""
+    try:
+        from src.operations_knowledge import get_knowledge_store
+        store = get_knowledge_store()
+        patterns = store.search_patterns(
+            service=service,
+            category=category,
+            severity=severity,
+            limit=limit
+        )
+        return {
+            "patterns": [p.to_dict() for p in patterns],
+            "count": len(patterns)
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/api/knowledge/search")
+async def search_ops_knowledge(request: Dict[str, Any]):
+    """Search operations knowledge base."""
+    try:
+        from src.operations_knowledge import get_knowledge_store
+        store = get_knowledge_store()
+        
+        keywords = request.get('keywords', [])
+        if isinstance(keywords, str):
+            keywords = keywords.split()
+        
+        patterns = store.search_patterns(
+            service=request.get('service'),
+            category=request.get('category'),
+            keywords=keywords,
+            limit=request.get('limit', 10)
+        )
+        return {
+            "patterns": [p.to_dict() for p in patterns],
+            "count": len(patterns)
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+class IncidentLearnRequest(BaseModel):
+    incident_id: str
+    title: str
+    description: str
+    service: str
+    severity: str
+    symptoms: List[str] = []
+    root_cause: str = ""
+    resolution: str = ""
+    resolution_steps: List[str] = []
+
+
+@app.post("/api/knowledge/learn")
+async def learn_from_incident(request: IncidentLearnRequest):
+    """Learn pattern from a resolved incident."""
+    try:
+        from src.operations_knowledge import get_incident_learner, IncidentRecord
+        learner = get_incident_learner()
+        
+        incident = IncidentRecord(
+            incident_id=request.incident_id,
+            title=request.title,
+            description=request.description,
+            service=request.service,
+            severity=request.severity,
+            symptoms=request.symptoms,
+            root_cause=request.root_cause,
+            resolution=request.resolution,
+            resolution_steps=request.resolution_steps
+        )
+        
+        pattern = learner.learn_from_incident(incident)
+        
+        if pattern:
+            # Save the pattern
+            from src.operations_knowledge import get_knowledge_store
+            store = get_knowledge_store()
+            store.save_pattern(pattern)
+            
+            return {
+                "success": True,
+                "pattern_id": pattern.pattern_id,
+                "title": pattern.title,
+                "confidence": pattern.confidence,
+                "is_new": len(pattern.source_incidents) == 1
+            }
+        else:
+            return {"success": False, "error": "Failed to learn pattern"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+class FeedbackRequest(BaseModel):
+    pattern_id: str
+    helpful: bool
+    comment: str = ""
+
+
+@app.post("/api/knowledge/feedback")
+async def submit_pattern_feedback(request: FeedbackRequest):
+    """Submit feedback for a pattern."""
+    try:
+        from src.operations_knowledge import get_feedback_handler
+        handler = get_feedback_handler()
+        
+        success = handler.submit_feedback(
+            request.pattern_id,
+            request.helpful,
+            request.comment
+        )
+        
+        return {"success": success}
     except Exception as e:
         return {"success": False, "error": str(e)}
 
