@@ -1,252 +1,232 @@
 # AWS 故障测试计划
 
-**版本:** v1.0  
-**日期:** 2026-02-10  
-**作者:** Tester (AgenticAIOps Team)  
-**环境:** ap-southeast-1  
+**文档版本:** v1.0
+**创建日期:** 2026-02-10
+**环境:** AWS ap-southeast-1
+**账号:** 533267047935
 
 ---
 
-## 1. 测试环境概览
+## 1. 测试环境概述
 
-### 1.1 AWS 资源清单
+### 1.1 当前资源清单
 
-| 服务 | 数量 | 状态 |
+| 资源类型 | 数量 | 详情 |
+|---------|------|------|
+| EC2 实例 | 14 | 4 running, 10 stopped |
+| EKS 集群 | 1 | testing-cluster |
+| Lambda 函数 | 12 | 含 pet-store, SensativeAPI 等 |
+| 负载均衡器 | 11 | 7 ALB, 3 NLB, 1 GWLB |
+| DynamoDB 表 | 4 | FrrSensor, Music 等 |
+| VPC | 6 | 含 project-vpc, Appliance-VPC 等 |
+| S3 桶 | 50+ | 含 agentic-aiops-kb 等 |
+
+### 1.2 Running EC2 实例
+
+| Instance ID | Name | Type | 用途 |
+|-------------|------|------|------|
+| i-0e6da7fadd619d0a7 | jump-ab2-db-proxy | m5.xlarge | 跳板机/代理 |
+| i-019b2cab1bb30c430 | (unnamed) | r6i.metal | 高性能计算 |
+| i-080ab08eefa16b539 | mbot-sg-1 | m6i.xlarge | AgenticAIOps 服务器 |
+| i-089ef0b7795744434 | (unnamed) | c6g.large | ARM 计算 |
+
+### 1.3 负载均衡器
+
+| 名称 | 类型 | 状态 |
 |------|------|------|
-| EC2 Instances | 14 | 4 running, 10 stopped |
-| Lambda Functions | 12 | 1 issue detected |
-| Load Balancers | 11 | All active |
-| VPCs | 6 | Available |
-| S3 Buckets | 20 | No public |
-| DynamoDB Tables | 4 | Active |
-
-### 1.2 当前已知问题
-
-```
-发现 11 个问题:
-├── nacos-server (i-06b75135a2518cb05): stopped
-├── ec2-az2 (i-0f963ef9e36d78568): stopped
-├── selectDB-core-1 (i-02e3953e63985c3af): stopped
-├── selectDB-manager (i-06589ea880492f29c): stopped
-├── selectDB-core-2 (i-037cb6474a373dfff): stopped
-├── ec2-az-1 (i-050f8d0637b5ea512): stopped
-├── ec2-az-3 (i-082ac9eb994608b1d): stopped
-├── nexus-ai-workshop (i-03ea4f7144326c761): stopped
-├── win-server-demo-1 (i-0edf256e7d04e4b77): stopped
-├── win-session-demo-4 (i-03c731a1d57051b3c): stopped
-└── Lambda: 1 function issue
-```
+| alb-lambda-pets | Application | active |
+| alb-nacos-demo | Application | active |
+| vpca-alb-protected | Application | active |
+| sensative-api-lb | Application | active |
+| ASG-Nginx-ALB | Application | active |
+| dify-test | Application | active |
+| cloudreve-lb | Application | active |
+| nlb-for-db-test | Network | active |
+| dify-test-nlb | Network | active |
+| GWLB-Fortinet-01 | Gateway | active |
 
 ---
 
-## 2. 测试用例
+## 2. 故障测试场景
 
-### 2.1 TC-001: EC2 实例故障模拟
+### 2.1 测试场景 1: EC2 高 CPU 故障
 
-**优先级:** P0  
-**风险等级:** 中  
-**预计时间:** 10 分钟  
+**目的:** 验证系统对 EC2 CPU 异常的检测和响应能力
 
 **目标资源:**
-- 实例: `jump-ab2-db-proxy` (i-0e6da7fadd619d0a7)
+- 实例: `i-080ab08eefa16b539` (mbot-sg-1)
+- 类型: m6i.xlarge (4 vCPU)
+
+**测试步骤:**
+
+| 步骤 | 操作 | 命令/方法 | 预期结果 |
+|------|------|----------|---------|
+| 1 | 基线检查 | `ec2 health` | 记录当前 CPU 基线 |
+| 2 | 查看指标 | `ec2 metrics i-080ab08eefa16b539` | 确认 CPU < 30% |
+| 3 | 注入故障 | SSH: `stress --cpu 4 --timeout 300` | CPU 升至 >90% |
+| 4 | 检测异常 | `anomaly` | 系统检测到 CPU 异常 |
+| 5 | 健康检查 | `ec2 health` | 显示 CPU 告警 |
+| 6 | 执行 SOP | `sop run sop-ec2-high-cpu` | 按步骤排查 |
+| 7 | 恢复验证 | 等待 stress 结束后 `ec2 health` | CPU 恢复正常 |
+
+**成功标准:**
+- [ ] 系统在 5 分钟内检测到 CPU 异常
+- [ ] SOP 推荐正确
+- [ ] 恢复后健康检查通过
+
+---
+
+### 2.2 测试场景 2: EC2 实例停止故障
+
+**目的:** 验证系统对 EC2 实例状态变化的检测能力
+
+**目标资源:**
+- 实例: `i-0e6da7fadd619d0a7` (jump-ab2-db-proxy)
 - 类型: m5.xlarge
-- 状态: running
-- IP: 10.0.1.147
 
 **测试步骤:**
 
-| 步骤 | 操作 | Chat 命令 | 预期结果 |
-|------|------|-----------|----------|
-| 1 | 记录基线状态 | `ec2 health` | 记录当前健康状态 |
-| 2 | 模拟故障-停止实例 | `ec2 stop i-0e6da7fadd619d0a7` | 实例状态变为 stopping |
-| 3 | 检测故障 | `ec2 health` | 检测到实例 stopped 异常 |
-| 4 | 异常检测 | `anomaly` | 发现 EC2 异常 |
-| 5 | 查询 SOP | `sop suggest ec2 stopped` | 推荐相关 SOP |
-| 6 | 恢复服务 | `ec2 start i-0e6da7fadd619d0a7` | 实例状态变为 running |
-| 7 | 验证恢复 | `ec2 health` | 确认恢复正常 |
+| 步骤 | 操作 | 命令/方法 | 预期结果 |
+|------|------|----------|---------|
+| 1 | 基线检查 | `ec2 health` | 实例状态 running |
+| 2 | 停止实例 | `ec2 stop i-0e6da7fadd619d0a7` | 实例开始停止 |
+| 3 | 等待状态变更 | 等待 1-2 分钟 | 状态变为 stopped |
+| 4 | 健康检查 | `ec2 health` | 检测到实例 stopped |
+| 5 | 异常检测 | `anomaly` | 报告实例异常 |
+| 6 | SOP 推荐 | `sop suggest ec2 stopped` | 推荐启动 SOP |
+| 7 | 恢复实例 | `ec2 start i-0e6da7fadd619d0a7` | 实例开始启动 |
+| 8 | 验证恢复 | `ec2 health` | 实例状态 running |
 
-**验证点:**
-- [ ] 故障检测延迟 < 30 秒
-- [ ] SOP 推荐准确
-- [ ] 恢复操作成功
-
----
-
-### 2.2 TC-002: Lambda 函数错误排查
-
-**优先级:** P0  
-**风险等级:** 低  
-**预计时间:** 15 分钟  
-
-**目标资源:**
-- 函数: `SensativeAPI`
-- Runtime: python3.13
-- Memory: 128MB
-- Timeout: 3s
-
-**测试步骤:**
-
-| 步骤 | 操作 | Chat 命令 | 预期结果 |
-|------|------|-----------|----------|
-| 1 | 查看健康状态 | `lambda health` | 显示 Lambda 健康状态 |
-| 2 | 查看函数日志 | `lambda logs SensativeAPI` | 显示最近日志 |
-| 3 | 触发函数执行 | `lambda invoke SensativeAPI` | 执行函数 |
-| 4 | 检查执行结果 | `lambda logs SensativeAPI` | 查看执行结果/错误 |
-| 5 | 查询 SOP | `sop suggest lambda errors` | 推荐 Lambda 错误排查 SOP |
-| 6 | 执行 SOP | `sop show sop-lambda-errors` | 显示排查步骤 |
-
-**验证点:**
-- [ ] 日志查询正常
-- [ ] 函数调用成功/失败原因清晰
+**成功标准:**
+- [ ] 停止/启动操作成功执行
+- [ ] 健康检查正确反映状态变化
 - [ ] SOP 推荐相关
 
 ---
 
-### 2.3 TC-003: 负载均衡器健康检查失败
+### 2.3 测试场景 3: Lambda 函数错误
 
-**优先级:** P1  
-**风险等级:** 中  
-**预计时间:** 15 分钟  
+**目的:** 验证系统对 Lambda 错误的检测和日志分析能力
+
+**目标资源:**
+- 函数: `SensativeAPI`
+- Runtime: python3.13
+
+**测试步骤:**
+
+| 步骤 | 操作 | 命令/方法 | 预期结果 |
+|------|------|----------|---------|
+| 1 | 基线检查 | `lambda health` | 查看当前健康状态 |
+| 2 | 查看日志 | `lambda logs SensativeAPI` | 查看近期日志 |
+| 3 | 触发调用 | `lambda invoke SensativeAPI` | 调用函数 |
+| 4 | 检查结果 | 查看调用响应 | 记录成功/失败 |
+| 5 | 查看日志 | `lambda logs SensativeAPI` | 查看执行日志 |
+| 6 | 健康检查 | `lambda health` | 检测错误率 |
+| 7 | SOP 推荐 | `sop suggest lambda errors` | 推荐排查 SOP |
+
+**成功标准:**
+- [ ] Lambda 调用执行成功
+- [ ] 日志正确显示
+- [ ] 错误检测正常工作
+
+---
+
+### 2.4 测试场景 4: ALB 目标不健康
+
+**目的:** 验证系统对负载均衡器健康状态的监控能力
 
 **目标资源:**
 - ALB: `alb-nacos-demo`
-- 后端实例: `nacos-server` (i-06b75135a2518cb05) - 当前 stopped
+- 后端实例: `i-06b75135a2518cb05` (nacos-server)
 
 **测试步骤:**
 
-| 步骤 | 操作 | Chat 命令 | 预期结果 |
-|------|------|-----------|----------|
-| 1 | 查看 ELB 状态 | `elb health` | 显示所有 ELB 健康状态 |
-| 2 | 启动后端实例 | `ec2 start i-06b75135a2518cb05` | 启动 nacos-server |
-| 3 | 等待 Target 健康 | 等待 60 秒 | Target 变为 healthy |
-| 4 | 验证 ELB 健康 | `elb health` | alb-nacos-demo 所有 targets healthy |
-| 5 | 模拟故障-停止后端 | `ec2 stop i-06b75135a2518cb05` | 停止后端实例 |
-| 6 | 检测 unhealthy | `elb health` | 检测到 unhealthy targets |
-| 7 | 恢复并验证 | `ec2 start i-06b75135a2518cb05` | 恢复正常 |
+| 步骤 | 操作 | 命令/方法 | 预期结果 |
+|------|------|----------|---------|
+| 1 | 基线检查 | `elb health` | 查看当前 ELB 状态 |
+| 2 | 启动后端 | `ec2 start i-06b75135a2518cb05` | 确保后端运行 |
+| 3 | 检查目标健康 | `elb health` | 目标应为 healthy |
+| 4 | 停止后端 | `ec2 stop i-06b75135a2518cb05` | 模拟后端故障 |
+| 5 | 等待检测 | 等待 1-2 分钟 | 健康检查失败 |
+| 6 | 健康检查 | `elb health` | 检测到 unhealthy targets |
+| 7 | 异常检测 | `anomaly` | 报告 ELB 异常 |
+| 8 | 恢复后端 | `ec2 start i-06b75135a2518cb05` | 恢复后端实例 |
+| 9 | 验证恢复 | `elb health` | 目标恢复 healthy |
 
-**验证点:**
-- [ ] ELB 健康检查状态准确
-- [ ] Target 状态变化能被检测
-- [ ] 故障恢复流程完整
+**成功标准:**
+- [ ] ELB 健康检查正确反映后端状态
+- [ ] unhealthy targets 被检测到
+- [ ] 恢复后状态正确更新
 
 ---
 
-### 2.4 TC-004: VPC 网络故障检测
+### 2.5 测试场景 5: EKS Pod 故障
 
-**优先级:** P1  
-**风险等级:** 低  
-**预计时间:** 10 分钟  
+**目的:** 验证系统对 Kubernetes Pod 故障的检测能力
 
 **目标资源:**
-- VPC: `project-vpc` (vpc-028fe79b3785c1aba)
-- CIDR: 10.0.0.0/16
+- 集群: `testing-cluster`
+- 测试 Pod: `fault-test`
 
 **测试步骤:**
 
-| 步骤 | 操作 | Chat 命令 | 预期结果 |
-|------|------|-----------|----------|
-| 1 | 查看 VPC 列表 | `vpc` | 显示 6 个 VPC |
-| 2 | VPC 健康检查 | `vpc health` | 显示详细健康状态 |
-| 3 | 检查子网状态 | 查看响应详情 | 子网可用 |
-| 4 | 检查 IGW 状态 | 查看响应详情 | Internet Gateway attached |
-| 5 | 检查 NAT Gateway | 查看响应详情 | NAT Gateway 状态 |
+| 步骤 | 操作 | 命令/方法 | 预期结果 |
+|------|------|----------|---------|
+| 1 | 基线检查 | `eks health` 或 `k8s pods` | 查看当前 Pod 状态 |
+| 2 | 创建故障 Pod | `kubectl run fault-test --image=busybox -- /bin/sh -c "exit 1"` | Pod 开始创建 |
+| 3 | 检查状态 | `kubectl get pods` | Pod 为 CrashLoopBackOff |
+| 4 | 健康检查 | `eks health` | 检测到 Pod 异常 |
+| 5 | 查看事件 | `kubectl describe pod fault-test` | 查看错误详情 |
+| 6 | 清理 | `kubectl delete pod fault-test` | 删除测试 Pod |
+| 7 | 验证恢复 | `eks health` | 无异常 Pod |
 
-**验证点:**
-- [ ] VPC 组件状态完整
-- [ ] 子网信息准确
-- [ ] 网关状态正确
+**成功标准:**
+- [ ] CrashLoopBackOff 被正确检测
+- [ ] 健康检查报告 Pod 异常
+- [ ] 清理后状态恢复
 
 ---
 
-### 2.5 TC-005: DynamoDB 表故障
+### 2.6 测试场景 6: DynamoDB 节流
 
-**优先级:** P2  
-**风险等级:** 低  
-**预计时间:** 10 分钟  
+**目的:** 验证系统对 DynamoDB 性能问题的检测能力
 
 **目标资源:**
-- 表: `FrrSensor`, `Music`, `active-number-server`, `ice-json-poc-dynamod`
+- 表: `Music`
 
 **测试步骤:**
 
-| 步骤 | 操作 | Chat 命令 | 预期结果 |
-|------|------|-----------|----------|
-| 1 | 查看 DynamoDB 表 | `dynamodb` | 显示 4 个表 |
-| 2 | 健康检查 | `dynamodb health` | 显示表健康状态 |
-| 3 | 检查容量模式 | 查看响应详情 | PROVISIONED/PAY_PER_REQUEST |
-| 4 | 检查 Throttling | 查看响应详情 | 无 throttling 事件 |
+| 步骤 | 操作 | 命令/方法 | 预期结果 |
+|------|------|----------|---------|
+| 1 | 基线检查 | `dynamodb health` | 查看当前状态 |
+| 2 | 查看容量 | `dynamodb` | 查看表信息 |
+| 3 | 生成负载 | 批量 scan 请求 | 触发节流 |
+| 4 | 检查节流 | `dynamodb health` | 检测 ThrottledRequests |
+| 5 | 异常检测 | `anomaly` | 报告节流异常 |
 
-**验证点:**
-- [ ] 表状态 ACTIVE
-- [ ] 容量模式正确
-- [ ] 无性能问题
+**成功标准:**
+- [ ] 节流事件被检测到
+- [ ] 建议增加容量
 
 ---
 
-### 2.6 TC-006: 全服务综合健康检查
+### 2.7 测试场景 7: 综合健康检查
 
-**优先级:** P0  
-**风险等级:** 低  
-**预计时间:** 5 分钟  
+**目的:** 验证系统全面健康检查能力
 
 **测试步骤:**
 
-| 步骤 | 操作 | Chat 命令 | 预期结果 |
-|------|------|-----------|----------|
+| 步骤 | 操作 | 命令/方法 | 预期结果 |
+|------|------|----------|---------|
 | 1 | 全服务健康检查 | `health` | 显示所有服务状态 |
-| 2 | 异常检测 | `anomaly` | 检测异常模式 |
+| 2 | 异常检测 | `anomaly` | 列出所有异常 |
 | 3 | 全资源扫描 | `scan` | 扫描所有资源 |
-| 4 | 查看帮助 | `help` | 显示可用命令 |
+| 4 | 知识库搜索 | `kb search high cpu` | 搜索相关知识 |
+| 5 | SOP 列表 | `sop list` | 查看可用 SOP |
 
-**验证点:**
-- [ ] 所有服务响应正常
-- [ ] 异常检测功能工作
-- [ ] 扫描结果完整
-
----
-
-### 2.7 TC-007: SOP 系统验证
-
-**优先级:** P1  
-**风险等级:** 低  
-**预计时间:** 10 分钟  
-
-**测试步骤:**
-
-| 步骤 | 操作 | Chat 命令 | 预期结果 |
-|------|------|-----------|----------|
-| 1 | 列出所有 SOP | `sop list` | 显示 3 个内置 SOP |
-| 2 | 查看 EC2 SOP | `sop show sop-ec2-high-cpu` | 显示详细步骤 |
-| 3 | 查看 RDS SOP | `sop show sop-rds-failover` | 显示详细步骤 |
-| 4 | 查看 Lambda SOP | `sop show sop-lambda-errors` | 显示详细步骤 |
-| 5 | 推荐测试 | `sop suggest high cpu performance` | 推荐相关 SOP |
-
-**验证点:**
-- [ ] SOP 列表完整
-- [ ] SOP 详情准确
-- [ ] 推荐功能工作
-
----
-
-### 2.8 TC-008: 知识库系统验证
-
-**优先级:** P2  
-**风险等级:** 低  
-**预计时间:** 10 分钟  
-
-**测试步骤:**
-
-| 步骤 | 操作 | Chat 命令 | 预期结果 |
-|------|------|-----------|----------|
-| 1 | 查看知识库统计 | `kb stats` | 显示统计信息 |
-| 2 | 搜索知识 | `kb search performance` | 搜索结果 |
-| 3 | 学习指南 | `learn incident` | 显示学习方法 |
-| 4 | 语义搜索 | `kb semantic high cpu` | 语义搜索结果 |
-
-**验证点:**
-- [ ] 知识库功能正常
-- [ ] 搜索功能工作
-- [ ] 语义搜索响应
+**成功标准:**
+- [ ] 所有命令正常执行
+- [ ] 结果准确反映环境状态
 
 ---
 
@@ -255,58 +235,108 @@
 ### 3.1 推荐执行顺序
 
 ```
-Phase 1 (基线建立):
-├── TC-006: 全服务综合健康检查
-└── TC-007: SOP 系统验证
-
-Phase 2 (核心功能):
-├── TC-001: EC2 实例故障模拟
-├── TC-002: Lambda 函数错误排查
-└── TC-003: 负载均衡器健康检查
-
-Phase 3 (扩展功能):
-├── TC-004: VPC 网络故障检测
-├── TC-005: DynamoDB 表故障
-└── TC-008: 知识库系统验证
+1. 测试 7: 综合健康检查 (建立基线)
+2. 测试 1: EC2 高 CPU (低风险)
+3. 测试 3: Lambda 错误 (低风险)
+4. 测试 5: EKS Pod 故障 (中风险)
+5. 测试 2: EC2 停止 (中风险 - 注意选择非关键实例)
+6. 测试 4: ALB 不健康 (中风险 - 注意业务影响)
+7. 测试 6: DynamoDB 节流 (低风险)
 ```
 
-### 3.2 时间估算
+### 3.2 风险评估
 
-| Phase | 测试用例 | 预计时间 |
-|-------|----------|----------|
-| Phase 1 | TC-006, TC-007 | 15 分钟 |
-| Phase 2 | TC-001, TC-002, TC-003 | 40 分钟 |
-| Phase 3 | TC-004, TC-005, TC-008 | 30 分钟 |
-| **总计** | | **~85 分钟** |
+| 测试 | 风险等级 | 业务影响 | 注意事项 |
+|------|---------|---------|---------|
+| 测试 1 | 低 | 无 | mbot-sg-1 可承受高 CPU |
+| 测试 2 | 中 | 可能影响代理服务 | 确认无依赖后执行 |
+| 测试 3 | 低 | 无 | Lambda 调用隔离 |
+| 测试 4 | 中 | 可能影响 Nacos | 确认无业务使用 |
+| 测试 5 | 低 | 无 | 测试 Pod 隔离 |
+| 测试 6 | 低 | 无 | 读操作为主 |
+| 测试 7 | 无 | 无 | 只读操作 |
 
----
+### 3.3 回滚计划
 
-## 4. 风险评估
+每个测试都包含恢复步骤。如遇紧急情况：
 
-| 测试用例 | 风险 | 缓解措施 |
-|----------|------|----------|
-| TC-001 | 停止生产实例 | 选择非关键实例测试 |
-| TC-003 | 影响服务可用性 | 在维护窗口执行 |
-| TC-002 | 函数执行费用 | 控制调用次数 |
+```bash
+# EC2 紧急恢复
+aws ec2 start-instances --instance-ids <instance-id>
 
----
+# EKS Pod 清理
+kubectl delete pod fault-test --force
 
-## 5. 前置条件
-
-- [x] AgenticAIOps 后端运行正常
-- [x] AWS IAM 权限配置完成
-- [ ] OpenSearch 权限配置 (向量搜索)
-- [x] 测试环境资源确认
-
----
-
-## 6. 输出文档
-
-- 测试计划: `docs/tests/AWS_FAULT_TEST_PLAN.md` (本文档)
-- 测试报告: `docs/tests/AWS_FAULT_TEST_REPORT.md` (执行后生成)
-- 问题记录: `docs/tests/ISSUES.md` (如有)
+# 停止 stress 测试
+pkill stress
+```
 
 ---
 
-**文档状态:** 待审批  
-**审批人:** Ma Ronnie  
+## 4. 测试结果记录模板
+
+### 测试记录表
+
+| 项目 | 内容 |
+|------|------|
+| 测试编号 | |
+| 测试日期 | |
+| 测试人员 | |
+| 开始时间 | |
+| 结束时间 | |
+| 测试结果 | ✅ 通过 / ❌ 失败 |
+| 检测延迟 | |
+| 问题发现 | |
+| 改进建议 | |
+
+---
+
+## 5. 附录
+
+### 5.1 常用命令参考
+
+```bash
+# 健康检查
+ec2 health
+rds health
+lambda health
+elb health
+eks health
+vpc health
+health          # 全服务
+anomaly         # 异常检测
+
+# 资源查看
+ec2
+lambda
+s3
+rds
+elb
+vpc
+scan            # 全资源扫描
+
+# 操作
+ec2 start <instance-id>
+ec2 stop <instance-id>
+ec2 reboot <instance-id>
+lambda invoke <function-name>
+
+# SOP
+sop list
+sop show <sop-id>
+sop suggest <service> <keywords>
+sop run <sop-id>
+
+# 知识库
+kb stats
+kb search <query>
+```
+
+### 5.2 联系方式
+
+- 技术支持: AgenticAIOps Team
+- 紧急联系: Ma Ronnie
+
+---
+
+**文档结束**
