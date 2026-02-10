@@ -1263,13 +1263,6 @@ class AWSServiceOps:
                         unhealthy_count += 1
                 except:
                     health_status = "unknown"
-                    total = len(statuses)
-                    
-                    health_status = "healthy" if healthy_count == total else "unhealthy"
-                    if health_status == "unhealthy":
-                        unhealthy_count += 1
-                except:
-                    health_status = "unknown"
                 
                 results["health_checks"].append({
                     "id": hc_id,
