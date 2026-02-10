@@ -358,6 +358,13 @@ async def handle_aws_chat_intent(message: str) -> Optional[str]:
 | `rds metrics xxx` | RDS 指标 |
 | `lambda logs xxx` | Lambda 日志 |
 
+**🔔 告警通知:**
+| Command | Description |
+|---------|-------------|
+| `notification status` | 查看通知配置状态 |
+| `test notification` | 发送测试通知 |
+| `send alert <msg>` | 发送自定义告警 |
+
 **🔧 其他:**
 | Command | Description |
 |---------|-------------|
@@ -1267,6 +1274,92 @@ Total: {data['count']}
             return response
         except Exception as e:
             return f"❌ 获取 ElastiCache 失败: {str(e)}"
+    
+    # ===========================================
+    # Notification Commands
+    # ===========================================
+    
+    # Check notification status
+    if any(kw in message_lower for kw in ['notification status', '通知状态', 'alert status', '告警状态']):
+        try:
+            from src.notifications import get_notification_manager
+            manager = get_notification_manager()
+            status = manager.get_status()
+            
+            slack_status = "✅ 已配置" if status['channels']['slack'] else "❌ 未配置 (需设置 SLACK_WEBHOOK_URL)"
+            
+            return f"""🔔 **告警通知状态**
+
+| Channel | Status |
+|---------|--------|
+| Slack | {slack_status} |
+
+**配置方法:**
+设置环境变量 `SLACK_WEBHOOK_URL` 即可启用 Slack 告警"""
+        except Exception as e:
+            return f"❌ 获取通知状态失败: {str(e)}"
+    
+    # Send test notification
+    if any(kw in message_lower for kw in ['test notification', '测试通知', 'test alert', '测试告警']):
+        try:
+            from src.notifications import get_notification_manager
+            manager = get_notification_manager()
+            
+            if not manager.is_configured():
+                return """⚠️ **告警通知未配置**
+
+请设置 `SLACK_WEBHOOK_URL` 环境变量后重试。
+
+示例:
+```
+export SLACK_WEBHOOK_URL=https://hooks.slack.com/services/xxx
+```"""
+            
+            result = manager.send_alert(
+                title="测试告警",
+                message="这是一条测试消息，确认告警通知功能正常工作。",
+                level="info",
+                details={"Source": "AgenticAIOps", "Type": "Test"}
+            )
+            
+            if result.get('success'):
+                return "✅ **测试告警已发送！** 请检查 Slack 频道。"
+            else:
+                return f"❌ 发送失败: {result.get('error')}"
+        except Exception as e:
+            return f"❌ 测试通知失败: {str(e)}"
+    
+    # Send custom alert
+    if any(kw in message_lower for kw in ['send alert', '发送告警', 'alert']):
+        try:
+            from src.notifications import get_notification_manager
+            manager = get_notification_manager()
+            
+            if not manager.is_configured():
+                return "⚠️ 告警通知未配置，请设置 SLACK_WEBHOOK_URL"
+            
+            # Extract message after 'alert' keyword
+            import re
+            match = re.search(r'alert\s+(.+)', message, re.IGNORECASE)
+            if match:
+                alert_message = match.group(1)
+                result = manager.send_alert(
+                    title="自定义告警",
+                    message=alert_message,
+                    level="warning"
+                )
+                if result.get('success'):
+                    return f"✅ 告警已发送: {alert_message[:50]}..."
+                else:
+                    return f"❌ 发送失败: {result.get('error')}"
+            else:
+                return """**发送自定义告警**
+
+用法: `send alert <消息内容>`
+
+示例: `send alert Production DB CPU 超过 90%`"""
+        except Exception as e:
+            return f"❌ 发送告警失败: {str(e)}"
     
     # Account info
     if any(kw in message_lower for kw in ['account', '账号', '账户', 'who am i']):
@@ -2593,6 +2686,66 @@ async def get_proactive_results():
         except:
             break
     return {"results": results, "count": len(results)}
+
+
+# =============================================================================
+# Notification APIs
+# =============================================================================
+
+@app.get("/api/notifications/status")
+async def get_notification_status():
+    """Get notification system status."""
+    try:
+        from src.notifications import get_notification_manager
+        manager = get_notification_manager()
+        return manager.get_status()
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/api/notifications/test")
+async def send_test_notification():
+    """Send a test notification."""
+    try:
+        from src.notifications import get_notification_manager
+        manager = get_notification_manager()
+        
+        if not manager.is_configured():
+            return {"success": False, "error": "No notification channels configured"}
+        
+        result = manager.send_alert(
+            title="Test Alert",
+            message="This is a test notification from AgenticAIOps",
+            level="info"
+        )
+        return result
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+class AlertRequest(BaseModel):
+    title: str
+    message: str
+    level: str = "warning"
+    details: Optional[Dict[str, Any]] = None
+
+
+@app.post("/api/notifications/send")
+async def send_notification(request: AlertRequest):
+    """Send a custom notification."""
+    try:
+        from src.notifications import get_notification_manager
+        manager = get_notification_manager()
+        
+        result = manager.send_alert(
+            title=request.title,
+            message=request.message,
+            level=request.level,
+            details=request.details
+        )
+        return result
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 
 # =============================================================================
