@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { Input, Button, Avatar, Spin, Card, Typography, Space, Badge, Tooltip, Select, Tag, Tabs, message as antMessage } from 'antd'
 import { SendOutlined, RobotOutlined, UserOutlined, BellOutlined, SettingOutlined, SwapOutlined, ThunderboltOutlined, DollarOutlined } from '@ant-design/icons'
 import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 
 const { TextArea } = Input
 const { Text, Title } = Typography
@@ -105,6 +106,45 @@ function autoRouteModel(query) {
   
   // Default → Sonnet (balanced)
   return 'claude-sonnet'
+}
+
+// Markdown table + code styling
+const markdownComponents = {
+  table: ({ children }) => (
+    <table style={{
+      width: '100%', borderCollapse: 'collapse', margin: '8px 0', fontSize: 13,
+    }}>{children}</table>
+  ),
+  thead: ({ children }) => (
+    <thead style={{ background: '#fafafa', borderBottom: '2px solid #e8e8e8' }}>{children}</thead>
+  ),
+  th: ({ children }) => (
+    <th style={{
+      padding: '8px 12px', textAlign: 'left', fontWeight: 600,
+      borderBottom: '1px solid #e8e8e8', fontSize: 12,
+    }}>{children}</th>
+  ),
+  td: ({ children }) => (
+    <td style={{
+      padding: '6px 12px', borderBottom: '1px solid #f0f0f0', fontSize: 13,
+    }}>{children}</td>
+  ),
+  tr: ({ children, ...props }) => (
+    <tr style={{ borderBottom: '1px solid #f0f0f0' }} {...props}>{children}</tr>
+  ),
+  code: ({ inline, children, ...props }) => (
+    inline ? (
+      <code style={{
+        background: '#f5f5f5', padding: '2px 6px', borderRadius: 4,
+        fontSize: 13, color: '#c41d7f', fontFamily: 'monospace',
+      }} {...props}>{children}</code>
+    ) : (
+      <pre style={{
+        background: '#1e1e1e', color: '#d4d4d4', padding: 16, borderRadius: 8,
+        overflow: 'auto', fontSize: 13, lineHeight: 1.5, margin: '8px 0',
+      }}><code {...props}>{children}</code></pre>
+    )
+  ),
 }
 
 function AgentChat({ apiUrl, onNewAlert }) {
@@ -313,7 +353,7 @@ Select a model above, or use **Auto Router** for smart selection! 🚀`,
               style={{ borderColor: model.color }}
             >
               <div className="markdown-content" style={{ fontSize: 13, lineHeight: 1.5 }}>
-                <ReactMarkdown>{result.content}</ReactMarkdown>
+                <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{result.content}</ReactMarkdown>
               </div>
             </Card>
           )
@@ -486,7 +526,7 @@ Select a model above, or use **Auto Router** for smart selection! 🚀`,
                   </div>
                 )}
                 <div className="markdown-content" style={{ fontSize: 14, lineHeight: 1.6 }}>
-                  <ReactMarkdown>{msg.content}</ReactMarkdown>
+                  <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{msg.content}</ReactMarkdown>
                 </div>
                 <div style={{ marginTop: 8, fontSize: 11, color: '#999' }}>
                   {new Date(msg.timestamp).toLocaleTimeString()}
