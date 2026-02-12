@@ -148,10 +148,10 @@ class RCAInferenceEngine:
         """Lazy-init Bedrock client."""
         if self._bedrock_client is None:
             import boto3
-            # Bedrock uses us-east-1 or global endpoint
+            from src.config import AWS_REGION
             self._bedrock_client = boto3.client(
                 'bedrock-runtime',
-                region_name='us-east-1'
+                region_name=AWS_REGION  # ap-southeast-1 (models available)
             )
         return self._bedrock_client
     
