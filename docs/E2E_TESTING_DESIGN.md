@@ -5,7 +5,7 @@
 > **Status**: ✅ Phase 1 Complete (2026-02-12 20:19 UTC)  
 > **Priority**: P0 (立即实施)  
 > **Implemented by**: Developer + Tester  
-> **Result**: 18/18 tests passing (39s)
+> **Result**: 24/24 tests passing (49s) — 含评审反馈修复
 
 ---
 
@@ -155,14 +155,13 @@ export default defineConfig({
     },
   ],
 
-  // 不自动启动 webServer — 测试前需手动/CI 启动
-  // 如果需要自动启动:
-  // webServer: {
-  //   command: 'npm run dev',
-  //   port: 5173,
-  //   cwd: '..',
-  //   reuseExistingServer: true,
-  // },
+  /* Auto-start Vite dev server if not already running */
+  webServer: process.env.E2E_BASE_URL ? undefined : {
+    command: 'npm run dev',
+    url: 'http://localhost:5173',
+    reuseExistingServer: true,
+    timeout: 30_000,
+  },
 });
 ```
 
@@ -612,7 +611,7 @@ await browser.close();
 | 1 | `webServer` 配置启用 | ✅ 已实现 | 配置中已有，`E2E_BASE_URL` 覆盖 |
 | 2 | Selector 加 `data-testid` | 📋 待办 | Phase 2 |
 | 3 | Mock 格式 JSON vs SSE 对齐 | ✅ 已确认 | Chat 用 `axios.post` → JSON，mock 正确 |
-| 4 | 超时值提取到 config | 📋 待办 | Phase 2 |
+| 4 | 超时值提取到 config | ✅ 已修复 | `TIMEOUTS` 常量 + `E2E_SLOW`/`CI` 环境变量自适应 |
 | 5 | Console error 过滤 React warnings | ✅ 已实现 | smoke 测试已过滤 `Warning:` |
 | 6 | Visual regression (`toHaveScreenshot`) | 📋 待办 | Phase 4 |
 

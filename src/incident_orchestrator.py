@@ -248,7 +248,13 @@ class IncidentOrchestrator:
             from src.rca_sop_bridge import get_bridge
             bridge = get_bridge()
             
-            matched_sops = bridge._find_matching_sops(rca_result)
+            # Use public API: analyze_and_suggest
+            bridge_result = bridge.analyze_and_suggest(
+                telemetry=event.to_rca_telemetry(),
+                symptoms=None,
+                auto_execute=False,  # We handle execution ourselves
+            )
+            matched_sops = bridge_result.suggested_sops
             incident.matched_sops = matched_sops
             incident.stage_timings["sop_match"] = int((time.time() - stage_start) * 1000)
             
@@ -263,7 +269,12 @@ class IncidentOrchestrator:
                 best_sop = matched_sops[0]
                 
                 # Extract resource IDs from RCA
-                resource_ids = rca_result.matched_symptoms if hasattr(rca_result, 'matched_symptoms') else []
+                # Prefer affected_resources from RCA, fallback to matched_symptoms
+                resource_ids = (
+                    getattr(rca_result, 'affected_resources', None)
+                    or getattr(rca_result, 'matched_symptoms', None)
+                    or []
+                )
                 
                 safety_result = safety.check(
                     sop_id=best_sop['sop_id'],
