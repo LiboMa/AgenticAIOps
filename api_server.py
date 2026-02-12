@@ -2799,6 +2799,41 @@ async def rca_deep_analyze(
         import traceback
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
+
+@app.get("/api/safety/check/{sop_id}")
+async def safety_check(sop_id: str, dry_run: bool = True):
+    """Safety check / dry-run for a SOP."""
+    try:
+        from src.sop_safety import get_safety_layer
+        safety = get_safety_layer()
+        check = safety.check(sop_id=sop_id, dry_run=dry_run)
+        return {"success": True, **check.to_dict()}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/safety/stats")
+async def safety_stats():
+    """Get safety layer statistics."""
+    try:
+        from src.sop_safety import get_safety_layer
+        safety = get_safety_layer()
+        return {"success": True, **safety.get_stats()}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/safety/approvals")
+async def safety_approvals():
+    """Get pending approvals."""
+    try:
+        from src.sop_safety import get_safety_layer
+        safety = get_safety_layer()
+        return {"success": True, "approvals": safety.get_pending_approvals()}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
