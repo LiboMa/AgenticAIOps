@@ -1725,6 +1725,93 @@ POST /api/knowledge/learn
     # ===========================================
     
     # RCA Analyze: Combined RCA + SOP suggestion
+    # Incident: Full closed-loop pipeline
+    if any(kw in message_lower for kw in ['incident run', '事件处理', 'incident handle', 'closed loop', '闭环']):
+        try:
+            import asyncio, re
+            from src.incident_orchestrator import get_orchestrator
+            
+            # Parse options
+            dry_run = 'dry' in message_lower or '预览' in message_lower
+            auto_exec = 'auto' in message_lower or '自动' in message_lower
+            
+            match = re.search(r'(?:incident|事件|闭环)\s+(?:run|handle|处理)?\s*(ec2|rds|lambda)?', message, re.IGNORECASE)
+            service_filter = [match.group(1).lower()] if match and match.group(1) else None
+            
+            orchestrator = get_orchestrator(_current_region)
+            
+            loop = asyncio.new_event_loop()
+            try:
+                incident = loop.run_until_complete(
+                    orchestrator.handle_incident(
+                        trigger_type="manual",
+                        trigger_data={"source": "chat", "message": message},
+                        services=service_filter,
+                        auto_execute=auto_exec,
+                        dry_run=dry_run,
+                    )
+                )
+            finally:
+                loop.close()
+            
+            return incident.to_markdown()
+        except Exception as e:
+            import traceback
+            return f"❌ 事件处理失败: {str(e)}\n```\n{traceback.format_exc()[:500]}\n```"
+    
+    # Incident List
+    if any(kw in message_lower for kw in ['incident list', '事件列表', 'incidents']):
+        try:
+            from src.incident_orchestrator import get_orchestrator
+            
+            orchestrator = get_orchestrator(_current_region)
+            incidents = orchestrator.list_incidents(limit=10)
+            
+            if not incidents:
+                return "📋 暂无事件记录。使用 `incident run` 启动闭环分析。"
+            
+            response = f"📋 **事件列表** ({len(incidents)})\n\n"
+            response += "| ID | 触发 | 状态 | 耗时 | 时间 |\n|-----|------|------|------|------|\n"
+            for inc in incidents:
+                status_icon = '✅' if inc['status'] == 'completed' else '❌' if inc['status'] == 'failed' else '⏳'
+                response += f"| `{inc['incident_id'][:12]}` | {inc['trigger_type']} | {status_icon} {inc['status']} | {inc['duration_ms']}ms | {inc['created_at'][:19]} |\n"
+            return response
+        except Exception as e:
+            return f"❌ 获取事件列表失败: {str(e)}"
+    
+    # Incident Stats
+    if any(kw in message_lower for kw in ['incident stats', '事件统计']):
+        try:
+            from src.incident_orchestrator import get_orchestrator
+            
+            orchestrator = get_orchestrator(_current_region)
+            stats = orchestrator.get_stats()
+            
+            target_icon = '✅' if stats['within_target'] else '⚠️'
+            
+            response = f"""📊 **闭环管道统计**
+
+| 指标 | 值 |
+|------|-----|
+| 总事件数 | {stats['total_incidents']} |
+| 平均耗时 | {stats['avg_duration_ms']}ms |
+| 目标 | {target_icon} {stats['target_ms']}ms |
+"""
+            if stats['by_status']:
+                response += "\n**状态分布:**\n"
+                for status, count in stats['by_status'].items():
+                    response += f"- {status}: {count}\n"
+            
+            if stats['avg_stage_timings']:
+                response += "\n**各阶段平均耗时:**\n\n"
+                response += "| 阶段 | 耗时 |\n|------|------|\n"
+                for stage, ms in stats['avg_stage_timings'].items():
+                    response += f"| {stage} | {ms}ms |\n"
+            
+            return response
+        except Exception as e:
+            return f"❌ 获取统计失败: {str(e)}"
+    
     # RCA Deep: Full pipeline — Collect → Analyze with Claude → SOP
     if any(kw in message_lower for kw in ['rca deep', 'rca 深度', 'deep analyze', '深度分析']):
         try:
@@ -2249,6 +2336,14 @@ POST /api/knowledge/learn
 - `safety stats` - 安全层状态 (冷却/计数/上限)
 - `approvals` - 查看待审批列表 (L2/L3 SOP)
 - `approve <id>` / `reject <id>` - 审批处理
+
+**🔄 闭环管道 (NEW):**
+- `incident run` - **完整闭环**: 采集→RCA→SOP匹配→安全检查
+- `incident run ec2` / `incident run rds` - 指定服务
+- `incident run auto` - 闭环 + 自动执行 L0/L1 SOP
+- `incident run dry` - 预览模式 (不执行)
+- `incident list` - 事件历史
+- `incident stats` - 管道性能统计
 
 **📋 资源列表:**
 - `scan` / `扫描` - 全资源扫描
@@ -2830,6 +2925,53 @@ async def safety_approvals():
         from src.sop_safety import get_safety_layer
         safety = get_safety_layer()
         return {"success": True, "approvals": safety.get_pending_approvals()}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/incident/run")
+async def incident_run(
+    trigger_type: str = "manual",
+    services: str = None,
+    auto_execute: bool = False,
+    dry_run: bool = False,
+):
+    """Full closed-loop incident pipeline: Collect → Analyze → Match → Safety → Execute."""
+    try:
+        from src.incident_orchestrator import get_orchestrator
+        orchestrator = get_orchestrator(_current_region)
+        service_list = services.split(',') if services else None
+        
+        incident = await orchestrator.handle_incident(
+            trigger_type=trigger_type,
+            services=service_list,
+            auto_execute=auto_execute,
+            dry_run=dry_run,
+        )
+        return {"success": True, **incident.to_dict()}
+    except Exception as e:
+        import traceback
+        return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
+
+
+@app.get("/api/incident/list")
+async def incident_list(limit: int = 20, status: str = None):
+    """List recent incidents."""
+    try:
+        from src.incident_orchestrator import get_orchestrator
+        orchestrator = get_orchestrator(_current_region)
+        return {"success": True, "incidents": orchestrator.list_incidents(limit, status)}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/incident/stats")
+async def incident_stats():
+    """Get incident pipeline statistics."""
+    try:
+        from src.incident_orchestrator import get_orchestrator
+        orchestrator = get_orchestrator(_current_region)
+        return {"success": True, **orchestrator.get_stats()}
     except Exception as e:
         return {"success": False, "error": str(e)}
 

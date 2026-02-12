@@ -605,6 +605,17 @@ await browser.close();
 2. 或使用 `webServer` 配置让 Playwright 自动启动
 3. 后端 API 可选 — 通过 Mock 解耦
 
+## 评审改进跟踪 (Reviewer: 2026-02-12)
+
+| # | 建议 | 状态 | 计划 |
+|---|------|------|------|
+| 1 | `webServer` 配置启用 | ✅ 已实现 | 配置中已有，`E2E_BASE_URL` 覆盖 |
+| 2 | Selector 加 `data-testid` | 📋 待办 | Phase 2 |
+| 3 | Mock 格式 JSON vs SSE 对齐 | ⚠️ 技术债 | Chat 组件切 streaming 时修 |
+| 4 | 超时值提取到 config | 📋 待办 | Phase 2 |
+| 5 | Console error 过滤 React warnings | ✅ 已实现 | smoke 测试已过滤 `Warning:` |
+| 6 | Visual regression (`toHaveScreenshot`) | 📋 待办 | Phase 4 |
+
 ## 风险与缓解
 
 | 风险 | 影响 | 缓解 |

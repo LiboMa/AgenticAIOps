@@ -171,6 +171,20 @@ Improvements: API latency down 29%, error rate down 60%.`,
 };
 
 /**
+ * Centralized timeouts — adjust per environment via E2E_SLOW=1
+ * (Reviewer feedback: avoid hardcoded timeouts scattered across specs)
+ */
+const isSlow = !!process.env.E2E_SLOW || !!process.env.CI;
+export const TIMEOUTS = {
+  /** Wait for an assistant response to appear in the DOM */
+  response: isSlow ? 30_000 : 15_000,
+  /** Wait for a specific UI element to be visible */
+  element: isSlow ? 20_000 : 10_000,
+  /** Short pause (only used in screenshot tests) */
+  settle: isSlow ? 3_000 : 1_000,
+};
+
+/**
  * Extended test fixture with API mocking support.
  */
 export const test = base.extend({
@@ -191,6 +205,10 @@ export const test = base.extend({
     };
 
     // Intercept all /api/chat calls
+    // ⚠️ RISK: Current mock uses JSON (matching AgentChat.jsx's fetch→json pattern).
+    //    If frontend switches to SSE streaming (text/event-stream), this mock
+    //    MUST be updated to use route.fulfill with chunked SSE format.
+    //    Ref: Reviewer feedback 2026-02-12, Orchestrator confirmation.
     await page.route('**/api/chat', async (route) => {
       const body = MOCK_RESPONSES[currentKey] || MOCK_RESPONSES.default;
       await route.fulfill({

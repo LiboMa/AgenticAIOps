@@ -7,7 +7,7 @@
  * 
  * Regression target: MarkdownRenderer.jsx + AgentChat.jsx
  */
-import { test, expect, MOCK_RESPONSES } from './fixtures/test-fixtures.js';
+import { test, expect, MOCK_RESPONSES, TIMEOUTS } from "./fixtures/test-fixtures.js";
 
 test.describe('Bug-008: Table Rendering', () => {
   
@@ -28,12 +28,12 @@ test.describe('Bug-008: Table Rendering', () => {
 
     // Wait for the assistant response to appear (contains "Pod Name")
     const responseArea = page.locator('.message-wrapper').last();
-    await expect(responseArea).toBeVisible({ timeout: 15_000 });
+    await expect(responseArea).toBeVisible({ timeout: TIMEOUTS.response });
 
     // Wait for table content to render
     await page.waitForFunction(
       () => document.body.innerText.includes('api-server'),
-      { timeout: 15_000 }
+      { timeout: TIMEOUTS.response }
     );
 
     // ✅ CORE ASSERTION: HTML <table> must exist inside the chat area
@@ -71,7 +71,7 @@ test.describe('Bug-008: Table Rendering', () => {
 
     await page.waitForFunction(
       () => document.body.innerText.includes('api-server'),
-      { timeout: 15_000 }
+      { timeout: TIMEOUTS.response }
     );
 
     const table = page.locator('table').first();
@@ -101,7 +101,7 @@ test.describe('Bug-008: Table Rendering', () => {
 
     await page.waitForFunction(
       () => document.body.innerText.includes('redis-cache'),
-      { timeout: 15_000 }
+      { timeout: TIMEOUTS.response }
     );
 
     const table = page.locator('table').first();
@@ -129,7 +129,7 @@ test.describe('Bug-008: Table Rendering', () => {
 
     await page.waitForFunction(
       () => document.body.innerText.includes('worker-deployment'),
-      { timeout: 15_000 }
+      { timeout: TIMEOUTS.response }
     );
 
     // Table should render even alongside code blocks and lists
@@ -154,7 +154,7 @@ test.describe('Bug-008: Table Rendering', () => {
 
     await page.waitForFunction(
       () => document.body.innerText.includes('api-server'),
-      { timeout: 15_000 }
+      { timeout: TIMEOUTS.response }
     );
 
     // Take screenshot for visual inspection

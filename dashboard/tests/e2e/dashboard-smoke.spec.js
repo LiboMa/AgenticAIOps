@@ -4,7 +4,7 @@
  * Basic tests to verify the dashboard loads and core UI elements are present.
  * Acts as a regression gate for all frontend changes.
  */
-import { test, expect } from './fixtures/test-fixtures.js';
+import { test, expect, TIMEOUTS } from "./fixtures/test-fixtures.js";
 
 test.describe('Dashboard Smoke Tests', () => {
 
@@ -42,7 +42,7 @@ test.describe('Dashboard Smoke Tests', () => {
     const title = page.locator('text=AI Operations Assistant').or(
       page.locator('text=AIOps Assistant')
     );
-    await expect(title.first()).toBeVisible({ timeout: 10_000 });
+    await expect(title.first()).toBeVisible({ timeout: TIMEOUTS.element });
   });
 
   test('should have a chat input area', async ({ page }) => {
@@ -50,7 +50,7 @@ test.describe('Dashboard Smoke Tests', () => {
     await page.waitForLoadState('networkidle');
 
     const textarea = page.locator('textarea').first();
-    await expect(textarea).toBeVisible({ timeout: 10_000 });
+    await expect(textarea).toBeVisible({ timeout: TIMEOUTS.element });
     await expect(textarea).toBeEnabled();
   });
 
@@ -59,10 +59,10 @@ test.describe('Dashboard Smoke Tests', () => {
     await page.waitForLoadState('networkidle');
 
     // Wait for the chat textarea to appear first (ensures page is rendered)
-    await expect(page.locator('textarea').first()).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('textarea').first()).toBeVisible({ timeout: TIMEOUTS.element });
 
     const sendBtn = page.locator('button').filter({ hasText: /send/i }).first();
-    await expect(sendBtn).toBeVisible({ timeout: 10_000 });
+    await expect(sendBtn).toBeVisible({ timeout: TIMEOUTS.element });
   });
 
   test('should have model selector', async ({ page }) => {
@@ -71,7 +71,7 @@ test.describe('Dashboard Smoke Tests', () => {
 
     // Ant Design Select for model
     const modelSelector = page.locator('.ant-select').first();
-    await expect(modelSelector).toBeVisible({ timeout: 10_000 });
+    await expect(modelSelector).toBeVisible({ timeout: TIMEOUTS.element });
   });
 
   test('should show welcome message on load', async ({ page }) => {
@@ -82,7 +82,7 @@ test.describe('Dashboard Smoke Tests', () => {
     const welcomeText = page.locator('text=Welcome to AgenticAIOps').or(
       page.locator('text=AIOps Assistant')
     );
-    await expect(welcomeText.first()).toBeVisible({ timeout: 10_000 });
+    await expect(welcomeText.first()).toBeVisible({ timeout: TIMEOUTS.element });
   });
 
   test('should send a message and receive a response', async ({ page, mockApi }) => {
@@ -99,10 +99,10 @@ test.describe('Dashboard Smoke Tests', () => {
     await sendBtn.click();
 
     // User message should appear (use exact match to avoid multiple hits)
-    await expect(page.getByText('health check', { exact: true })).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText('health check', { exact: true })).toBeVisible({ timeout: TIMEOUTS.element });
 
     // Assistant response should appear
-    await expect(page.locator('text=Health Check Complete')).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('text=Health Check Complete')).toBeVisible({ timeout: TIMEOUTS.response });
   });
 
   test('should render markdown in responses (bold, code)', async ({ page, mockApi }) => {
@@ -115,7 +115,7 @@ test.describe('Dashboard Smoke Tests', () => {
     await page.locator('button').filter({ hasText: /send/i }).first().click();
 
     // Wait for response
-    await expect(page.locator('text=Health Check Complete')).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('text=Health Check Complete')).toBeVisible({ timeout: TIMEOUTS.response });
 
     // Bold text should render as <strong> not raw **
     const strongElements = page.locator('strong');

@@ -8,10 +8,10 @@
  * - Multiple tables in one response
  * - Table alongside other markdown elements (nested context)
  */
-import { test, expect } from './fixtures/test-fixtures.js';
+import { test, expect, TIMEOUTS } from "./fixtures/test-fixtures.js";
 
 /** Helper: send a message and wait for response */
-async function sendAndWait(page, message, waitForText, timeout = 15_000) {
+async function sendAndWait(page, message, waitForText, timeout = TIMEOUTS.response) {
   const textarea = page.locator('textarea').first();
   await textarea.fill(message);
   await page.locator('button').filter({ hasText: /send/i }).first().click();

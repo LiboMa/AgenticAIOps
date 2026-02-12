@@ -8,7 +8,7 @@
  * - Links, blockquotes
  * - Dark/light mode styling
  */
-import { test, expect } from './fixtures/test-fixtures.js';
+import { test, expect, TIMEOUTS } from "./fixtures/test-fixtures.js";
 
 test.describe('Markdown Rendering', () => {
 
@@ -27,7 +27,7 @@ test.describe('Markdown Rendering', () => {
     // Wait for response with code block
     await page.waitForFunction(
       () => document.body.innerText.includes('memory'),
-      { timeout: 15_000 }
+      { timeout: TIMEOUTS.response }
     );
 
     // Code should be in <pre> or syntax-highlighted block, not raw backticks
@@ -49,7 +49,7 @@ test.describe('Markdown Rendering', () => {
 
     await page.waitForFunction(
       () => document.body.innerText.includes('512Mi'),
-      { timeout: 15_000 }
+      { timeout: TIMEOUTS.response }
     );
 
     // Inline code `512Mi` should be in a <code> element
@@ -66,7 +66,7 @@ test.describe('Markdown Rendering', () => {
 
     await page.waitForFunction(
       () => document.body.innerText.includes('Memory usage spiked'),
-      { timeout: 15_000 }
+      { timeout: TIMEOUTS.response }
     );
 
     // Lists should use <ol> or <li> elements
@@ -83,7 +83,7 @@ test.describe('Markdown Rendering', () => {
 
     await page.waitForFunction(
       () => document.body.innerText.includes('RCA Analysis'),
-      { timeout: 15_000 }
+      { timeout: TIMEOUTS.response }
     );
 
     // ## RCA Analysis should render as <h2>
