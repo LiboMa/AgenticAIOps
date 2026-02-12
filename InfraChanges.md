@@ -1,30 +1,33 @@
 # InfraChanges.md
-> 所有基础设施变更记录。每次变更必须有 Terraform 代码。
+
+> 所有 AWS 资源变更记录。每次变更必须有 Terraform IaC。
 
 ---
-
-## 当前基础设施 (ap-southeast-1)
-
-| 资源 | 名称/ID | 状态 |
-|------|---------|------|
-| EC2 | i-080ab08eefa16b539 (mbot-sg-1) | ✅ running |
-| EC2 | i-0e6da7fadd619d0a7 (jump-ab2-db-proxy) | ✅ running |
-| OpenSearch | os2 cluster | ✅ active |
-| S3 | agentic-aiops-knowledge-base | ⚠️ 待确认 |
 
 ## 变更记录
 
-| 日期 | 变更 | Terraform 文件 | 操作人 | 状态 |
-|------|------|---------------|--------|------|
-| 2026-02-12 | OpenSearch os2: FGAC master user → iam-mbot-role IAM ARN | infra/opensearch.tf (TODO) | Developer (AWS CLI) | ✅ Applied |
+| 日期 | 变更 | 资源 | Region | Terraform | 状态 |
+|------|------|------|--------|-----------|------|
+| 2026-02-12 | OpenSearch os2 FGAC: 设置 iam-mbot-role 为 master user | OpenSearch os2 | ap-southeast-1 | `infra/terraform/opensearch_fgac.tf` | ✅ Applied |
 
 ---
 
-## 规则
-1. **每次** 创建/修改 AWS 资源必须先写 Terraform
-2. Terraform 文件存放: `infra/terraform/`
-3. 变更前记录在此文件
-4. 描述简洁清晰
+## 现有资源 (Baseline)
+
+| 资源 | ID/名称 | Region | 备注 |
+|------|---------|--------|------|
+| EC2 | i-080ab08eefa16b539 (mbot-sg-1) | ap-southeast-1 | 主服务器 |
+| EC2 | i-0e6da7fadd619d0a7 (jump-ab2-db-proxy) | ap-southeast-1 | DB Proxy |
+| OpenSearch | os2 (3节点 r7g.large) | ap-southeast-1 | 向量搜索, FGAC enabled |
+| S3 | agentic-aiops-knowledge-base | ap-southeast-1 | 知识库 |
+| DevOps Guru | 已启用 | ap-southeast-1 | 0 insights |
 
 ---
-*最后更新: 2026-02-12 19:53 UTC*
+
+## 区域规则
+- **所有资源**: ap-southeast-1
+- **Bedrock**: 单独区域 (global endpoint)
+
+---
+
+*最后更新: 2026-02-12 19:56 UTC*

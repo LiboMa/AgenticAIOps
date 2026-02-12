@@ -1725,6 +1725,78 @@ POST /api/knowledge/learn
     # ===========================================
     
     # RCA Analyze: Combined RCA + SOP suggestion
+    # RCA Deep: Full pipeline — Collect → Analyze with Claude → SOP
+    if any(kw in message_lower for kw in ['rca deep', 'rca 深度', 'deep analyze', '深度分析']):
+        try:
+            import asyncio
+            from src.event_correlator import get_correlator
+            from src.rca_inference import get_rca_inference_engine
+            from src.rca_sop_bridge import get_bridge
+            
+            # Parse optional service filter
+            import re
+            match = re.search(r'(?:rca deep|deep analyze|深度分析)\s*(.*)', message, re.IGNORECASE)
+            service_filter = None
+            if match and match.group(1).strip():
+                svc = match.group(1).strip().lower()
+                if svc in ['ec2', 'rds', 'lambda']:
+                    service_filter = [svc]
+            
+            # Step 1: Collect data
+            correlator = get_correlator(_current_region)
+            loop = asyncio.new_event_loop()
+            try:
+                event = loop.run_until_complete(
+                    correlator.collect(services=service_filter, lookback_minutes=60)
+                )
+                
+                # Step 2: Claude inference
+                engine = get_rca_inference_engine()
+                rca_result = loop.run_until_complete(engine.analyze(event))
+            finally:
+                loop.close()
+            
+            # Step 3: SOP suggestion
+            bridge = get_bridge()
+            sop_suggestions = bridge._find_matching_sops(rca_result)
+            
+            # Build response
+            from src.rca.models import Severity
+            severity_icon = '🔴' if rca_result.severity == Severity.HIGH else '🟡' if rca_result.severity == Severity.MEDIUM else '🟢'
+            
+            # Build response
+            response = f"""🔬 **深度 RCA 分析** (Region: {_current_region})
+
+**采集数据:** {len(event.metrics)} 指标 | {len(event.alarms)} 告警 | {len(event.trail_events)} 事件 | 耗时 {event.duration_ms}ms
+
+---
+
+**根因:** {rca_result.root_cause}
+**严重性:** {severity_icon} {rca_result.severity.value.upper()}
+**置信度:** {rca_result.confidence:.0%}
+**分析模型:** `{rca_result.pattern_id}`
+
+### 📋 证据链
+"""
+            for e in rca_result.evidence:
+                response += f"- {e}\n"
+            
+            if sop_suggestions:
+                response += "\n### 🛠️ 推荐 SOP\n\n"
+                response += "| SOP | 名称 | 匹配度 | 步骤 |\n|-----|------|--------|------|\n"
+                for sop in sop_suggestions[:3]:
+                    response += f"| `{sop['sop_id']}` | {sop['name']} | {sop['match_confidence']:.0%} | {sop['steps']}步 |\n"
+                response += "\n使用 `sop run <id>` 执行"
+            
+            if rca_result.remediation.suggestion:
+                response += f"\n\n### 💡 建议\n{rca_result.remediation.suggestion}"
+            
+            return response
+        except Exception as e:
+            import traceback
+            return f"❌ 深度 RCA 分析失败: {str(e)}\n```\n{traceback.format_exc()[:500]}\n```"
+    
+    # RCA Analyze: Combined RCA + SOP suggestion (existing - symptom based)
     if any(kw in message_lower for kw in ['rca analyze', 'rca 分析', 'diagnose', '诊断问题', 'root cause']):
         try:
             import re
@@ -2057,7 +2129,9 @@ POST /api/knowledge/learn
 - `anomaly` / `异常` / `检测问题` - 异常检测
 
 **🔬 RCA + SOP 联动 (NEW):**
-- `rca analyze <症状>` - 根因分析 + 自动推荐 SOP
+- `rca deep` - **完整分析**: 采集数据 → Claude 推理 → SOP 推荐
+- `rca deep ec2` / `rca deep rds` - 指定服务深度分析
+- `rca analyze <症状>` - 基于症状的快速分析
 - `rca autofix <症状>` - 分析并自动执行低风险 SOP
 - `rca feedback <exec_id> <sop_id> <pattern_id> success/fail` - 执行反馈
 - `rca stats` - 查看 RCA↔SOP 学习统计
@@ -2562,9 +2636,54 @@ async def collect_events_for_rca(
         return {"success": False, "error": str(e)}
 
 
-# =============================================================================
-# Health Check
-# =============================================================================
+@app.post("/api/rca/deep")
+async def rca_deep_analyze(
+    services: str = None,
+    lookback_minutes: int = 60,
+    force_llm: bool = False,
+):
+    """
+    Full RCA pipeline: Collect → Infer with Claude → SOP suggestions.
+    
+    This is the main RCA endpoint combining Step 1 + Step 2 + Step 3.
+    """
+    try:
+        from src.event_correlator import get_correlator
+        from src.rca_inference import get_rca_inference_engine
+        from src.rca_sop_bridge import get_bridge
+        
+        # Step 1: Collect
+        correlator = get_correlator(_current_region)
+        service_list = services.split(',') if services else None
+        event = await correlator.collect(
+            services=service_list,
+            lookback_minutes=lookback_minutes,
+        )
+        
+        # Step 2: Analyze
+        engine = get_rca_inference_engine()
+        rca_result = await engine.analyze(event, force_llm=force_llm)
+        
+        # Step 3: SOP suggestions
+        bridge = get_bridge()
+        sop_suggestions = bridge._find_matching_sops(rca_result)
+        
+        return {
+            "success": True,
+            "collection": {
+                "id": event.collection_id,
+                "duration_ms": event.duration_ms,
+                "metrics": len(event.metrics),
+                "alarms": len(event.alarms),
+                "trail_events": len(event.trail_events),
+                "anomalies": len(event.anomalies),
+            },
+            "rca": rca_result.to_dict(),
+            "sop_suggestions": sop_suggestions,
+        }
+    except Exception as e:
+        import traceback
+        return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 @app.get("/health")
 async def health_check():
