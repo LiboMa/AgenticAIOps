@@ -248,13 +248,15 @@ class IncidentOrchestrator:
             from src.rca_sop_bridge import get_bridge
             bridge = get_bridge()
             
-            # Use public API: analyze_and_suggest
-            bridge_result = bridge.analyze_and_suggest(
-                telemetry=event.to_rca_telemetry(),
-                symptoms=None,
-                auto_execute=False,  # We handle execution ourselves
-            )
-            matched_sops = bridge_result.suggested_sops
+            # Match SOPs using the bridge (pass pre-computed RCA result)
+            matched_sops = bridge._find_matching_sops(rca_result)
+            
+            # Enrich with auto_execute policy
+            for sop in matched_sops:
+                sop_severity = sop.get('severity', 'medium')
+                sop['auto_execute'] = (
+                    sop_severity == 'low' and rca_result.confidence >= 0.8
+                )
             incident.matched_sops = matched_sops
             incident.stage_timings["sop_match"] = int((time.time() - stage_start) * 1000)
             
