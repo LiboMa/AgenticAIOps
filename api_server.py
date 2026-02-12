@@ -761,7 +761,7 @@ async def handle_aws_chat_intent(message: str) -> Optional[str]:
             loop = asyncio.new_event_loop()
             try:
                 event = loop.run_until_complete(
-                    correlator.collect(services=services, lookback_minutes=60)
+                    correlator.collect(services=services, lookback_minutes=15)
                 )
             finally:
                 loop.close()
@@ -1735,6 +1735,10 @@ POST /api/knowledge/learn
             dry_run = 'dry' in message_lower or '预览' in message_lower
             auto_exec = 'auto' in message_lower or '自动' in message_lower
             
+            # Parse lookback (e.g., "incident run 30min")
+            lb_match = re.search(r'(\d+)\s*min', message, re.IGNORECASE)
+            lookback = int(lb_match.group(1)) if lb_match else 15
+            
             match = re.search(r'(?:incident|事件|闭环)\s+(?:run|handle|处理)?\s*(ec2|rds|lambda)?', message, re.IGNORECASE)
             service_filter = [match.group(1).lower()] if match and match.group(1) else None
             
@@ -1749,6 +1753,7 @@ POST /api/knowledge/learn
                         services=service_filter,
                         auto_execute=auto_exec,
                         dry_run=dry_run,
+                        lookback_minutes=lookback,
                     )
                 )
             finally:
@@ -1834,7 +1839,7 @@ POST /api/knowledge/learn
             loop = asyncio.new_event_loop()
             try:
                 event = loop.run_until_complete(
-                    correlator.collect(services=service_filter, lookback_minutes=60)
+                    correlator.collect(services=service_filter, lookback_minutes=15)
                 )
                 
                 # Step 2: Claude inference

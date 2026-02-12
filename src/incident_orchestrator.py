@@ -179,6 +179,7 @@ class IncidentOrchestrator:
         auto_execute: bool = False,
         dry_run: bool = False,
         force: bool = False,
+        lookback_minutes: int = 15,
     ) -> IncidentRecord:
         """
         Full closed-loop incident handling pipeline.
@@ -215,7 +216,7 @@ class IncidentOrchestrator:
             
             event = await correlator.collect(
                 services=services,
-                lookback_minutes=60,
+                lookback_minutes=lookback_minutes,  # User-configurable, default 15
             )
             
             incident.collection_summary = {
