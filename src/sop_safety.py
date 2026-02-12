@@ -93,14 +93,23 @@ API_RISK_MAP = {
 
 # SOP-level risk overrides (more conservative)
 SOP_RISK_MAP = {
+    # L0: Read-only diagnostics
+    "sop-describe-instances": RiskLevel.L0,
+    "sop-list-resources": RiskLevel.L0,
+    "sop-get-metrics": RiskLevel.L0,
+    "sop-check-health": RiskLevel.L0,
+    "sop-get-logs": RiskLevel.L0,
+    # L1: Low-risk reversible
     "sop-ec2-high-cpu": RiskLevel.L1,
-    "sop-rds-failover": RiskLevel.L3,
     "sop-lambda-errors": RiskLevel.L1,
     "sop-ec2-disk-full": RiskLevel.L1,
-    "sop-rds-storage-low": RiskLevel.L2,
     "sop-elb-5xx-spike": RiskLevel.L1,
-    "sop-ec2-unreachable": RiskLevel.L2,
     "sop-dynamodb-throttle": RiskLevel.L1,
+    # L2: Medium-risk
+    "sop-rds-storage-low": RiskLevel.L2,
+    "sop-ec2-unreachable": RiskLevel.L2,
+    # L3: High-risk destructive
+    "sop-rds-failover": RiskLevel.L3,
 }
 
 
@@ -497,7 +506,7 @@ class SOPSafetyLayer:
         if any(kw in sop_lower for kw in ['restart', 'reboot', 'scale', 'clean']):
             return RiskLevel.L1
         
-        return RiskLevel.L1  # Default to L1 (safe assumption)
+        return RiskLevel.L2  # Default to L2 (safe: require confirmation for unknown SOPs)
     
     def _check_cooldown(
         self, sop_id: str, resource_ids: List[str], risk_level: RiskLevel

@@ -611,7 +611,7 @@ await browser.close();
 |---|------|------|------|
 | 1 | `webServer` 配置启用 | ✅ 已实现 | 配置中已有，`E2E_BASE_URL` 覆盖 |
 | 2 | Selector 加 `data-testid` | 📋 待办 | Phase 2 |
-| 3 | Mock 格式 JSON vs SSE 对齐 | ⚠️ 技术债 | Chat 组件切 streaming 时修 |
+| 3 | Mock 格式 JSON vs SSE 对齐 | ✅ 已确认 | Chat 用 `axios.post` → JSON，mock 正确 |
 | 4 | 超时值提取到 config | 📋 待办 | Phase 2 |
 | 5 | Console error 过滤 React warnings | ✅ 已实现 | smoke 测试已过滤 `Warning:` |
 | 6 | Visual regression (`toHaveScreenshot`) | 📋 待办 | Phase 4 |
