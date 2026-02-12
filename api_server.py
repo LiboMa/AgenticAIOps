@@ -207,40 +207,42 @@ class A2UIGenerateResponse(BaseModel):
 # Strands Agent Integration
 # =============================================================================
 
-_agent = None
+# =============================================================================
+# Multi-Model Agent Factory
+# =============================================================================
 
-def get_agent():
-    """Get or create the Strands Agent instance."""
-    global _agent
-    if _agent is None:
-        try:
-            from strands import Agent
-            from strands.models import BedrockModel
-            from src.config import get_model_id, AWS_REGION
-            from strands_agent_full import (
-                get_cluster_health as eks_health,
-                get_cluster_info as eks_info,
-                get_nodes as eks_nodes,
-                get_pods as eks_pods,
-                get_deployments as eks_deployments,
-                get_events as eks_events,
-                get_pod_logs as eks_logs,
-                scale_deployment
-            )
-            
-            # Get model from environment or default
-            import os
-            model_name = os.environ.get("AGENT_MODEL", "haiku")
-            model_id = get_model_id(model_name)
-            
-            print(f"Initializing Strands Agent with model: {model_id}")
-            
-            model = BedrockModel(
-                model_id=model_id,
-                region_name=AWS_REGION
-            )
-            
-            system_prompt = """You are an expert Cloud Operations AI assistant for AWS infrastructure.
+# Model ID mapping: frontend model key → Bedrock model ID
+BEDROCK_MODEL_MAP = {
+    "claude-opus": "anthropic.claude-opus-4-6-v1",
+    "claude-sonnet": "anthropic.claude-sonnet-4-6-v1",
+    "nova-pro": "amazon.nova-pro-v1:0",
+    "nova-lite": "amazon.nova-lite-v1:0",
+}
+
+# Cache agents by model to avoid re-creation
+_agents = {}
+_agent_tools = None
+_agent_system_prompt = None
+
+def _load_agent_deps():
+    """Load agent tools and system prompt (once)."""
+    global _agent_tools, _agent_system_prompt
+    if _agent_tools is not None:
+        return True
+    try:
+        from strands_agent_full import (
+            get_cluster_health as eks_health,
+            get_cluster_info as eks_info,
+            get_nodes as eks_nodes,
+            get_pods as eks_pods,
+            get_deployments as eks_deployments,
+            get_events as eks_events,
+            get_pod_logs as eks_logs,
+            scale_deployment
+        )
+        _agent_tools = [eks_health, eks_info, eks_nodes, eks_pods,
+                        eks_deployments, eks_events, eks_logs, scale_deployment]
+        _agent_system_prompt = """You are an expert Cloud Operations AI assistant for AWS infrastructure.
 
 ## Your Capabilities
 
@@ -272,18 +274,70 @@ Always be concise but thorough.
 - "Analyze security status" → Security assessment
 
 Use the available tools to gather data before making conclusions."""
-            
-            _agent = Agent(
-                model=model,
-                tools=[eks_health, eks_info, eks_nodes, eks_pods, 
-                       eks_deployments, eks_events, eks_logs, scale_deployment],
-                system_prompt=system_prompt
-            )
-            print("Strands Agent initialized successfully")
-        except Exception as e:
-            print(f"Failed to initialize Strands Agent: {e}")
-            _agent = None
-    return _agent
+        return True
+    except Exception as e:
+        print(f"Failed to load agent dependencies: {e}")
+        return False
+
+
+def get_agent(model_key: str = None):
+    """Get or create a Strands Agent for the specified model.
+    
+    Args:
+        model_key: One of 'claude-opus', 'claude-sonnet', 'nova-pro', 'nova-lite'.
+                   Defaults to env AGENT_MODEL or 'claude-sonnet'.
+    """
+    global _agents
+    
+    if not _load_agent_deps():
+        return None
+    
+    # Resolve model key
+    if not model_key or model_key == "auto":
+        import os
+        from src.config import get_model_id, AWS_REGION
+        model_name = os.environ.get("AGENT_MODEL", "haiku")
+        model_id = get_model_id(model_name)
+        cache_key = model_id
+    else:
+        from src.config import AWS_REGION
+        model_id = BEDROCK_MODEL_MAP.get(model_key)
+        if not model_id:
+            # Fallback to default
+            import os
+            from src.config import get_model_id
+            model_name = os.environ.get("AGENT_MODEL", "haiku")
+            model_id = get_model_id(model_name)
+        cache_key = model_id
+    
+    # Return cached agent if exists
+    if cache_key in _agents:
+        return _agents[cache_key]
+    
+    # Create new agent for this model
+    try:
+        from strands import Agent
+        from strands.models import BedrockModel
+        
+        print(f"Initializing Strands Agent with model: {model_id}")
+        
+        model = BedrockModel(
+            model_id=model_id,
+            region_name=AWS_REGION
+        )
+        
+        agent = Agent(
+            model=model,
+            tools=_agent_tools,
+            system_prompt=_agent_system_prompt
+        )
+        
+        _agents[cache_key] = agent
+        print(f"Strands Agent initialized: {model_id}")
+        return agent
+    except Exception as e:
+        print(f"Failed to initialize Strands Agent ({model_id}): {e}")
+        return None
 
 
 # =============================================================================
@@ -295,7 +349,13 @@ async def chat(request: ChatRequest):
     """Chat with the AIOps agent. Supports multi-model selection."""
     try:
         message_lower = request.message.lower()
-        model_used = request.model or "auto"
+        model_key = request.model or "auto"
+        
+        # Resolve actual model for 'auto' routing (server-side)
+        if model_key == "auto":
+            model_used = _auto_route_model(message_lower)
+        else:
+            model_used = model_key
         
         # Check for AWS operation intents
         aws_response = await handle_aws_chat_intent(request.message)
@@ -310,11 +370,11 @@ async def chat(request: ChatRequest):
         # Classify intent
         analysis = analyze_query(request.message)
         
-        # Try to use real Strands Agent
-        agent = get_agent()
+        # Get agent for the selected model
+        agent = get_agent(model_used)
         
         if agent:
-            # Call real agent
+            # Call real agent with specified model
             result = agent(request.message)
             response_text = str(result)
         else:
@@ -323,7 +383,7 @@ async def chat(request: ChatRequest):
 
 Recommended tools: {', '.join(analysis['recommended_tools'][:3])}
 
-[Agent not available - showing intent analysis only]"""
+[Agent not available for model '{model_used}' - showing intent analysis only]"""
         
         # Check for A2UI intent (add/create widget requests)
         ui_action = detect_ui_action(request.message)
@@ -332,11 +392,45 @@ Recommended tools: {', '.join(analysis['recommended_tools'][:3])}
             response=response_text,
             intent=analysis['intent'],
             confidence=analysis['confidence'],
-            ui_action=ui_action
+            ui_action=ui_action,
+            model_used=model_used,
         )
     except Exception as e:
         import traceback
-        return ChatResponse(response=f"Error: {str(e)}\n{traceback.format_exc()}")
+        return ChatResponse(
+            response=f"Error: {str(e)}\n{traceback.format_exc()}",
+            model_used=request.model or "auto",
+        )
+
+
+def _auto_route_model(query: str) -> str:
+    """Server-side auto routing: pick best model based on query content."""
+    # Simple queries → Nova Lite (cheapest)
+    if query.strip() in ['help', 'commands', '帮助', '命令', 'hi', 'hello']:
+        return 'nova-lite'
+    
+    # Health checks, list/scan → Nova Pro (fast, AWS-native)
+    if any(k in query for k in ['health', 'scan', 'show', 'list', 'vpc', 'elb',
+                                  'dynamodb', 'ecs', 'status', 'count']):
+        return 'nova-pro'
+    
+    # Operations → Sonnet (reliable)
+    if any(k in query for k in ['start', 'stop', 'reboot', 'failover', 'invoke',
+                                  'sop run', 'execute', 'deploy', 'rollback']):
+        return 'claude-sonnet'
+    
+    # Complex analysis → Opus (strongest reasoning)
+    if any(k in query for k in ['anomaly', 'rca', 'analyze', 'diagnose', 'root cause',
+                                  'why', '分析', '诊断', 'correlate', 'pattern']):
+        return 'claude-opus'
+    
+    # Knowledge/SOP → Sonnet (balanced)
+    if any(k in query for k in ['kb', 'sop', 'knowledge', 'pattern', 'semantic',
+                                  'search', 'explain']):
+        return 'claude-sonnet'
+    
+    # Default → Sonnet
+    return 'claude-sonnet'
 
 
 async def handle_aws_chat_intent(message: str) -> Optional[str]:
