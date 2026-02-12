@@ -1935,6 +1935,114 @@ POST /api/knowledge/learn
         except Exception as e:
             return f"❌ 获取统计失败: {str(e)}"
     
+    # Safety Check: Dry-run / safety preview for SOP
+    if any(kw in message_lower for kw in ['safety check', '安全检查', 'sop check', 'dry run', 'dry-run']):
+        try:
+            import re
+            from src.sop_safety import get_safety_layer
+            
+            match = re.search(r'(?:safety check|安全检查|sop check|dry.run)\s*(\S*)', message, re.IGNORECASE)
+            sop_id = match.group(1).strip() if match and match.group(1).strip() else None
+            
+            if not sop_id:
+                return """🛡️ **安全检查 / Dry-Run**
+
+用法: `safety check <sop_id>` 或 `dry run <sop_id>`
+
+示例:
+- `safety check sop-ec2-high-cpu`
+- `dry run sop-rds-failover`
+- `safety check sop-lambda-errors`
+
+显示风险等级、执行模式、冷却状态。"""
+            
+            safety = get_safety_layer()
+            check = safety.check(sop_id=sop_id, dry_run=True)
+            return check.to_markdown()
+        except Exception as e:
+            return f"❌ 安全检查失败: {str(e)}"
+    
+    # Safety Stats
+    if any(kw in message_lower for kw in ['safety stats', '安全统计', 'safety status']):
+        try:
+            from src.sop_safety import get_safety_layer
+            import json
+            
+            safety = get_safety_layer()
+            stats = safety.get_stats()
+            
+            return f"""🛡️ **安全层状态**
+
+| 指标 | 值 |
+|------|-----|
+| 活跃冷却 | {stats['active_cooldowns']} |
+| 状态快照 | {stats['snapshots_stored']} |
+| 待审批 | {stats['pending_approvals']} |
+
+**日执行次数:**
+```
+{json.dumps(stats['daily_execution_counts'], indent=2) if stats['daily_execution_counts'] else '(今日无执行)'}
+```
+
+**日执行上限:**
+
+| 级别 | 上限 | 冷却期 |
+|------|------|--------|
+| L0 (只读) | {stats['daily_limits']['L0']} | 无 |
+| L1 (低风险) | {stats['daily_limits']['L1']} | 5 分钟 |
+| L2 (中风险) | {stats['daily_limits']['L2']} | 30 分钟 |
+| L3 (高风险) | {stats['daily_limits']['L3']} | 1 小时 |
+"""
+        except Exception as e:
+            return f"❌ 获取安全统计失败: {str(e)}"
+    
+    # Pending Approvals
+    if any(kw in message_lower for kw in ['approvals', '审批列表', 'pending approvals']):
+        try:
+            from src.sop_safety import get_safety_layer
+            
+            safety = get_safety_layer()
+            pending = safety.get_pending_approvals()
+            
+            if not pending:
+                return "✅ 无待审批的 SOP 执行请求"
+            
+            response = f"🔐 **待审批 ({len(pending)})**\n\n"
+            for a in pending:
+                response += f"- `{a['approval_id']}`: **{a['sop_id']}** ({a['risk_level']}) — 请求人: {a['requested_by']}, 过期: {a['expires_at']}\n"
+            response += "\n使用 `approve <approval_id>` 或 `reject <approval_id>` 处理"
+            return response
+        except Exception as e:
+            return f"❌ 获取审批列表失败: {str(e)}"
+
+    # Approve / Reject
+    if any(kw in message_lower for kw in ['approve ', 'reject ']):
+        try:
+            import re
+            from src.sop_safety import get_safety_layer
+            
+            safety = get_safety_layer()
+            
+            match = re.search(r'(approve|reject)\s+(\S+)', message, re.IGNORECASE)
+            if not match:
+                return "用法: `approve <approval_id>` 或 `reject <approval_id>`"
+            
+            action = match.group(1).lower()
+            approval_id = match.group(2)
+            
+            if action == "approve":
+                result = safety.approve(approval_id, approved_by="chat_user")
+            else:
+                result = safety.reject(approval_id, rejected_by="chat_user")
+            
+            if not result:
+                return f"❌ 未找到审批请求: {approval_id}"
+            
+            status = "✅ 已批准" if result.approved else "❌ 已拒绝"
+            return f"{status}: `{result.sop_id}` ({result.risk_level.value})"
+        except Exception as e:
+            return f"❌ 审批处理失败: {str(e)}"
+    
     # ===========================================
     # SOP Commands
     # ===========================================
@@ -2135,6 +2243,12 @@ POST /api/knowledge/learn
 - `rca autofix <症状>` - 分析并自动执行低风险 SOP
 - `rca feedback <exec_id> <sop_id> <pattern_id> success/fail` - 执行反馈
 - `rca stats` - 查看 RCA↔SOP 学习统计
+
+**🛡️ 安全机制 (NEW):**
+- `safety check <sop_id>` - 安全检查 + Dry-Run 预览
+- `safety stats` - 安全层状态 (冷却/计数/上限)
+- `approvals` - 查看待审批列表 (L2/L3 SOP)
+- `approve <id>` / `reject <id>` - 审批处理
 
 **📋 资源列表:**
 - `scan` / `扫描` - 全资源扫描
