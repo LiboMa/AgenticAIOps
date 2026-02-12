@@ -153,7 +153,7 @@ async def list_models():
                 "name": "Claude Sonnet 4",
                 "description": "Balanced performance & cost",
                 "provider": "bedrock",
-                "model_id": "anthropic.claude-sonnet-4-6-v1",
+                "model_id": "anthropic.claude-sonnet-4-20250514-v1:0",
                 "cost_tier": "medium",
             },
             {
@@ -214,7 +214,7 @@ class A2UIGenerateResponse(BaseModel):
 # Model ID mapping: frontend model key → Bedrock model ID
 BEDROCK_MODEL_MAP = {
     "claude-opus": "anthropic.claude-opus-4-6-v1",
-    "claude-sonnet": "anthropic.claude-sonnet-4-6-v1",
+    "claude-sonnet": "anthropic.claude-sonnet-4-20250514-v1:0",
     "nova-pro": "amazon.nova-pro-v1:0",
     "nova-lite": "amazon.nova-lite-v1:0",
 }

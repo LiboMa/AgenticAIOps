@@ -31,8 +31,8 @@ from src.rca.pattern_matcher import PatternMatcher
 logger = logging.getLogger(__name__)
 
 # Bedrock model IDs for RCA
-RCA_MODEL_PRIMARY = "anthropic.claude-sonnet-4-6-v1"     # Fast, balanced
-RCA_MODEL_DEEP = "anthropic.claude-opus-4-6-v1"          # Deep reasoning
+RCA_MODEL_PRIMARY = "anthropic.claude-sonnet-4-20250514-v1:0"   # Sonnet 4: Fast, balanced
+RCA_MODEL_DEEP = "anthropic.claude-opus-4-6-v1"                 # Opus 4.6: Deep reasoning
 CONFIDENCE_UPGRADE_THRESHOLD = 0.7  # Below this → upgrade to Opus
 
 
