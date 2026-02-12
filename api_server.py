@@ -124,15 +124,68 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# =============================================================================
+# Available Models API
+# =============================================================================
+
+@app.get("/api/models")
+async def list_models():
+    """List available AI models for the chat interface."""
+    return {
+        "models": [
+            {
+                "id": "auto",
+                "name": "Auto Router",
+                "description": "Smart routing based on query type",
+                "provider": "system",
+                "cost_tier": "optimal",
+            },
+            {
+                "id": "claude-opus",
+                "name": "Claude Opus 4",
+                "description": "Best for complex analysis & RCA",
+                "provider": "bedrock",
+                "model_id": "anthropic.claude-opus-4-6-v1",
+                "cost_tier": "high",
+            },
+            {
+                "id": "claude-sonnet",
+                "name": "Claude Sonnet 4",
+                "description": "Balanced performance & cost",
+                "provider": "bedrock",
+                "model_id": "anthropic.claude-sonnet-4-6-v1",
+                "cost_tier": "medium",
+            },
+            {
+                "id": "nova-pro",
+                "name": "Amazon Nova Pro",
+                "description": "AWS native, good for operations",
+                "provider": "bedrock",
+                "model_id": "amazon.nova-pro-v1:0",
+                "cost_tier": "low",
+            },
+            {
+                "id": "nova-lite",
+                "name": "Amazon Nova Lite",
+                "description": "Fast & cheap for simple queries",
+                "provider": "bedrock",
+                "model_id": "amazon.nova-lite-v1:0",
+                "cost_tier": "very-low",
+            },
+        ]
+    }
+
 # Request/Response models
 class ChatRequest(BaseModel):
     message: str
+    model: Optional[str] = None  # Model selection: auto, claude-opus, claude-sonnet, nova-pro, nova-lite
 
 class ChatResponse(BaseModel):
     response: str
     intent: Optional[str] = None
     confidence: Optional[float] = None
     ui_action: Optional[dict] = None  # A2UI action if applicable
+    model_used: Optional[str] = None  # Which model was actually used
 
 # A2UI Widget Request/Response
 class A2UIWidgetConfig(BaseModel):
@@ -239,9 +292,10 @@ Use the available tools to gather data before making conclusions."""
 
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
-    """Chat with the AIOps agent."""
+    """Chat with the AIOps agent. Supports multi-model selection."""
     try:
         message_lower = request.message.lower()
+        model_used = request.model or "auto"
         
         # Check for AWS operation intents
         aws_response = await handle_aws_chat_intent(request.message)
@@ -250,6 +304,7 @@ async def chat(request: ChatRequest):
                 response=aws_response,
                 intent="aws_operation",
                 confidence=0.9,
+                model_used=model_used,
             )
         
         # Classify intent
