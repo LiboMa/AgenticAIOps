@@ -1694,6 +1694,149 @@ POST /api/knowledge/learn
             return f"❌ 提交反馈失败: {str(e)}"
     
     # ===========================================
+    # RCA + SOP Bridge Commands (Enhanced)
+    # ===========================================
+    
+    # RCA Analyze: Combined RCA + SOP suggestion
+    if any(kw in message_lower for kw in ['rca analyze', 'rca 分析', 'diagnose', '诊断问题', 'root cause']):
+        try:
+            import re
+            from src.rca_sop_bridge import get_bridge
+            
+            bridge = get_bridge()
+            
+            # Extract symptoms from the message
+            # e.g., "rca analyze high cpu memory leak"
+            match = re.search(r'(?:rca analyze|diagnose|诊断问题|root cause)\s*(.*)', message, re.IGNORECASE)
+            symptoms = []
+            if match and match.group(1).strip():
+                symptoms = match.group(1).strip().split()
+            
+            if not symptoms:
+                return """🔍 **RCA 分析 + SOP 推荐**
+
+用法: `rca analyze <症状描述>`
+
+示例:
+- `rca analyze high cpu memory leak`
+- `rca analyze OOMKilled crash loop`
+- `rca analyze rds connection timeout`
+- `diagnose lambda timeout error`
+
+这将执行根因分析并自动推荐相关 SOP。"""
+            
+            result = bridge.analyze_and_suggest(
+                symptoms=symptoms,
+                auto_execute=False,  # Don't auto-execute from chat
+            )
+            
+            return result.to_markdown()
+        except Exception as e:
+            return f"❌ RCA 分析失败: {str(e)}"
+    
+    # RCA Auto-fix: RCA + auto-execute SOP for low severity
+    if any(kw in message_lower for kw in ['rca autofix', 'rca 自动修复', 'auto diagnose']):
+        try:
+            import re
+            from src.rca_sop_bridge import get_bridge
+            
+            bridge = get_bridge()
+            
+            match = re.search(r'(?:rca autofix|rca 自动修复|auto diagnose)\s*(.*)', message, re.IGNORECASE)
+            symptoms = match.group(1).strip().split() if match and match.group(1).strip() else []
+            
+            if not symptoms:
+                return """⚡ **RCA 自动修复**
+
+用法: `rca autofix <症状描述>`
+
+示例: `rca autofix high cpu`
+
+⚠️ 仅 LOW 严重性 + 高置信度 (≥80%) 会自动执行 SOP"""
+            
+            result = bridge.analyze_and_suggest(
+                symptoms=symptoms,
+                auto_execute=True,
+            )
+            
+            return result.to_markdown()
+        except Exception as e:
+            return f"❌ RCA 自动修复失败: {str(e)}"
+    
+    # RCA Feedback: Submit feedback from SOP execution
+    if any(kw in message_lower for kw in ['rca feedback', 'rca 反馈']):
+        try:
+            import re
+            from src.rca_sop_bridge import get_bridge
+            
+            # Format: rca feedback <execution_id> <sop_id> <pattern_id> success/fail
+            match = re.search(
+                r'rca feedback\s+(\S+)\s+(\S+)\s+(\S+)\s+(success|fail|good|bad)',
+                message_lower
+            )
+            if not match:
+                return """📝 **RCA 执行反馈**
+
+用法: `rca feedback <execution_id> <sop_id> <pattern_id> success/fail`
+
+示例: `rca feedback exec123 sop-ec2-high-cpu oom-killed success`
+
+这有助于系统学习哪些 SOP 能有效解决特定根因。"""
+            
+            bridge = get_bridge()
+            success = match.group(4) in ['success', 'good']
+            
+            feedback = bridge.submit_feedback(
+                execution_id=match.group(1),
+                sop_id=match.group(2),
+                rca_pattern_id=match.group(3),
+                success=success,
+                root_cause_confirmed=success,
+            )
+            
+            emoji = "✅" if success else "❌"
+            return f"""{emoji} **RCA 反馈已记录**
+
+- 执行 ID: `{feedback.execution_id}`
+- SOP: `{feedback.sop_id}`
+- Pattern: `{feedback.rca_pattern_id}`
+- 结果: {'成功 ✅' if success else '失败 ❌'}
+- 根因确认: {'是' if success else '否'}
+
+{'系统将在未来优先推荐此 SOP 处理类似问题。' if success else '系统将降低此 SOP 的推荐优先级。'}"""
+        except Exception as e:
+            return f"❌ 反馈提交失败: {str(e)}"
+    
+    # RCA Stats: View feedback statistics
+    if any(kw in message_lower for kw in ['rca stats', 'rca 统计', 'rca status']):
+        try:
+            from src.rca_sop_bridge import get_bridge
+            
+            bridge = get_bridge()
+            stats = bridge.get_feedback_stats()
+            
+            response = f"""📊 **RCA ↔ SOP 统计**
+
+| 指标 | 值 |
+|------|-----|
+| 总反馈数 | {stats['total_feedbacks']} |
+| 成功解决 | {stats['successful']} |
+| 解决失败 | {stats['failed']} |
+| 根因确认 | {stats['root_cause_confirmed']} |
+| 成功率 | {stats['success_rate']:.0%} |
+| 平均解决时间 | {stats['avg_resolution_seconds']:.0f}s |
+"""
+            if stats['learned_mappings']:
+                response += "\n**🧠 已学习的 Pattern → SOP 映射:**\n\n"
+                for pattern_id, sops in stats['learned_mappings'].items():
+                    for sop_id, count in sops.items():
+                        response += f"- `{pattern_id}` → `{sop_id}` ({count}次成功)\n"
+            
+            return response
+        except Exception as e:
+            return f"❌ 获取统计失败: {str(e)}"
+    
+    # ===========================================
     # SOP Commands
     # ===========================================
     
@@ -1885,6 +2028,12 @@ POST /api/knowledge/learn
 
 **🔍 异常检测:**
 - `anomaly` / `异常` / `检测问题` - 异常检测
+
+**🔬 RCA + SOP 联动 (NEW):**
+- `rca analyze <症状>` - 根因分析 + 自动推荐 SOP
+- `rca autofix <症状>` - 分析并自动执行低风险 SOP
+- `rca feedback <exec_id> <sop_id> <pattern_id> success/fail` - 执行反馈
+- `rca stats` - 查看 RCA↔SOP 学习统计
 
 **📋 资源列表:**
 - `scan` / `扫描` - 全资源扫描
@@ -2219,6 +2368,97 @@ async def get_rca_report(report_id: str):
         if report["id"] == report_id:
             return report
     raise HTTPException(status_code=404, detail="Report not found")
+
+
+# =============================================================================
+# RCA ↔ SOP Bridge API
+# =============================================================================
+
+class RCAAnalyzeRequest(BaseModel):
+    symptoms: List[str] = []
+    namespace: Optional[str] = None
+    pod: Optional[str] = None
+    auto_execute: bool = False
+
+class RCAFeedbackRequest(BaseModel):
+    execution_id: str
+    sop_id: str
+    rca_pattern_id: str
+    success: bool
+    root_cause_confirmed: bool = False
+    resolution_time_seconds: int = 0
+    notes: str = ""
+
+
+@app.post("/api/rca/analyze")
+async def rca_analyze(request: RCAAnalyzeRequest):
+    """Run RCA analysis with SOP recommendations."""
+    try:
+        from src.rca_sop_bridge import get_bridge
+        bridge = get_bridge()
+        
+        result = bridge.analyze_and_suggest(
+            namespace=request.namespace,
+            pod=request.pod,
+            symptoms=request.symptoms,
+            auto_execute=request.auto_execute,
+        )
+        
+        return {
+            "success": True,
+            "result": result.to_dict(),
+            "markdown": result.to_markdown(),
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/rca/feedback")
+async def rca_feedback(request: RCAFeedbackRequest):
+    """Submit feedback from SOP execution back to RCA."""
+    try:
+        from src.rca_sop_bridge import get_bridge
+        bridge = get_bridge()
+        
+        feedback = bridge.submit_feedback(
+            execution_id=request.execution_id,
+            sop_id=request.sop_id,
+            rca_pattern_id=request.rca_pattern_id,
+            success=request.success,
+            root_cause_confirmed=request.root_cause_confirmed,
+            resolution_time_seconds=request.resolution_time_seconds,
+            notes=request.notes,
+        )
+        
+        return {
+            "success": True,
+            "feedback_recorded": True,
+            "success_rate": bridge.get_feedback_stats()['success_rate'],
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/rca/bridge/stats")
+async def rca_bridge_stats():
+    """Get RCA ↔ SOP bridge statistics and learned mappings."""
+    try:
+        from src.rca_sop_bridge import get_bridge
+        bridge = get_bridge()
+        return {"success": True, **bridge.get_feedback_stats()}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/rca/bridge/history")
+async def rca_bridge_history(limit: int = 20):
+    """Get recent RCA → SOP bridge results."""
+    try:
+        from src.rca_sop_bridge import get_bridge
+        bridge = get_bridge()
+        return {"success": True, "history": bridge.get_history(limit)}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 
 # =============================================================================
