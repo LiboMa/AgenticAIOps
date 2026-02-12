@@ -743,8 +743,35 @@ async def handle_aws_chat_intent(message: str) -> Optional[str]:
     # ===========================================
     
     if any(kw in message_lower for kw in ['anomaly', '异常', 'detect', '检测问题', '发现问题']):
-        if not ops:
-            return "❌ AWS Ops module not available"
+        # Enhanced anomaly detection with Event Correlator
+        try:
+            import asyncio
+            from src.event_correlator import get_correlator
+            
+            correlator = get_correlator(_current_region)
+            
+            # Parse optional service filter
+            services = None
+            for svc in ['ec2', 'rds', 'lambda']:
+                if svc in message_lower:
+                    services = [svc]
+                    break
+            
+            # Run async collection
+            loop = asyncio.new_event_loop()
+            try:
+                event = loop.run_until_complete(
+                    correlator.collect(services=services, lookback_minutes=60)
+                )
+            finally:
+                loop.close()
+            
+            return event.summary()
+        except Exception as e:
+            logger.warning(f"Event correlator failed, falling back: {e}")
+            # Fallback to original anomaly detection
+            if not ops:
+                return "❌ AWS Ops module not available"
         try:
             response = f"""🔍 **异常检测报告** (Region: {_current_region})
 
@@ -2457,6 +2484,80 @@ async def rca_bridge_history(limit: int = 20):
         from src.rca_sop_bridge import get_bridge
         bridge = get_bridge()
         return {"success": True, "history": bridge.get_history(limit)}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+# =============================================================================
+# Event Correlator API (Step 1: Data Collection Layer)
+# =============================================================================
+
+@app.get("/api/events/collect")
+async def collect_events(
+    services: str = None,
+    lookback_minutes: int = 60,
+):
+    """
+    Collect and correlate events from multiple AWS sources.
+    
+    READ-ONLY operation — collects CloudWatch metrics, alarms,
+    CloudTrail events, and AWS Health events in parallel.
+    
+    Query params:
+      - services: comma-separated (ec2,rds,lambda). Default: all.
+      - lookback_minutes: how far back to look. Default: 60.
+    """
+    try:
+        from src.event_correlator import get_correlator
+        
+        correlator = get_correlator(_current_region)
+        service_list = services.split(',') if services else None
+        
+        event = await correlator.collect(
+            services=service_list,
+            lookback_minutes=lookback_minutes,
+        )
+        
+        return {
+            "success": True,
+            "summary": event.summary(),
+            "data": event.to_dict(),
+        }
+    except Exception as e:
+        import traceback
+        return {
+            "success": False,
+            "error": str(e),
+            "traceback": traceback.format_exc(),
+        }
+
+
+@app.get("/api/events/collect/rca")
+async def collect_events_for_rca(
+    services: str = None,
+    lookback_minutes: int = 60,
+):
+    """
+    Collect events and format for RCA Engine consumption.
+    Returns telemetry dict compatible with RCAEngine.analyze().
+    """
+    try:
+        from src.event_correlator import get_correlator
+        
+        correlator = get_correlator(_current_region)
+        service_list = services.split(',') if services else None
+        
+        event = await correlator.collect(
+            services=service_list,
+            lookback_minutes=lookback_minutes,
+        )
+        
+        return {
+            "success": True,
+            "telemetry": event.to_rca_telemetry(),
+            "collection_id": event.collection_id,
+            "duration_ms": event.duration_ms,
+        }
     except Exception as e:
         return {"success": False, "error": str(e)}
 

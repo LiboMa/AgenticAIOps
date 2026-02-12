@@ -1,213 +1,231 @@
-# SOP + RCA 功能增强设计方案
+# SOP + RCA 增强设计方案 v2 (研究后修订)
 
-## 背景
+## 研究发现
 
-当前 SOP 系统和 RCA (异常检测) 功能是独立运作的：
-- SOP: 3 个内置 SOP (EC2 高 CPU / RDS Failover / Lambda 错误)
-- RCA: 简单阈值异常检测 (detect_anomalies)，仅支持 EC2/RDS/Lambda
-- 知识库: Pattern 学习 + S3 存储
-- 两者之间没有自动关联
+### AWS 原生能力现状
 
-## 目标
+| AWS 服务 | 当前账号状态 | 能力 | 与我们的关系 |
+|----------|-------------|------|-------------|
+| **DevOps Guru** | 已启用，0 insights | ML 异常检测 + 自动 insight | 可作为 RCA 数据源 (当前无数据) |
+| **CloudWatch Anomaly Detection** | 已有 1 个 detector (EC2 CPU, TRAINED) | ML 基线 + 异常告警 | **直接集成，替代手写阈值** |
+| **AWS Health** | 有 open events (VPN/ASG) | 服务健康事件 | 作为 RCA 数据源 |
+| **SSM Automation** | 50+ AWS 内置 Runbook | 自动修复 (reboot/snapshot/etc) | **可替代 SOP 自动执行步骤** |
+| **EventBridge** | 可用 | 事件路由 | 告警→RCA 触发 |
 
-建立 **异常检测 → 根因分析 → SOP 推荐 → 自动执行** 的闭环。
+### 关键决策
 
-## 方案设计
+| 决策 | 选择 | 原因 |
+|------|------|------|
+| 异常检测 | CloudWatch Anomaly Detection + 自定义阈值 | CW 已有训练好的模型，混合使用更可靠 |
+| 自动执行 | 自研 (aws_ops.py) + SSM Runbook | SSM 有成熟 Runbook，自研覆盖自定义场景 |
+| RCA 推理 | Bedrock Claude + RAG | LLM 做关联分析最灵活 |
+| SOP 存储 | S3 (已有) | 无需新增资源 |
 
-### 1. RCA 引擎增强
+---
+
+## 安全边界设计
+
+### SOP 执行分级
 
 ```
-当前:
-  detect_anomalies() → 简单阈值 → 返回异常列表
+Level 0 - 只读 (自动执行，无需审批):
+├── 查询指标/日志
+├── 健康检查
+├── 生成报告
+└── 发送通知
 
-增强后:
-  detect_anomalies()
-    → 多维指标关联分析
-    → Bedrock Claude 深度推理
-    → 历史 Pattern 匹配 (RAG)
-    → 生成结构化 RCA 报告
-    → 自动推荐 SOP
+Level 1 - 低风险 (自动执行，事后通知):
+├── 创建快照/备份
+├── 扩容 (scale up)
+├── 添加 CloudWatch Alarm
+└── 启用增强监控
+
+Level 2 - 中风险 (执行前 Slack 通知，10 秒等待):
+├── EC2 reboot
+├── Lambda 重新部署
+├── 清理日志/缓存
+└── 调整 Auto Scaling
+
+Level 3 - 高风险 (必须人工审批):
+├── EC2 stop/terminate
+├── RDS failover
+├── 安全组变更
+├── IAM 权限变更
+└── 数据删除
 ```
 
-#### 1.1 RCA 报告结构
+### 误判保护机制
+
+```
+1. 置信度门槛
+   ├── RCA confidence < 0.6 → 只建议，不触发 SOP
+   ├── RCA confidence 0.6-0.8 → 触发 Level 0-1 SOP
+   └── RCA confidence > 0.8 → 可触发 Level 0-2 SOP
+
+2. 冷却期 (Cooldown)
+   ├── 同一资源同一 SOP → 30 分钟内不重复执行
+   └── 全局 SOP 执行 → 5 分钟内最多 3 次
+
+3. 干跑模式 (Dry-Run)
+   ├── 新 SOP 首次执行 → 强制 dry-run
+   ├── 显示将要执行的操作，不实际执行
+   └── 用户确认后切换为真实执行
+
+4. 回滚机制
+   ├── 每个 auto 步骤执行前记录当前状态
+   ├── 执行失败 → 自动回滚到记录状态
+   └── 回滚失败 → 升级到 Level 3 人工处理
+```
+
+---
+
+## 数据流设计
+
+```
+告警源                           RCA Engine                    SOP System
+┌─────────────┐
+│ CloudWatch  │──┐
+│ Alarm       │  │
+└─────────────┘  │
+┌─────────────┐  │    ┌──────────────────────┐    ┌──────────────────────┐
+│ CW Anomaly  │──┼───▶│ IncidentOrchestrator │───▶│ SOP Matcher          │
+│ Detection   │  │    │                      │    │                      │
+└─────────────┘  │    │ 1. 聚合告警数据       │    │ 1. 规则匹配           │
+┌─────────────┐  │    │ 2. 查询关联指标       │    │ 2. 历史成功率          │
+│ AWS Health  │──┤    │ 3. 查询 CloudTrail   │    │ 3. Claude 推荐        │
+│ Events      │  │    │ 4. 查询知识库 (RAG)   │    │                      │
+└─────────────┘  │    │ 5. Claude 推理       │    │ 输出:                 │
+┌─────────────┐  │    │ 6. 生成 RCA Report   │    │ - matched SOPs       │
+│ Proactive   │──┘    │                      │    │ - confidence         │
+│ Agent       │       └──────────┬───────────┘    │ - execution_level    │
+└─────────────┘                  │                 └──────────┬───────────┘
+                                 │                            │
+                                 ▼                            ▼
+                    ┌──────────────────────┐    ┌──────────────────────┐
+                    │ RCA Report (S3)      │    │ SOP Executor         │
+                    │                      │    │                      │
+                    │ - anomalies          │    │ Level 0-1: auto      │
+                    │ - root_cause         │    │ Level 2: notify+wait │
+                    │ - evidence           │    │ Level 3: approval    │
+                    │ - timeline           │    │                      │
+                    │ - confidence         │    │ 执行结果 → Knowledge │
+                    └──────────────────────┘    └──────────────────────┘
+```
+
+---
+
+## RCA Engine 核心设计
+
+### 输入数据结构
 
 ```python
 @dataclass
-class RCAReport:
-    report_id: str
-    timestamp: str
-    trigger: str                    # 什么触发了 RCA
-    affected_resources: List[str]   # 受影响资源
+class IncidentContext:
+    """RCA 分析所需的上下文数据"""
+    trigger_type: str          # alarm / anomaly / health_event / manual
+    trigger_data: Dict         # 原始告警数据
     
-    # 异常信息
-    anomalies: List[Dict]           # 检测到的异常
+    # 自动采集
+    metrics: Dict              # 最近 1h CloudWatch 指标
+    recent_changes: List[Dict] # 最近 24h CloudTrail API 调用
+    health_events: List[Dict]  # AWS Health 相关事件
+    related_alarms: List[Dict] # 同一资源的其他告警
     
-    # 根因分析
-    root_cause: str                 # AI 推理的根因
-    confidence: float               # 置信度 0-1
-    evidence: List[str]             # 支撑证据
-    
-    # 关联分析
-    correlated_events: List[Dict]   # CloudTrail/CloudWatch 关联事件
-    timeline: List[Dict]            # 事件时间线
-    
-    # 推荐行动
-    recommended_sops: List[str]     # 推荐的 SOP ID
-    suggested_actions: List[str]    # 建议操作
-    
-    # 历史匹配
-    similar_incidents: List[Dict]   # 历史相似事件
-    
-    severity: str                   # critical/high/medium/low
+    # 知识库
+    similar_patterns: List[Dict]  # 向量搜索匹配的历史 Pattern
+    relevant_sops: List[Dict]     # 相关 SOP
 ```
 
-#### 1.2 多维关联分析
-
-| 数据源 | 当前 | 增强后 |
-|--------|------|--------|
-| CloudWatch Metrics | ✅ CPU/内存 | + 网络/磁盘/自定义指标 |
-| CloudWatch Logs | ❌ | ✅ 错误日志分析 |
-| CloudTrail | ❌ | ✅ API 调用关联 |
-| Health Events | ❌ | ✅ AWS Health Dashboard |
-| Config Changes | ❌ | ✅ Config 变更追踪 |
-| Knowledge Base | 基础搜索 | ✅ 向量语义匹配 |
-
-### 2. SOP 系统增强
-
-#### 2.1 SOP 自动触发
+### RCA 分析流程
 
 ```
-当前:
-  用户手动: "sop run ec2-high-cpu"
+Step 1: 数据采集 (并行，<5s)
+├── CloudWatch: get_metric_data (最近 1h)
+├── CloudTrail: lookup_events (最近 24h)
+├── Health: describe_events
+└── Knowledge: vector_search (RAG)
 
-增强后:
-  detect_anomalies()
-    → RCA Engine 分析
-    → 匹配 SOP (规则 + AI)
-    → 自动建议: "检测到 EC2 高 CPU，推荐执行 SOP ec2-high-cpu"
-    → 用户确认后执行
-    → 执行结果反馈到知识库
+Step 2: 关联分析 (Claude, <15s)
+├── 输入: IncidentContext (结构化数据)
+├── 提示: "基于以下数据分析根因..."
+├── 输出: 结构化 JSON (root_cause, evidence, severity, confidence)
+└── 约束: 必须基于证据推理，不能凭空猜测
+
+Step 3: SOP 匹配 (<2s)
+├── 规则匹配: anomaly_type → SOP 映射表
+├── 历史匹配: 相似 Pattern 上次用的 SOP
+├── AI 推荐: Claude 基于 RCA 推荐 SOP
+└── 排序: confidence × 历史成功率
+
+Step 4: 输出 (<1s)
+├── RCA Report → S3 持久化
+├── SOP 推荐 → Chat 展示
+├── 通知 → Slack
+└── Level 0-1 SOP → 自动执行
 ```
 
-#### 2.2 SOP 新增内容
+### 性能目标
 
-| SOP ID | 名称 | 触发条件 | 优先级 |
-|--------|------|----------|--------|
-| `ec2-high-cpu` | EC2 高 CPU 处理 | CPU > 90% | ✅ 已有 |
-| `rds-failover` | RDS 故障转移 | RDS 不可用 | ✅ 已有 |
-| `lambda-error` | Lambda 错误处理 | 错误率 > 5% | ✅ 已有 |
-| `ec2-disk-full` | EC2 磁盘满 | 磁盘 > 90% | **P0 新增** |
-| `rds-storage-low` | RDS 存储不足 | 空间 < 10GB | **P0 新增** |
-| `elb-5xx-spike` | ELB 5xx 突增 | 5xx > 阈值 | **P0 新增** |
-| `network-connectivity` | 网络连通性故障 | 健康检查失败 | **P1 新增** |
-| `security-breach` | 安全事件响应 | 异常 API 调用 | **P1 新增** |
-| `cost-anomaly` | 费用异常 | 费用突增 | **P2 新增** |
+| 阶段 | 目标延迟 | 备注 |
+|------|----------|------|
+| 数据采集 | < 5s | 并行请求 |
+| Claude 推理 | < 15s | Sonnet 用于常规，Opus 用于复杂 |
+| SOP 匹配 | < 2s | 规则+缓存 |
+| **总延迟** | **< 25s** | 从告警到推荐 |
 
-#### 2.3 SOP 执行增强
+---
 
-```
-当前:
-  SOPExecutor → 手动逐步完成
+## 新增 SOP 设计 (3→10)
 
-增强后:
-  SOPExecutor
-    ├── 自动执行 auto 类型步骤 (调用 AWS API)
-    ├── 条件分支 (根据检查结果走不同路径)
-    ├── 审批流程 (危险操作等待确认)
-    ├── 回滚机制 (失败时自动回滚)
-    ├── 进度通知 (Slack 实时更新)
-    └── 执行结果存入知识库
-```
+| # | SOP ID | 触发条件 | 执行级别 | 自动步骤 |
+|---|--------|----------|----------|----------|
+| 1 | `ec2-high-cpu` | CPU > 90% (5min) | Level 1-2 | 查指标→扩容/重启 |
+| 2 | `rds-failover` | RDS 不可用 | Level 3 | 快照→failover (需审批) |
+| 3 | `lambda-error` | 错误率 > 5% | Level 1 | 查日志→重新部署 |
+| **4** | **`ec2-disk-full`** | 磁盘 > 90% | Level 1 | 清理日志→扩容EBS |
+| **5** | **`rds-storage-low`** | 存储 < 10GB | Level 2 | 快照→扩容存储 |
+| **6** | **`elb-5xx-spike`** | 5xx > 10/min | Level 1 | 查后端健康→重启unhealthy |
+| **7** | **`ec2-unreachable`** | 状态检查失败 | Level 2 | reboot→检查SG→恢复 |
+| **8** | **`dynamodb-throttle`** | 节流事件 | Level 1 | 查容量→调整RCU/WCU |
+| **9** | **`eks-pod-crash`** | CrashLoopBackOff | Level 1 | 查日志→重启pod |
+| **10** | **`security-alert`** | 异常API调用 | Level 3 | 记录→隔离→通知 (需审批) |
 
-### 3. 闭环架构
+---
+
+## 不需要新增的 AWS 资源
 
 ```
-┌──────────────────────────────────────────────────────┐
-│                    闭环运维系统                         │
-│                                                       │
-│  ① 检测                                              │
-│  ┌─────────────┐                                     │
-│  │ Proactive    │ CloudWatch Alarm                    │
-│  │ Agent        │ → detect_anomalies()               │
-│  └──────┬──────┘                                     │
-│         ▼                                            │
-│  ② 分析 (RCA)                                        │
-│  ┌─────────────────────────────────────────┐         │
-│  │ RCA Engine                               │         │
-│  │ ├── 多维指标聚合                          │         │
-│  │ ├── CloudTrail 关联                       │         │
-│  │ ├── Bedrock Claude 推理                   │         │
-│  │ ├── 知识库 Pattern 匹配 (RAG)             │         │
-│  │ └── 生成 RCA Report                       │         │
-│  └──────┬──────────────────────────────────┘         │
-│         ▼                                            │
-│  ③ 推荐 SOP                                          │
-│  ┌─────────────────────────────────────────┐         │
-│  │ SOP Matcher                              │         │
-│  │ ├── 规则匹配 (anomaly_type → SOP)         │         │
-│  │ ├── AI 推荐 (Claude 分析最佳 SOP)          │         │
-│  │ └── 历史成功率排序                         │         │
-│  └──────┬──────────────────────────────────┘         │
-│         ▼                                            │
-│  ④ 执行                                              │
-│  ┌─────────────────────────────────────────┐         │
-│  │ SOP Executor (增强版)                     │         │
-│  │ ├── 自动执行 auto 步骤                     │         │
-│  │ ├── 审批等待 (危险操作)                    │         │
-│  │ ├── Slack 进度通知                         │         │
-│  │ └── 失败回滚                              │         │
-│  └──────┬──────────────────────────────────┘         │
-│         ▼                                            │
-│  ⑤ 反馈学习                                          │
-│  ┌─────────────────────────────────────────┐         │
-│  │ Knowledge Feedback                       │         │
-│  │ ├── 执行结果 → 知识库                     │         │
-│  │ ├── Pattern 更新                          │         │
-│  │ ├── SOP 效果评分                          │         │
-│  │ └── 优化推荐模型                          │         │
-│  └─────────────────────────────────────────┘         │
-│                                                       │
-└──────────────────────────────────────────────────────┘
+✅ 全部使用已有资源:
+├── S3: RCA 报告 + SOP 定义存储
+├── OpenSearch: Pattern 向量搜索 (已有)
+├── Bedrock: Claude 推理 (已有)
+├── CloudWatch: 指标/日志/异常检测 (已有，1个detector)
+├── CloudTrail: API 调用记录 (默认启用)
+└── AWS Health: 健康事件 (免费)
+
+⚠️ 建议后续新增:
+├── 更多 CloudWatch Anomaly Detector (EC2/RDS/Lambda 关键指标)
+└── EventBridge Rule (告警自动触发)
 ```
 
-### 4. 新增后端模块
+---
 
-| 模块 | 文件 | 功能 |
-|------|------|------|
-| **RCA Engine** | `src/rca_engine.py` | 根因分析引擎 |
-| **SOP Matcher** | `src/sop_matcher.py` | 异常→SOP 匹配 |
-| **Event Correlator** | `src/event_correlator.py` | CloudTrail/CW 事件关联 |
-| **Closed Loop Controller** | `src/closed_loop.py` | 闭环流程编排 |
+## 实施计划 (修订)
 
-### 5. API 新增
-
-```
-POST /api/rca/analyze          # 触发 RCA 分析
-GET  /api/rca/reports          # RCA 报告列表
-GET  /api/rca/report/{id}      # RCA 报告详情
-
-POST /api/sop/auto-suggest     # 基于异常自动推荐 SOP
-POST /api/sop/execute-auto     # 自动执行 SOP (带审批)
-GET  /api/sop/execution/{id}/progress  # 执行进度
-
-POST /api/closed-loop/trigger  # 触发闭环流程
-GET  /api/closed-loop/status   # 闭环状态
-```
-
-### 6. 实施计划
-
-| Phase | 内容 | 工作量 |
-|-------|------|--------|
-| **P0-A** | RCA Engine (多维分析 + Claude 推理) | 2-3 天 |
-| **P0-B** | SOP Matcher (异常→SOP 自动匹配) | 1-2 天 |
-| **P0-C** | 新增 3 个 SOP (disk/storage/5xx) | 1 天 |
-| **P0-D** | 闭环编排 (detect→RCA→SOP→execute) | 2 天 |
-| **P1-A** | CloudTrail 事件关联 | 2 天 |
-| **P1-B** | SOP 自动执行 + 审批流 | 2 天 |
-| **P1-C** | 执行结果反馈学习 | 1 天 |
+| Phase | 内容 | 前置条件 | 工作量 |
+|-------|------|----------|--------|
+| **研究** | 全员评审此设计 | — | 1 次会议 |
+| **P0-A** | RCA Engine (数据采集+Claude推理) | 设计评审通过 | 2-3 天 |
+| **P0-B** | SOP Matcher (规则+AI匹配) | P0-A 完成 | 1-2 天 |
+| **P0-C** | 新增 7 个 SOP 定义 | 独立 | 1 天 |
+| **P0-D** | IncidentOrchestrator 闭环 | P0-A + P0-B | 2 天 |
+| **P0-E** | 安全机制 (分级+冷却+dry-run) | P0-D | 1 天 |
+| **P1-A** | CW Anomaly Detection 集成 | 新增 detector | 1 天 |
+| **P1-B** | EventBridge 自动触发 | IAM 配置 | 1 天 |
 
 ---
 
 **作者**: Architect  
 **日期**: 2026-02-12  
-**版本**: 1.0
+**版本**: 2.0 (研究后修订)  
+**状态**: 待全员评审
