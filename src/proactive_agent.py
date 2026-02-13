@@ -69,6 +69,7 @@ class ProactiveAgentSystem:
         self.callbacks: Dict[str, Callable] = {}
         self._running = False
         self._heartbeat_task: Optional[asyncio.Task] = None
+        self._last_correlated_event = None  # Cached for RCA reuse
         
         # Default tasks
         self._init_default_tasks()
@@ -203,22 +204,60 @@ class ProactiveAgentSystem:
             )
     
     async def _action_quick_scan(self, task: ProactiveTask) -> ProactiveResult:
-        """Quick scan action - check for immediate issues"""
+        """Quick scan action - uses EventCorrelator for real AWS data collection."""
         findings = []
         
-        # In real implementation, use the agent to scan AWS resources
-        # For now, return mock data
-        if self.agent:
+        try:
+            from src.event_correlator import get_correlator
+            
+            correlator = get_correlator()
+            event = await correlator.collect(
+                services=task.config.get("services", ["ec2", "rds", "lambda"]),
+                lookback_minutes=15,
+            )
+            
+            # Convert anomalies to findings
+            for anomaly in event.anomalies:
+                findings.append({
+                    "type": anomaly.get("type", "unknown"),
+                    "resource": anomaly.get("resource", ""),
+                    "metric": anomaly.get("metric", ""),
+                    "value": anomaly.get("value", 0),
+                    "severity": anomaly.get("severity", "warning"),
+                    "description": anomaly.get("description", ""),
+                })
+            
+            # Convert firing alarms to findings
+            for alarm in event.alarms:
+                if alarm.state == "ALARM":
+                    findings.append({
+                        "type": "cloudwatch_alarm",
+                        "resource": alarm.resource_id,
+                        "metric": alarm.metric_name,
+                        "value": alarm.threshold,
+                        "severity": "high",
+                        "description": f"ALARM: {alarm.name} — {alarm.reason[:100]}",
+                    })
+            
+            # Store the correlated event for downstream consumption (RCA skip Stage 1)
+            self._last_correlated_event = event
+            
+        except Exception as e:
+            logger.error(f"Quick scan collection error: {e}")
+            # Fallback: try aws_scanner for basic resource issues
             try:
-                # Use agent to scan
-                result = await self.agent.run_async("Quickly scan AWS resources for any immediate issues. Be brief.")
-                # Parse result for findings
-                # ...
-            except Exception as e:
-                logger.error(f"Agent scan error: {e}")
-        
-        # Mock findings for demonstration
-        # In real impl, this would come from AWS APIs
+                from src.aws_scanner import get_scanner
+                scanner = get_scanner()
+                scan_result = scanner.scan_all_resources()
+                for issue in scan_result.get("summary", {}).get("issues_found", []):
+                    findings.append({
+                        "type": issue.get("type", "unknown"),
+                        "resource": issue.get("service", ""),
+                        "severity": issue.get("severity", "medium"),
+                        "description": f"{issue.get('service')}: {issue.get('type')} (count: {issue.get('count', 0)})",
+                    })
+            except Exception as fallback_err:
+                logger.error(f"Fallback scanner also failed: {fallback_err}")
         
         status = "ok" if len(findings) == 0 else "alert"
         summary = "HEARTBEAT_OK" if status == "ok" else f"{len(findings)} issues detected"
@@ -229,37 +268,99 @@ class ProactiveAgentSystem:
             status=status,
             timestamp=datetime.now(timezone.utc),
             findings=findings,
-            summary=summary
+            summary=summary,
+            details={"correlated_event_id": getattr(getattr(self, '_last_correlated_event', None), 'collection_id', None)},
         )
     
     async def _action_full_report(self, task: ProactiveTask) -> ProactiveResult:
-        """Full report action - generate comprehensive daily report"""
-        # In real implementation, gather metrics from all services
-        summary = """📊 **Daily Health Report**
-
-**EC2**: 5 instances (4 running, 1 stopped)
-**Lambda**: 5 functions (all healthy)
-**S3**: 99 buckets
-**RDS**: 3 instances (all available)
-
-**Issues**: 2 open, 1 resolved
-**Security**: 3 findings requiring attention
-
-Report generated at: """ + datetime.now(timezone.utc).isoformat()
+        """Full report action - generate comprehensive daily report using real AWS data."""
+        try:
+            from src.aws_scanner import get_scanner
+            scanner = get_scanner()
+            scan_result = scanner.scan_all_resources()
+            
+            services = scan_result.get("services", {})
+            summary_data = scan_result.get("summary", {})
+            issues = summary_data.get("issues_found", [])
+            
+            # Build report from real data
+            lines = ["📊 **Daily Health Report**\n"]
+            
+            for svc_name, svc_data in services.items():
+                if isinstance(svc_data, dict) and "count" in svc_data:
+                    status_info = svc_data.get("status", {})
+                    extra = ""
+                    if status_info:
+                        parts = [f"{v} {k}" for k, v in status_info.items() if v > 0]
+                        if parts:
+                            extra = f" ({', '.join(parts)})"
+                    lines.append(f"**{svc_name.upper()}**: {svc_data['count']} resources{extra}")
+            
+            lines.append(f"\n**Issues**: {len(issues)} found")
+            for issue in issues:
+                lines.append(f"  - [{issue.get('severity', '?').upper()}] {issue.get('service')}: {issue.get('type')}")
+            
+            lines.append(f"\nReport generated at: {datetime.now(timezone.utc).isoformat()}")
+            report_summary = "\n".join(lines)
+            
+        except Exception as e:
+            logger.error(f"Full report generation error: {e}")
+            report_summary = f"⚠️ Report generation failed: {e}"
         
         return ProactiveResult(
             task_name=task.name,
             task_type=task.task_type,
             status="ok",
             timestamp=datetime.now(timezone.utc),
-            summary=summary
+            summary=report_summary
         )
     
     async def _action_security_check(self, task: ProactiveTask) -> ProactiveResult:
-        """Security check action - scan for security issues"""
+        """Security check action - scan for real security issues using aws_scanner."""
         findings = []
         
-        # In real implementation, check IAM, S3 public access, security groups, etc.
+        try:
+            from src.aws_scanner import get_scanner
+            scanner = get_scanner()
+            
+            # IAM check
+            if task.config.get("check_iam", True):
+                iam_result = scanner._scan_iam()
+                users_no_mfa = iam_result.get("users_without_mfa", [])
+                for user in users_no_mfa:
+                    findings.append({
+                        "type": "iam_no_mfa",
+                        "resource": user,
+                        "severity": "critical",
+                        "description": f"IAM user '{user}' has no MFA enabled",
+                    })
+            
+            # S3 public access check
+            if task.config.get("check_s3_public", True):
+                s3_result = scanner._scan_s3()
+                for bucket in s3_result.get("buckets", []):
+                    if bucket.get("public", False):
+                        findings.append({
+                            "type": "s3_public_bucket",
+                            "resource": bucket["name"],
+                            "severity": "critical",
+                            "description": f"S3 bucket '{bucket['name']}' has public access",
+                        })
+            
+            # Security group check
+            if task.config.get("check_security_groups", True):
+                # Check for overly permissive security groups via CloudWatch alarms
+                cw_result = scanner._scan_cloudwatch_alarms()
+                for alarm in cw_result.get("alarms", []):
+                    if alarm.get("state") == "ALARM" and "security" in alarm.get("name", "").lower():
+                        findings.append({
+                            "type": "security_alarm",
+                            "resource": alarm.get("name", ""),
+                            "severity": "high",
+                            "description": f"Security-related alarm firing: {alarm['name']}",
+                        })
+        except Exception as e:
+            logger.error(f"Security check error: {e}")
         
         status = "ok" if len(findings) == 0 else "alert"
         summary = "Security check complete. No new issues." if status == "ok" else f"{len(findings)} security issues found"
@@ -274,15 +375,34 @@ Report generated at: """ + datetime.now(timezone.utc).isoformat()
         )
     
     async def _handle_result(self, result: ProactiveResult):
-        """Handle task result - notify if needed"""
+        """Handle task result - notify if needed, trigger RCA pipeline for alerts."""
         # OpenClaw pattern: "无事不扰，有事报告"
         if result.status == "ok":
             # Silent - just log
             logger.info(f"✅ {result.task_name}: {result.summary}")
         else:
-            # Alert - push notification
+            # Alert - push notification + trigger incident pipeline
             logger.warning(f"🚨 {result.task_name}: {result.summary}")
             await self.results_queue.put(result)
+            
+            # Trigger IncidentOrchestrator with pre-collected data (skip Stage 1)
+            if self._last_correlated_event is not None:
+                try:
+                    from src.incident_orchestrator import get_orchestrator
+                    orchestrator = get_orchestrator()
+                    incident = await orchestrator.handle_incident(
+                        trigger_type="proactive",
+                        trigger_data={
+                            "task_name": result.task_name,
+                            "findings_count": len(result.findings),
+                            "summary": result.summary,
+                        },
+                        pre_collected_event=self._last_correlated_event,
+                        auto_execute=False,  # Default: don't auto-execute, let safety layer decide
+                    )
+                    logger.info(f"Incident pipeline triggered: {incident.incident_id} → {incident.status.value}")
+                except Exception as e:
+                    logger.error(f"Failed to trigger incident pipeline: {e}")
             
             # Call registered callbacks
             if "alert" in self.callbacks:
@@ -332,6 +452,15 @@ Report generated at: """ + datetime.now(timezone.utc).isoformat()
         if task_name in self.tasks:
             self.tasks[task_name].interval_seconds = interval_seconds
             logger.info(f"Task {task_name} interval updated to {interval_seconds}s")
+    
+    def get_last_correlated_event(self):
+        """
+        Return the last CorrelatedEvent from quick_scan.
+        
+        This allows the IncidentOrchestrator to reuse pre-collected data
+        via handle_incident(pre_collected_event=...) instead of re-collecting.
+        """
+        return self._last_correlated_event
 
 
 # Singleton instance

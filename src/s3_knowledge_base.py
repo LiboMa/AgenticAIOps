@@ -100,6 +100,7 @@ class S3KnowledgeBase:
         Add a pattern to the knowledge base.
         
         Agent + MCP filtering: Only add patterns with quality_score >= 0.7
+        Dual-write: S3 (raw JSON) + OpenSearch (vector embedding)
         """
         # Quality gate - Agent filtering
         if quality_score < 0.7:
@@ -116,14 +117,45 @@ class S3KnowledgeBase:
             pattern.created_at = now
         pattern.updated_at = now
         
-        # Store in S3
-        success = await self._store_to_s3(pattern)
+        # 1. Store in S3
+        s3_success = await self._store_to_s3(pattern)
+        
+        # 2. Index in OpenSearch (dual-write for vector search)
+        os_success = await self._index_to_opensearch(pattern)
         
         # Update local cache
         self._local_cache[pattern.pattern_id] = pattern
         
-        logger.info(f"Pattern added: {pattern.pattern_id} - {pattern.title}")
-        return success
+        logger.info(
+            f"Pattern added: {pattern.pattern_id} - {pattern.title} "
+            f"(S3: {'✅' if s3_success else '❌'}, OpenSearch: {'✅' if os_success else '❌'})"
+        )
+        return s3_success  # S3 is the primary store
+    
+    async def _index_to_opensearch(self, pattern: AnomalyPattern) -> bool:
+        """Index pattern into OpenSearch for vector search."""
+        try:
+            from src.vector_search import get_vector_search
+            vs = get_vector_search()
+            
+            if not vs._initialized:
+                logger.warning("OpenSearch not initialized, skipping vector indexing")
+                return False
+            
+            return vs.index_knowledge(
+                doc_id=pattern.pattern_id,
+                title=pattern.title,
+                description=pattern.description,
+                content=f"{pattern.root_cause}\n{pattern.remediation}\n{' '.join(pattern.symptoms)}",
+                doc_type="pattern",
+                category=pattern.resource_type,
+                service=pattern.resource_type,
+                severity=pattern.severity,
+                tags=pattern.tags,
+            )
+        except Exception as e:
+            logger.warning(f"OpenSearch indexing failed (non-fatal): {e}")
+            return False
     
     async def _store_to_s3(self, pattern: AnomalyPattern) -> bool:
         """Store pattern to S3"""
