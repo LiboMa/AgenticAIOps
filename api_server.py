@@ -3336,8 +3336,10 @@ async def aci_status():
 
 
 @app.post("/api/aci/logs")
-async def get_aci_logs(request: ACILogsRequest):
+async def get_aci_logs(request: ACILogsRequest = None):
     """Get logs via ACI."""
+    if request is None:
+        request = ACILogsRequest()
     if not ACI_AVAILABLE:
         return {"error": "ACI not available", "data": []}
     
@@ -3356,8 +3358,10 @@ async def get_aci_logs(request: ACILogsRequest):
 
 
 @app.post("/api/aci/metrics")
-async def get_aci_metrics(request: ACIMetricsRequest):
+async def get_aci_metrics(request: ACIMetricsRequest = None):
     """Get metrics via ACI (from Prometheus/CloudWatch)."""
+    if request is None:
+        request = ACIMetricsRequest()
     if not ACI_AVAILABLE:
         return {"error": "ACI not available", "data": {}}
     
@@ -3373,8 +3377,10 @@ async def get_aci_metrics(request: ACIMetricsRequest):
 
 
 @app.post("/api/aci/events")
-async def get_aci_events(request: ACIEventsRequest):
+async def get_aci_events(request: ACIEventsRequest = None):
     """Get K8s events via ACI."""
+    if request is None:
+        request = ACIEventsRequest()
     if not ACI_AVAILABLE:
         return {"error": "ACI not available", "data": []}
     
@@ -3417,8 +3423,10 @@ async def get_aci_telemetry(namespace: str):
 
 
 @app.post("/api/aci/diagnosis")
-async def run_diagnosis(request: DiagnosisRequest):
+async def run_diagnosis(request: DiagnosisRequest = None):
     """Run multi-agent diagnosis on a namespace."""
+    if request is None:
+        request = DiagnosisRequest()
     if not ACI_AVAILABLE or not VOTING_AVAILABLE:
         return {"error": "ACI or Voting not available"}
     
