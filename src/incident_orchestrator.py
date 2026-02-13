@@ -511,8 +511,71 @@ class IncidentOrchestrator:
                     notes=f"High-confidence match ({rca_result.confidence:.0%}), no execution",
                 )
                 logger.info(f"Auto-feedback (match only): {pattern_id} → {best_sop['sop_id']}")
+            
+            # NEW: Persist learned pattern to S3 + OpenSearch via KnowledgeSearchService
+            self._learn_from_incident(incident, rca_result)
+            
         except Exception as e:
             logger.warning(f"Auto-feedback failed: {e}")
+    
+    def _learn_from_incident(self, incident: IncidentRecord, rca_result):
+        """
+        Learn from completed incident — persist new pattern to S3 + OpenSearch.
+        
+        Closes the feedback loop: RCA results are stored as patterns
+        for future detection cycles to reference.
+        """
+        try:
+            # Only learn from high-confidence, non-healthy results
+            if rca_result.confidence < 0.7 or rca_result.pattern_id == "healthy":
+                return
+            
+            from src.s3_knowledge_base import AnomalyPattern
+            from src.knowledge_search import get_knowledge_search
+            
+            # Determine severity string
+            severity_str = "medium"
+            if hasattr(rca_result.severity, 'value'):
+                severity_str = rca_result.severity.value
+            elif isinstance(rca_result.severity, str):
+                severity_str = rca_result.severity
+            
+            # Build pattern from RCA result
+            pattern = AnomalyPattern(
+                pattern_id=f"learned-{incident.incident_id}",
+                title=rca_result.root_cause[:100] if rca_result.root_cause else "Unknown",
+                description=rca_result.root_cause or "",
+                resource_type=getattr(rca_result, 'affected_service', '') or
+                              (rca_result.matched_symptoms[0] if rca_result.matched_symptoms else "unknown"),
+                severity=severity_str,
+                symptoms=[str(s) for s in (rca_result.matched_symptoms or [])[:10]],
+                root_cause=rca_result.root_cause or "",
+                remediation=getattr(rca_result.remediation, 'suggestion', '') if rca_result.remediation else "",
+                tags=[f"learned", f"confidence-{rca_result.confidence:.0%}", incident.incident_id[:12]],
+                confidence=rca_result.confidence,
+                source="auto_learned",
+            )
+            
+            ks = get_knowledge_search()
+            # Use asyncio to run the async index method
+            import asyncio
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # Schedule as a task if we're already in an async context
+                    asyncio.ensure_future(ks.index(pattern, quality_score=rca_result.confidence))
+                else:
+                    loop.run_until_complete(ks.index(pattern, quality_score=rca_result.confidence))
+            except RuntimeError:
+                # No event loop — create one
+                asyncio.run(ks.index(pattern, quality_score=rca_result.confidence))
+            
+            logger.info(
+                f"Learned pattern from incident {incident.incident_id}: "
+                f"{pattern.title[:60]} (confidence: {rca_result.confidence:.0%})"
+            )
+        except Exception as e:
+            logger.warning(f"Failed to learn from incident: {e}")
     
     def _persist_incident(self, incident: IncidentRecord):
         """Persist incident record to local JSON file."""
