@@ -148,7 +148,7 @@
 | ID | 测试 | 状态 | 备注 |
 |----|------|------|------|
 | T-L4-001 | EventBridge 触发 | ⏳ 待实现 | 需 EventBridge + Lambda |
-| T-L4-002 | SOP 匹配 | ⏳ 待 Bug-005 修复 | |
+| T-L4-002 | SOP 匹配 | ⚠️ Bug-010: pattern ID 不匹配 | node-001 vs node-not-ready + 中英文 |
 | T-L4-003 | L0/L1 自动执行 | ⏳ 待 SOP 匹配 | |
 | T-L4-004 | L2/L3 审批 | ⏳ 待 SOP 匹配 | |
 | T-L4-005 | Feedback Loop | ⏳ 待实现 | |

@@ -1,0 +1,57 @@
+{
+  "incident_id": "inc-e8d81eaaa5c5",
+  "trigger_type": "manual",
+  "trigger_data": {},
+  "region": "ap-southeast-1",
+  "status": "completed",
+  "collection_summary": {
+    "collection_id": "e9f30f345214",
+    "metrics": 23,
+    "alarms": 17,
+    "trail_events": 2050,
+    "anomalies": 0,
+    "health_events": 10,
+    "duration_ms": 26937
+  },
+  "rca_result": {
+    "pattern_id": "node-001",
+    "pattern_name": "Node NotReady",
+    "root_cause": "\u8282\u70b9\u7f51\u7edc\u6545\u969c\u6216 kubelet \u5f02\u5e38",
+    "severity": "high",
+    "confidence": 0.85,
+    "matched_symptoms": [
+      "NodeNotReady",
+      "NodeStatusUnknown",
+      "FailedScheduling",
+      "node"
+    ],
+    "evidence": [
+      "Event matched: message=node"
+    ],
+    "timestamp": "2026-02-13T00:41:56.153424",
+    "remediation": {
+      "action": "manual_review",
+      "auto_execute": false,
+      "params": {},
+      "suggestion": null,
+      "checklist": [
+        "\u68c0\u67e5\u8282\u70b9\u7f51\u7edc\u8fde\u901a\u6027",
+        "\u68c0\u67e5 kubelet \u548c containerd \u65e5\u5fd7",
+        "\u68c0\u67e5\u8282\u70b9\u8d44\u6e90\u4f7f\u7528\u60c5\u51b5",
+        "\u8003\u8651 drain \u8282\u70b9\u8fc1\u79fb\u5de5\u4f5c\u8d1f\u8f7d"
+      ]
+    }
+  },
+  "matched_sops": [],
+  "safety_check": null,
+  "execution_result": null,
+  "created_at": "2026-02-13T00:41:29.070980",
+  "completed_at": "2026-02-13T00:41:56.881978",
+  "duration_ms": 27811,
+  "stage_timings": {
+    "collect": 27046,
+    "analyze": 36,
+    "sop_match": 728
+  },
+  "error": null
+}

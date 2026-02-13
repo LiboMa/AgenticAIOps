@@ -25,14 +25,23 @@ logger = logging.getLogger(__name__)
 
 # Maps RCA pattern IDs / root cause keywords to SOP IDs
 RCA_SOP_MAPPING = {
-    # Pattern-based mapping (exact match)
+    # Pattern-based mapping (exact match from rca_patterns.yaml)
+    "oom-001": ["sop-ec2-high-cpu"],
+    "crash-001": ["sop-lambda-errors"],
+    "image-001": [],
+    "cpu-001": ["sop-ec2-high-cpu"],
+    "network-001": ["sop-ec2-unreachable", "sop-elb-5xx-spike"],
+    "pvc-001": ["sop-ec2-disk-full"],
+    "node-001": ["sop-ec2-unreachable"],
+    
+    # Legacy pattern IDs (descriptive names)
     "oom-killed": ["sop-ec2-high-cpu"],
     "crash-loop": ["sop-lambda-errors"],
     "image-pull-failure": [],
     "node-not-ready": ["sop-ec2-unreachable"],
     "rds-connection-failure": ["sop-rds-failover"],
     
-    # Keyword-based mapping (fuzzy)
+    # Keyword-based mapping (English + Chinese)
     "high_cpu": ["sop-ec2-high-cpu"],
     "high_memory": ["sop-ec2-high-cpu"],
     "database": ["sop-rds-failover"],
@@ -49,6 +58,20 @@ RCA_SOP_MAPPING = {
     "dynamodb": ["sop-dynamodb-throttle"],
     "capacity": ["sop-dynamodb-throttle"],
     
+    # Chinese keyword mapping
+    "节点": ["sop-ec2-unreachable"],
+    "网络故障": ["sop-ec2-unreachable", "sop-elb-5xx-spike"],
+    "kubelet": ["sop-ec2-unreachable"],
+    "磁盘": ["sop-ec2-disk-full"],
+    "cpu": ["sop-ec2-high-cpu"],
+    "内存": ["sop-ec2-high-cpu"],
+    "数据库": ["sop-rds-failover"],
+    "存储": ["sop-rds-storage-low"],
+    "限流": ["sop-dynamodb-throttle"],
+    "超时": ["sop-lambda-errors"],
+    "错误": ["sop-lambda-errors"],
+    "不可达": ["sop-ec2-unreachable"],
+    
     # LLM pattern mappings
     "llm-sonnet-resource": ["sop-ec2-high-cpu", "sop-ec2-disk-full"],
     "llm-sonnet-config": ["sop-ec2-unreachable"],
@@ -56,6 +79,9 @@ RCA_SOP_MAPPING = {
     "llm-sonnet-application": ["sop-lambda-errors"],
     "llm-opus-resource": ["sop-ec2-high-cpu", "sop-ec2-disk-full"],
     "llm-opus-config": ["sop-ec2-unreachable"],
+    
+    # Healthy / no-issue
+    "healthy": [],
 }
 
 # Severity → auto-execution policy
