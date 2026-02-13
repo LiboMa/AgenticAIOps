@@ -339,6 +339,13 @@ class IncidentOrchestrator:
             incident.completed_at = datetime.utcnow().isoformat()
             incident.duration_ms = int((time.time() - start_time) * 1000)
             
+            # ── Feedback Loop: Auto-learn from results ────────────
+            if incident.status == IncidentStatus.COMPLETED and matched_sops:
+                self._auto_feedback(incident, rca_result, matched_sops)
+            
+            # ── Persist incident record ───────────────────────────
+            self._persist_incident(incident)
+            
             logger.info(
                 f"Incident {incident_id} completed: {incident.status.value} "
                 f"in {incident.duration_ms}ms"
@@ -407,6 +414,61 @@ class IncidentOrchestrator:
                 "sop_id": sop_id,
                 "message": str(e),
             }
+    
+    def _auto_feedback(self, incident: IncidentRecord, rca_result, matched_sops):
+        """Auto-generate feedback from completed incidents to strengthen patterns."""
+        try:
+            from src.rca_sop_bridge import get_bridge
+            bridge = get_bridge()
+            
+            pattern_id = rca_result.pattern_id
+            
+            # If execution happened and succeeded, submit positive feedback
+            if incident.execution_result and incident.execution_result.get('success'):
+                sop_id = incident.execution_result.get('sop_id', '')
+                bridge.submit_feedback(
+                    execution_id=incident.execution_result.get('execution_id', incident.incident_id),
+                    sop_id=sop_id,
+                    rca_pattern_id=pattern_id,
+                    success=True,
+                    root_cause_confirmed=rca_result.confidence >= 0.8,
+                    resolution_time_seconds=int(incident.duration_ms / 1000),
+                    notes=f"Auto-feedback from incident {incident.incident_id}",
+                )
+                logger.info(f"Auto-feedback: {pattern_id} → {sop_id} (success)")
+            
+            # Even without execution, strengthen the pattern↔SOP mapping
+            # if high confidence and SOPs were matched
+            elif rca_result.confidence >= 0.85 and matched_sops:
+                best_sop = matched_sops[0]
+                bridge.submit_feedback(
+                    execution_id=incident.incident_id,
+                    sop_id=best_sop['sop_id'],
+                    rca_pattern_id=pattern_id,
+                    success=True,  # High-confidence match = implicit positive signal
+                    root_cause_confirmed=False,
+                    notes=f"High-confidence match ({rca_result.confidence:.0%}), no execution",
+                )
+                logger.info(f"Auto-feedback (match only): {pattern_id} → {best_sop['sop_id']}")
+        except Exception as e:
+            logger.warning(f"Auto-feedback failed: {e}")
+    
+    def _persist_incident(self, incident: IncidentRecord):
+        """Persist incident record to local JSON file."""
+        try:
+            import json
+            import os
+            
+            persist_dir = os.path.join(os.path.dirname(__file__), '..', 'data', 'incidents')
+            os.makedirs(persist_dir, exist_ok=True)
+            
+            filepath = os.path.join(persist_dir, f"{incident.incident_id}.json")
+            with open(filepath, 'w') as f:
+                json.dump(incident.to_dict(), f, indent=2, default=str)
+            
+            logger.info(f"Persisted incident {incident.incident_id} to {filepath}")
+        except Exception as e:
+            logger.warning(f"Failed to persist incident: {e}")
     
     def get_incident(self, incident_id: str) -> Optional[IncidentRecord]:
         """Get an incident by ID."""
