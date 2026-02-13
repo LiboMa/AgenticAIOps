@@ -148,6 +148,13 @@ class DetectAgent:
         self._latest: Optional[DetectResult] = None
         self._collecting = asyncio.Lock()  # R5: collection mutex
 
+        # Dispatch retry config
+        self._dispatch_max_retries = 3
+        self._dispatch_base_delay = 1.0  # seconds
+        self._dispatch_failures = 0
+        self._dispatch_successes = 0
+        self._dead_letter_dir = Path(cache_dir).parent / "dead_letter"
+
         # EventCorrelator — lazy init or injected
         from src.event_correlator import get_correlator
         self._correlator = get_correlator(self.region)
@@ -240,18 +247,66 @@ class DetectAgent:
 
     async def _dispatch(self, result: DetectResult):
         """
-        Dispatch DetectResult to the incident pipeline.
+        Dispatch DetectResult to the incident pipeline with retry.
+
+        Exponential backoff: 3 attempts (1s, 2s, 4s).
+        On exhaustion: write to dead-letter dir for manual replay.
 
         Phase A: Direct function call to IncidentOrchestrator.
         Phase B: Replace with self.event_bus.publish(DetectEvent(result)).
         Only this method changes during A→B migration.
         """
-        from src.incident_orchestrator import get_orchestrator
-        orchestrator = get_orchestrator(self.region)
-        await orchestrator.handle_incident(
-            trigger_type=result.source.replace("_scan", "").replace("_trigger", ""),
-            detect_result=result,
+        last_error = None
+        for attempt in range(self._dispatch_max_retries):
+            try:
+                from src.incident_orchestrator import get_orchestrator
+                orchestrator = get_orchestrator(self.region)
+                await orchestrator.handle_incident(
+                    trigger_type=result.source.replace("_scan", "").replace("_trigger", ""),
+                    detect_result=result,
+                )
+                self._dispatch_successes += 1
+                logger.info(f"[{result.detect_id}] Dispatch succeeded (attempt {attempt + 1})")
+                return
+            except Exception as e:
+                last_error = e
+                backoff = self._dispatch_base_delay * (2 ** attempt)
+                logger.warning(
+                    f"[{result.detect_id}] Dispatch failed (attempt {attempt + 1}/"
+                    f"{self._dispatch_max_retries}): {e}, retrying in {backoff}s"
+                )
+                await asyncio.sleep(backoff)
+
+        # All retries exhausted — dead-letter
+        self._dispatch_failures += 1
+        logger.error(
+            f"[{result.detect_id}] Dispatch failed after {self._dispatch_max_retries} retries: {last_error}"
         )
+        self._write_dead_letter(result, str(last_error))
+
+    def _write_dead_letter(self, result: DetectResult, error: str):
+        """Write failed dispatch to dead-letter directory for manual replay."""
+        try:
+            self._dead_letter_dir.mkdir(parents=True, exist_ok=True)
+            path = self._dead_letter_dir / f"dl-{result.detect_id}.json"
+
+            payload = {
+                "detect_id": result.detect_id,
+                "timestamp": result.timestamp,
+                "source": result.source,
+                "error": error,
+                "anomalies_count": len(result.anomalies_detected),
+                "result": result.to_dict(),
+            }
+
+            with open(path, "w") as f:
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+                json.dump(payload, f, indent=2, default=str)
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+
+            logger.info(f"[{result.detect_id}] Written to dead-letter: {path}")
+        except Exception as e:
+            logger.error(f"[{result.detect_id}] Failed to write dead-letter: {e}")
 
     def get_latest(self) -> Optional[DetectResult]:
         """Get the most recent DetectResult (may be stale — caller checks)."""
@@ -275,6 +330,8 @@ class DetectAgent:
             "latest_age_seconds": round(self._latest.age_seconds, 1) if self._latest else None,
             "latest_freshness": self._latest.freshness_label if self._latest else None,
             "cache_size": len(self._cache),
+            "dispatch_successes": self._dispatch_successes,
+            "dispatch_failures": self._dispatch_failures,
         }
 
     def _persist_result(self, result: DetectResult):

@@ -330,11 +330,15 @@ class TestHealth:
         a._collecting = asyncio.Lock()
         a._latest = None
         a._cache = {}
+        a._dispatch_successes = 0
+        a._dispatch_failures = 0
 
         h = a.health()
         assert h["status"] == "idle"
         assert h["latest_detect_id"] is None
         assert h["cache_size"] == 0
+        assert h["dispatch_successes"] == 0
+        assert h["dispatch_failures"] == 0
 
     def test_health_with_result(self):
         a = DetectAgent.__new__(DetectAgent)
@@ -342,12 +346,16 @@ class TestHealth:
         a._collecting = asyncio.Lock()
         a._cache = {"det-x": _make_detect_result(detect_id="det-x")}
         a._latest = a._cache["det-x"]
+        a._dispatch_successes = 3
+        a._dispatch_failures = 1
 
         h = a.health()
         assert h["status"] == "idle"
         assert h["latest_detect_id"] == "det-x"
         assert h["cache_size"] == 1
         assert h["latest_freshness"] == "fresh"
+        assert h["dispatch_successes"] == 3
+        assert h["dispatch_failures"] == 1
 
 
 # =============================================================================
@@ -380,3 +388,155 @@ class TestSingleton:
             assert result1 is result2
 
         mod._detect_agent = None  # cleanup
+
+
+# =============================================================================
+# Dispatch Retry Tests
+# =============================================================================
+
+class TestDispatchRetry:
+    """Tests for _dispatch() exponential backoff + dead-letter."""
+
+    @pytest.fixture
+    def agent(self, tmp_path):
+        """Create a DetectAgent with tmp cache dir."""
+        with patch("src.event_correlator.get_correlator"):
+            agent = DetectAgent(region="ap-southeast-1", cache_dir=str(tmp_path / "cache"))
+            agent._dead_letter_dir = tmp_path / "dead_letter"
+            return agent
+
+    @pytest.fixture
+    def detect_result(self):
+        """Create a sample DetectResult."""
+        return DetectResult(
+            detect_id="det-test-dispatch",
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            source="proactive_scan",
+            anomalies_detected=[{"type": "cpu_spike", "severity": "high"}],
+        )
+
+    @pytest.mark.asyncio
+    async def test_dispatch_success_first_attempt(self, agent, detect_result):
+        """Dispatch succeeds on first attempt."""
+        mock_orchestrator = MagicMock()
+        mock_orchestrator.handle_incident = AsyncMock()
+
+        with patch("src.incident_orchestrator.get_orchestrator", return_value=mock_orchestrator):
+            await agent._dispatch(detect_result)
+
+        assert agent._dispatch_successes == 1
+        assert agent._dispatch_failures == 0
+        mock_orchestrator.handle_incident.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_dispatch_success_after_retry(self, agent, detect_result):
+        """Dispatch succeeds on second attempt after first failure."""
+        mock_orchestrator = MagicMock()
+        mock_orchestrator.handle_incident = AsyncMock(
+            side_effect=[Exception("connection timeout"), None]
+        )
+
+        with patch("src.incident_orchestrator.get_orchestrator", return_value=mock_orchestrator):
+            with patch("asyncio.sleep", new_callable=AsyncMock):
+                await agent._dispatch(detect_result)
+
+        assert agent._dispatch_successes == 1
+        assert agent._dispatch_failures == 0
+        assert mock_orchestrator.handle_incident.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_dispatch_success_third_attempt(self, agent, detect_result):
+        """Dispatch succeeds on third attempt."""
+        mock_orchestrator = MagicMock()
+        mock_orchestrator.handle_incident = AsyncMock(
+            side_effect=[Exception("fail 1"), Exception("fail 2"), None]
+        )
+
+        with patch("src.incident_orchestrator.get_orchestrator", return_value=mock_orchestrator):
+            with patch("asyncio.sleep", new_callable=AsyncMock):
+                await agent._dispatch(detect_result)
+
+        assert agent._dispatch_successes == 1
+        assert agent._dispatch_failures == 0
+        assert mock_orchestrator.handle_incident.call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_dispatch_exhausted_writes_dead_letter(self, agent, detect_result):
+        """All retries fail → dead-letter written, failure counted."""
+        mock_orchestrator = MagicMock()
+        mock_orchestrator.handle_incident = AsyncMock(
+            side_effect=Exception("orchestrator down")
+        )
+
+        with patch("src.incident_orchestrator.get_orchestrator", return_value=mock_orchestrator):
+            with patch("asyncio.sleep", new_callable=AsyncMock):
+                await agent._dispatch(detect_result)
+
+        assert agent._dispatch_successes == 0
+        assert agent._dispatch_failures == 1
+
+        # Verify dead-letter file
+        dl_path = agent._dead_letter_dir / f"dl-{detect_result.detect_id}.json"
+        assert dl_path.exists()
+
+        with open(dl_path) as f:
+            dl_data = json.load(f)
+        assert dl_data["detect_id"] == "det-test-dispatch"
+        assert "orchestrator down" in dl_data["error"]
+        assert dl_data["anomalies_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_dispatch_backoff_timing(self, agent, detect_result):
+        """Verify exponential backoff delays: 1s, 2s, 4s."""
+        mock_orchestrator = MagicMock()
+        mock_orchestrator.handle_incident = AsyncMock(
+            side_effect=Exception("always fails")
+        )
+
+        sleep_calls = []
+        async def mock_sleep(delay):
+            sleep_calls.append(delay)
+
+        with patch("src.incident_orchestrator.get_orchestrator", return_value=mock_orchestrator):
+            with patch("asyncio.sleep", side_effect=mock_sleep):
+                await agent._dispatch(detect_result)
+
+        assert sleep_calls == [1.0, 2.0, 4.0]
+
+    @pytest.mark.asyncio
+    async def test_dispatch_failures_in_health(self, agent, detect_result):
+        """Health endpoint includes dispatch counters."""
+        mock_orchestrator = MagicMock()
+        mock_orchestrator.handle_incident = AsyncMock(
+            side_effect=Exception("down")
+        )
+
+        with patch("src.incident_orchestrator.get_orchestrator", return_value=mock_orchestrator):
+            with patch("asyncio.sleep", new_callable=AsyncMock):
+                await agent._dispatch(detect_result)
+
+        health = agent.health()
+        assert health["dispatch_failures"] == 1
+        assert health["dispatch_successes"] == 0
+
+    @pytest.mark.asyncio
+    async def test_dispatch_multiple_failures_accumulate(self, agent, detect_result):
+        """Multiple dispatch failures accumulate in counter."""
+        mock_orchestrator = MagicMock()
+        mock_orchestrator.handle_incident = AsyncMock(
+            side_effect=Exception("down")
+        )
+
+        with patch("src.incident_orchestrator.get_orchestrator", return_value=mock_orchestrator):
+            with patch("asyncio.sleep", new_callable=AsyncMock):
+                await agent._dispatch(detect_result)
+                await agent._dispatch(detect_result)
+
+        assert agent._dispatch_failures == 2
+
+    def test_write_dead_letter_creates_dir(self, agent, detect_result):
+        """Dead-letter dir is created if it doesn't exist."""
+        assert not agent._dead_letter_dir.exists()
+        agent._write_dead_letter(detect_result, "test error")
+        assert agent._dead_letter_dir.exists()
+        assert (agent._dead_letter_dir / f"dl-{detect_result.detect_id}.json").exists()
