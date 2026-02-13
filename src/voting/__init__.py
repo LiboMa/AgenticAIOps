@@ -16,7 +16,7 @@ import json
 import logging
 from collections import Counter
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -282,7 +282,7 @@ class VotingWeightCalculator:
         self.contribution_history[agent_id].append({
             "task_type": task_type.value,
             "success": success,
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         })
         
         # Persist history

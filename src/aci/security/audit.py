@@ -7,7 +7,7 @@ Logs all ACI operations for compliance and debugging.
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -38,7 +38,7 @@ class AuditLogger:
     
     def _get_log_file(self) -> Path:
         """Get log file for current date."""
-        date_str = datetime.now().strftime("%Y-%m-%d")
+        date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         return self.log_dir / f"aci-audit-{date_str}.jsonl"
     
     def log(
@@ -62,7 +62,7 @@ class AuditLogger:
             duration_ms: Operation duration
         """
         entry = {
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "operation": operation,
             "details": details,
             "result": result,
@@ -73,7 +73,7 @@ class AuditLogger:
         
         try:
             # Check if date changed (rotate log file)
-            current_date = datetime.now().strftime("%Y-%m-%d")
+            current_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             if f"-{current_date}.jsonl" not in str(self.current_log_file):
                 self.current_log_file = self._get_log_file()
             

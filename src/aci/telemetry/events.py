@@ -7,7 +7,7 @@ Provides Kubernetes events retrieval.
 import json
 import logging
 import subprocess
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 from ..models import TelemetryResult, ResultStatus, EventEntry
@@ -72,7 +72,7 @@ class EventsProvider:
             events_data = json.loads(result.stdout)
             events: List[EventEntry] = []
             
-            cutoff_time = datetime.now() - timedelta(minutes=duration_minutes)
+            cutoff_time = datetime.now(timezone.utc) - timedelta(minutes=duration_minutes)
             
             for item in events_data.get("items", []):
                 event = self._parse_event(item)

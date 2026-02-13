@@ -1,256 +1,293 @@
-# 设计方案: Detect Agent 数据复用重构
+# Detect Agent 数据复用设计方案
 
 ## 背景
+Ma Ronnie 指出：Detect Agent 本身就是做数据采集的，`incident_orchestrator` 不应该重复采集。
+当前 `handle_incident()` 每次都新建 EventCorrelator 重新采集 (~17s)，违反原设计。
 
-当前 `incident_orchestrator.handle_incident()` 在每次触发时都重新调用 `event_correlator.collect()` 进行全量 AWS 数据采集（~17s），但系统已有 `ProactiveAgent`（周期扫描）和 `AWSScanner`（全量采集）的能力。这违反了原始架构设计 (`CLOSED_LOOP_AIOPS_DESIGN.md`) 中 **Detect Agent 持续采集 → RCA Agent 复用数据** 的分工原则。
+## 现有数据源
 
-Ma Ronnie 指出：Detect Agent 主动采集数据 → 自动匹配 Pattern → 向量化存储 → RCA 直接分析，不应重复采集。
+| 组件 | 文件 | 职责 | 数据 |
+|------|------|------|------|
+| ProactiveAgent | `proactive_agent.py` | 周期心跳扫描 | 扫描结果、异常检测 |
+| AWSScanner | `aws_ops.py` | AWS 资源扫描 | metrics, alarms, anomalies |
+| EventCorrelator | `event_correlator.py` | 事件关联采集 | CorrelatedEvent |
 
-## 目标
+## 问题
+`incident_orchestrator.handle_incident()` 的 Stage 1 每次重新调用 `correlator.collect()` (~17s)。
+但 ProactiveAgent 已经在持续运行并采集相同的数据。
 
-1. **消除重复采集** — RCA 触发时复用 Detect Agent 已采集的数据
-2. **架构对齐** — 回归原设计的 Multi-Agent 职责分工
-3. **性能提升** — RCA 响应延迟从 ~18s 降至 <2s
-4. **知识积累** — Pattern 匹配结果持久化，支持后续向量检索
+## 方案 A: 渐进式 (推荐)
 
-## 当前架构 (As-Is)
-
-```
-手动触发 / CloudWatch Alarm
-         │
-         ▼
-incident_orchestrator.handle_incident()
-  ├── Stage 1: event_correlator.collect()    ← 17s 重复采集
-  ├── Stage 2: rca_inference.analyze()       ← ~1s
-  ├── Stage 3: rca_sop_bridge.match_sops()   ← <1s  
-  └── Stage 4: sop_safety.check()            ← <1s
-  总计: ~18s
-```
-
-**问题**:
-- `collect()` 每次重新调用 CloudWatch/CloudTrail API，耗时 17s+
-- `ProactiveAgent` 和 `AWSScanner` 已有采集能力但未被复用
-- 多个 agent 并发调用 AWS API 会触发限流 (Bug-013)
-- 不符合原设计中 Detect → RCA → Action 的数据流向
-
-## 目标架构 (To-Be)
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    Detect Agent (持续运行)                       │
-│                                                                  │
-│  ┌──────────────┐    ┌───────────────┐    ┌──────────────────┐  │
-│  │  Collector    │───▶│  Pattern      │───▶│  DetectResult    │  │
-│  │  (定时采集)   │    │  Matcher      │    │  Cache           │  │
-│  │              │    │  (模式匹配)    │    │  (JSON/内存)     │  │
-│  └──────────────┘    └───────────────┘    └────────┬─────────┘  │
-│                                                     │            │
-│  数据源:                                            │ 异常触发    │
-│  - CloudWatch Metrics                               ▼            │
-│  - CloudWatch Alarms            ┌────────────────────────┐      │
-│  - CloudTrail Events            │  AnomalyTrigger        │      │
-│  - Health Events                │  (阈值/趋势/告警)       │      │
-│                                 └───────────┬────────────┘      │
-└─────────────────────────────────────────────┼────────────────────┘
-                                              │ DetectResult
-                                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    RCA Agent (按需触发)                          │
-│                                                                  │
-│  Input: DetectResult (已采集数据 + Pattern匹配)                  │
-│  ├── rca_inference.analyze(detect_result.correlated_event)       │
-│  ├── rca_sop_bridge.match_sops(rca_result)                      │
-│  └── sop_safety.check()                                         │
-│                                                                  │
-│  不再调用 event_correlator.collect()!                            │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-## 方案
-
-### 方案 A: DetectResult 缓存 + Orchestrator 跳过采集 (渐进式)
-
-**核心思路**: 最小改动，让 `handle_incident()` 支持传入预采集数据。
-
-1. 定义 `DetectResult` 数据结构：
+### 1. DetectResult 缓存
 ```python
 @dataclass
 class DetectResult:
-    """Detect Agent 的输出，供 RCA 消费"""
-    detect_id: str
+    """ProactiveAgent 或 Alarm Webhook 产生的检测结果"""
+    source: str           # "proactive" | "alarm" | "manual"
     timestamp: datetime
-    correlated_event: CorrelatedEvent  # 已有类型
-    pattern_matches: List[Dict[str, Any]]  # 匹配到的 Pattern
-    anomalies_detected: List[Dict[str, Any]]
-    data_freshness_seconds: float  # 数据新鲜度
-    source: str  # "proactive_scan" | "alarm_trigger" | "manual"
+    correlated_event: Optional[CorrelatedEvent] = None
+    anomalies: List[Dict] = field(default_factory=list)
+    alarms: List[Dict] = field(default_factory=list)
+    raw_data: Dict = field(default_factory=dict)
 ```
 
-2. `DetectAgent` 类封装采集逻辑：
-```python
-class DetectAgent:
-    """统一的检测 Agent，封装采集+缓存+异常检测"""
-    
-    def __init__(self, region: str = "ap-southeast-1"):
-        self._collector = get_correlator(region)
-        self._scanner = AWSCloudScanner(region)
-        self._cache: Dict[str, DetectResult] = {}
-        self._latest: Optional[DetectResult] = None
-    
-    async def run_detection(self, lookback_minutes: int = 15) -> DetectResult:
-        """执行一次完整检测并缓存结果"""
-        event = await self._collector.collect(lookback_minutes=lookback_minutes)
-        patterns = self._match_patterns(event)
-        anomalies = self._detect_anomalies(event)
-        
-        result = DetectResult(
-            detect_id=f"det-{uuid.uuid4().hex[:12]}",
-            timestamp=datetime.now(timezone.utc),
-            correlated_event=event,
-            pattern_matches=patterns,
-            anomalies_detected=anomalies,
-            data_freshness_seconds=0,
-            source="proactive_scan",
-        )
-        self._latest = result
-        self._cache[result.detect_id] = result
-        return result
-    
-    def get_latest(self, max_age_seconds: int = 300) -> Optional[DetectResult]:
-        """获取最新缓存数据（5分钟内有效）"""
-        if self._latest and self._latest.data_freshness_seconds < max_age_seconds:
-            return self._latest
-        return None
-```
-
-3. `incident_orchestrator` 修改：
+### 2. Orchestrator 接受已采集数据
 ```python
 async def handle_incident(
     self,
     trigger_type: str = "manual",
-    trigger_data: Dict[str, Any] = None,
-    detect_result: Optional[DetectResult] = None,  # ← 新增
+    detect_result: Optional[DetectResult] = None,  # 新增
     ...
 ) -> IncidentRecord:
-    # Stage 1: 如果有预采集数据，直接用
-    if detect_result and detect_result.data_freshness_seconds < 300:
+    
+    if detect_result and detect_result.correlated_event:
+        # 直接使用已有数据，跳过 Stage 1
         event = detect_result.correlated_event
-        logger.info(f"Using pre-collected data from {detect_result.detect_id}")
+        incident.stage_timings["collect"] = 0  # 无需采集
     else:
-        event = await correlator.collect(...)  # fallback
+        # 仅在无现有数据时采集
+        event = await self.correlator.collect(...)
 ```
 
-**优点**: 
-- 改动最小，向后兼容
-- 手动触发仍可 fallback 到实时采集
-- 分阶段迁移，不影响现有功能
-
-**缺点**:
-- DetectAgent 需要独立的运行循环（daemon）
-- 缓存过期策略需要额外考虑
-
-### 方案 B: Event-Driven 全重构 (理想态)
-
-**核心思路**: DetectAgent 作为事件源，通过 EventBus 驱动后续 Agent。
-
+### 3. ProactiveAgent 触发流程
 ```python
-class DetectAgent:
-    """事件驱动的检测 Agent"""
+# proactive_agent.py
+async def _on_anomaly_detected(self, scan_result):
+    """检测到异常时直接触发 Orchestrator"""
+    detect_result = DetectResult(
+        source="proactive",
+        timestamp=datetime.now(timezone.utc),
+        anomalies=scan_result.anomalies,
+        raw_data=scan_result.to_dict(),
+    )
     
-    async def start(self, interval_seconds: int = 300):
-        """启动持续检测循环"""
-        while True:
-            result = await self.run_detection()
-            if result.anomalies_detected:
-                await self._publish_event(result)  # → EventBus
-            await asyncio.sleep(interval_seconds)
-    
-    async def _publish_event(self, result: DetectResult):
-        """发布检测事件到 EventBus"""
-        await event_bus.publish("detect.anomaly", result)
-
-class RCAAgent:
-    """订阅检测事件的 RCA Agent"""
-    
-    async def start(self):
-        await event_bus.subscribe("detect.anomaly", self.on_anomaly)
-    
-    async def on_anomaly(self, detect_result: DetectResult):
-        rca = await rca_inference.analyze(detect_result.correlated_event)
-        await event_bus.publish("rca.complete", rca)
+    orchestrator = get_orchestrator()
+    await orchestrator.handle_incident(
+        trigger_type="anomaly",
+        detect_result=detect_result,
+    )
 ```
 
-**优点**:
-- 完全符合原设计的 Multi-Agent 架构
-- 松耦合，各 Agent 独立演进
-- 天然支持并行和扩展
+### 4. Alarm Webhook 传递数据
+```python
+# alarm_webhook.py
+async def handle_alarm_webhook(body):
+    detect_result = DetectResult(
+        source="alarm",
+        timestamp=datetime.now(timezone.utc),
+        alarms=[parse_cloudwatch_alarm(body)],
+    )
+    
+    await orchestrator.handle_incident(
+        trigger_type="alarm",
+        detect_result=detect_result,
+    )
+```
 
-**缺点**:
-- 重构量大，需要 EventBus 基础设施
-- 手动触发需要额外适配
-- 测试复杂度高
+## 方案 B: EventBus 全重构
 
-## 对比
+完整的 pub/sub 事件总线，所有 Agent 通过事件通信。
+工作量大，留到 P2 向量化阶段。
 
-| 维度 | 方案 A (渐进式) | 方案 B (全重构) |
-|------|-----------------|-----------------|
-| 改动范围 | 小：新增 DetectAgent 类 + 改 orchestrator 入口 | 大：EventBus + Agent lifecycle + 全流程 |
-| 风险 | 低：向后兼容，fallback 可用 | 中：需要重新集成测试 |
-| 性能收益 | ✅ 17s → <1s (复用数据时) | ✅ 17s → <1s + 实时推送 |
-| 原设计对齐 | 部分（数据复用但无 EventBus） | 完全对齐 |
-| 工期 | 2-3 天 | 1-2 周 |
-| 向量化存储 | 后续迭代 | 可同步实现 |
-| 手动触发兼容 | ✅ 自动 fallback | 需要额外 adapter |
+## 预期收益
+- **性能**: RCA 延迟从 ~17s 降到 <1s (跳过重复采集)
+- **架构**: 符合原设计 — Detect Agent 采集 → Orchestrator 消费
+- **资源**: 减少重复 AWS API 调用
+
+## 实施步骤
+1. 新建 `src/detect_agent.py` — DetectResult 数据结构
+2. 修改 `handle_incident()` — 增加 `detect_result` 参数
+3. 修改 `alarm_webhook.py` — 传递 DetectResult
+4. 连接 ProactiveAgent — 异常时触发 Orchestrator
 
 ## 推荐
-
-**方案 A (渐进式)**，理由：
-
-1. **MVP 阶段优先可用性** — 当前 pipeline 已经 E2E 跑通，不应做大规模重构
-2. **最小改动解决核心问题** — `handle_incident(detect_result=...)` 一行改动即可跳过重复采集
-3. **保持向后兼容** — 手动触发 / API 调用不受影响
-4. **为方案 B 铺路** — `DetectResult` 数据结构和 `DetectAgent` 类可直接复用
-
-**分期实施**: 方案 A 本迭代完成 → 方案 B 在 P2 向量化存储阶段同步推进。
-
-## 实施计划
-
-### Phase 1: DetectResult + Orchestrator 适配 (Day 1)
-
-1. 新建 `src/detect_agent.py`
-   - `DetectResult` dataclass
-   - `DetectAgent` 类（封装 collector + scanner + cache）
-   - `get_detect_agent()` 单例
-
-2. 修改 `src/incident_orchestrator.py`
-   - `handle_incident()` 新增 `detect_result` 参数
-   - 有则跳过 Stage 1，直接进 Stage 2
-   - 无则 fallback 到现有逻辑
-
-3. 修改 `api_server.py`
-   - `/api/incident/run` 新增可选 `detect_id` 参数
-   - 从 DetectAgent 缓存取 DetectResult
-
-### Phase 2: ProactiveAgent 集成 (Day 2)
-
-1. `ProactiveAgent` 改为调用 `DetectAgent.run_detection()`
-2. 扫描结果自动缓存到 `DetectAgent`
-3. CloudWatch Alarm webhook 触发时，先查缓存
-
-### Phase 3: Pattern 持久化 (Day 3)
-
-1. `DetectResult.pattern_matches` 写入本地 JSON
-2. 支持按 pattern_id 查询历史匹配
-3. 为后续 Bedrock KB 接入预留接口
-
-### 验证标准
-
-- [ ] `incident run dry` 复用缓存数据时 < 2s
-- [ ] `incident run dry` 无缓存时 fallback 正常 (~18s)
-- [ ] ProactiveAgent 扫描结果进入 DetectAgent 缓存
-- [ ] 现有 24 个单元测试全部通过
-- [ ] E2E pipeline 功能不变
+方案 A (渐进式)，3 天分阶段实施。
 
 ---
 
-*Author: Architect | Date: 2026-02-13 | Status: Draft — Pending Review*
+## 补充: Reviewer 评审反馈 (2026-02-13)
+
+以下 5 点根据 @cloud-mbot-researcher-1 评审意见补充。
+
+### R1. DetectResult 缓存 TTL 和一致性
+
+```python
+@dataclass
+class DetectResult:
+    detect_id: str
+    timestamp: datetime
+    correlated_event: CorrelatedEvent
+    pattern_matches: List[Dict[str, Any]]
+    anomalies_detected: List[Dict[str, Any]]
+    source: str  # "proactive_scan" | "alarm_trigger" | "manual"
+
+    # ── 新鲜度管理 ──
+    ttl_seconds: int = 300  # 默认 5 分钟，对齐 ProactiveAgent 心跳周期
+
+    @property
+    def age_seconds(self) -> float:
+        """数据年龄 (秒)"""
+        return (datetime.now(timezone.utc) - self.timestamp).total_seconds()
+
+    @property
+    def is_stale(self) -> bool:
+        """数据是否过期"""
+        return self.age_seconds > self.ttl_seconds
+
+    @property
+    def freshness_label(self) -> str:
+        """给 RCA 消费者的新鲜度标签"""
+        age = self.age_seconds
+        if age < 60:
+            return "fresh"       # < 1 分钟
+        elif age < self.ttl_seconds:
+            return "warm"        # 1-5 分钟
+        else:
+            return "stale"       # > TTL
+```
+
+**Orchestrator 消费时的校验逻辑**:
+```python
+# Stage 1 判断
+if detect_result and not detect_result.is_stale:
+    event = detect_result.correlated_event
+    logger.info(f"Reusing {detect_result.freshness_label} data ({detect_result.age_seconds:.0f}s old)")
+elif detect_result and detect_result.is_stale:
+    logger.warning(f"DetectResult stale ({detect_result.age_seconds:.0f}s), falling back to fresh collection")
+    event = await correlator.collect(...)  # 降级
+else:
+    event = await correlator.collect(...)  # 无缓存，正常采集
+```
+
+### R2. 手动触发不退化
+
+保证规则:
+
+| 触发类型 | `detect_result` | 行为 |
+|----------|----------------|------|
+| `manual` (用户 `incident run`) | `None` | **Always fresh collection** — 用户期望最新数据 |
+| `manual` | 有值但 stale | Fresh collection (降级) |
+| `proactive` / `alarm` | 有值且 fresh | **复用** — 跳过 Stage 1 |
+| `proactive` / `alarm` | 有值但 stale | Fresh collection (降级) |
+| `proactive` / `alarm` | `None` | Fresh collection (fallback) |
+
+```python
+# 手动触发永远不复用缓存（用户期望实时数据）
+use_cached = (
+    detect_result is not None
+    and not detect_result.is_stale
+    and trigger_type != "manual"
+)
+```
+
+### R3. ProactiveAgent → DetectAgent 重构路径
+
+当前 `ProactiveAgentSystem` 是调度框架，检测逻辑是 mock。重构分两步:
+
+```
+Phase 2 重构后的职责分离:
+
+ProactiveAgentSystem (调度层 — 不变)
+  ├── heartbeat loop: 每 30s 检查任务
+  ├── cron: 定时调度
+  └── event: 告警触发
+        │
+        │ 调用
+        ▼
+DetectAgent (检测层 — 新建)
+  ├── run_detection(): 调用 EventCorrelator + AWSScanner
+  ├── _match_patterns(): L0 关键词 + 向量匹配
+  ├── _detect_anomalies(): 阈值/趋势判定
+  ├── _cache: Dict[str, DetectResult] 缓存
+  └── get_latest(): 获取最新缓存
+        │
+        │ 异常 → 触发
+        ▼
+IncidentOrchestrator.handle_incident(
+    detect_result=cached_result  # 复用！
+)
+```
+
+**迁移规则**:
+- `_action_quick_scan()` → 委托给 `DetectAgent.run_detection()`
+- `_action_security_check()` → 委托给 `DetectAgent.run_security_scan()`
+- `_handle_result()` 异常时 → 调用 Orchestrator 并传入 `detect_result`
+- `ProactiveAgentSystem` 本身只负责调度，不做采集
+
+### R4. Pattern 存储渐进路线
+
+明确三个阶段的边界和交付物:
+
+| 阶段 | 存储方式 | 查询方式 | 交付物 | 前置条件 |
+|------|----------|----------|--------|----------|
+| **P1 (本迭代)** | 本地 JSON 文件 (`data/patterns/`) | `pattern_id` 精确查找 | `PatternStore` 类 + JSON read/write | 无 |
+| **P2 (下一迭代)** | 本地向量搜索 | 语义相似度 top-k | 复用 `vector_search.py` | P1 完成 + 10+ Pattern 样本 |
+| **P3 (后续)** | Bedrock Knowledge Base | RAG 检索 | KB 配置 + S3 同步 | P2 验证 + AWS 成本审批 |
+
+**P1 → P2 的接口预留**:
+```python
+class PatternStore:
+    """统一的 Pattern 存储接口"""
+
+    def save(self, pattern: Dict) -> str: ...
+    def get(self, pattern_id: str) -> Optional[Dict]: ...
+    def search(self, query: str, top_k: int = 5) -> List[Dict]:
+        """P1: keyword match; P2: vector search; P3: Bedrock KB"""
+        ...
+```
+
+### R5. 并发安全
+
+鉴于之前 4 个 agent 抢端口的事故，`DetectAgent` 需要:
+
+**1. 文件锁 (采集结果写入)**:
+```python
+import fcntl
+
+def _persist_result(self, result: DetectResult):
+    path = f"data/detect_cache/{result.detect_id}.json"
+    with open(path, 'w') as f:
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        json.dump(result.to_dict(), f)
+        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+```
+
+**2. 单例保护 (进程级)**:
+```python
+_detect_agent: Optional[DetectAgent] = None
+_lock = asyncio.Lock()
+
+async def get_detect_agent() -> DetectAgent:
+    global _detect_agent
+    async with _lock:
+        if _detect_agent is None:
+            _detect_agent = DetectAgent()
+        return _detect_agent
+```
+
+**3. 采集互斥 (防止并发 collect)**:
+```python
+class DetectAgent:
+    def __init__(self):
+        self._collecting = asyncio.Lock()
+
+    async def run_detection(self, lookback_minutes=15) -> DetectResult:
+        async with self._collecting:  # 同一时刻只有一个采集
+            event = await self._collector.collect(...)
+            ...
+```
+
+**4. 健康检查** (让其他组件知道 DetectAgent 状态):
+```python
+def health(self) -> Dict:
+    return {
+        "status": "running" if not self._collecting.locked() else "collecting",
+        "latest_detect_id": self._latest.detect_id if self._latest else None,
+        "latest_age_seconds": self._latest.age_seconds if self._latest else None,
+        "cache_size": len(self._cache),
+    }
+```
+
+---
+
+*Updated: 2026-02-13 | Reviewer feedback incorporated | Status: Approved — Ready for Implementation*

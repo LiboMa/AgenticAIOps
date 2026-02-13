@@ -7,7 +7,7 @@ Provides metrics retrieval from CloudWatch or Prometheus.
 import json
 import logging
 import subprocess
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from ..models import TelemetryResult, ResultStatus, MetricPoint
@@ -144,7 +144,7 @@ class MetricsProvider:
                 return []
             
             metrics = []
-            now = datetime.now()
+            now = datetime.now(timezone.utc)
             
             for line in result.stdout.strip().split("\n"):
                 if not line:

@@ -8,7 +8,7 @@ import json
 import logging
 import re
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from string import Template
 from typing import Any, Dict, List, Optional
 from urllib.parse import urljoin
@@ -219,7 +219,7 @@ class PrometheusProvider:
         # Use string.Template for safe substitution (avoids PromQL {} conflict)
         query = Template(query_template).safe_substitute(namespace=namespace)
         
-        end = datetime.now()
+        end = datetime.now(timezone.utc)
         start = end - timedelta(minutes=duration_minutes)
         
         return self.query_range(query, start, end)
