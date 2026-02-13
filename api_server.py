@@ -98,7 +98,7 @@ except Exception as e:
 def get_hpa(ns=None): return {"hpas": []}
 
 from src.intent_classifier import analyze_query
-from src.multi_agent_voting import extract_diagnosis, simple_vote
+from src.voting.multi_agent_voting import extract_diagnosis, simple_vote
 
 # Import plugin system
 from src.plugins import PluginRegistry, PluginConfig
