@@ -84,7 +84,7 @@ class S3KnowledgeBase:
         """Initialize S3 client"""
         try:
             import boto3
-            self.s3_client = boto3.client('s3')
+            self.s3_client = boto3.client('s3', region_name='ap-southeast-1')
             logger.info(f"S3 client initialized for bucket: {self.bucket_name}")
         except Exception as e:
             logger.warning(f"S3 client init failed: {e}. Using local storage only.")

@@ -573,7 +573,7 @@ class SOPStore:
         """Load SOPs from S3."""
         try:
             import boto3
-            s3 = boto3.client('s3')
+            s3 = boto3.client('s3', region_name='ap-southeast-1')
             
             paginator = s3.get_paginator('list_objects_v2')
             for page in paginator.paginate(Bucket=self.s3_bucket, Prefix='sops/'):
@@ -654,7 +654,7 @@ class SOPStore:
         
         try:
             import boto3
-            s3 = boto3.client('s3')
+            s3 = boto3.client('s3', region_name='ap-southeast-1')
             
             key = f"sops/{sop.service}/{sop.sop_id}.json"
             s3.put_object(
