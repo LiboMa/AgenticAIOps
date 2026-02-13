@@ -18,14 +18,19 @@ Trigger types:
 Design ref: docs/designs/SOP_RCA_ENHANCEMENT_DESIGN.md
 """
 
+from __future__ import annotations
+
 import asyncio
 import logging
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, TYPE_CHECKING
 from dataclasses import dataclass, field, asdict
 from enum import Enum
+
+if TYPE_CHECKING:
+    from src.detect_agent import DetectResult
 
 logger = logging.getLogger(__name__)
 
@@ -181,7 +186,7 @@ class IncidentOrchestrator:
         dry_run: bool = False,
         force: bool = False,
         lookback_minutes: int = 15,
-        detect_result=None,
+        detect_result: Optional[DetectResult] = None,
     ) -> IncidentRecord:
         """
         Full closed-loop incident handling pipeline.
@@ -223,10 +228,10 @@ class IncidentOrchestrator:
             incident.status = IncidentStatus.COLLECTING
             stage_start = time.time()
             
-            # Determine whether to reuse cached detection data
+            # Determine whether to reuse cached detection data (R2)
+            from src.detect_agent import DetectResult as _DR
             use_cached = (
-                detect_result is not None
-                and hasattr(detect_result, "is_stale")
+                isinstance(detect_result, _DR)
                 and not detect_result.is_stale
                 and trigger_type != "manual"  # R2: manual → always fresh
                 and detect_result.correlated_event is not None
@@ -254,7 +259,7 @@ class IncidentOrchestrator:
                 }
             else:
                 # Fresh collection — manual trigger, stale data, or no detect_result
-                if detect_result is not None and hasattr(detect_result, "is_stale") and detect_result.is_stale:
+                if isinstance(detect_result, _DR) and detect_result.is_stale:
                     logger.warning(
                         f"[{incident_id}] DetectResult {detect_result.detect_id} is stale "
                         f"({detect_result.age_seconds:.0f}s old), falling back to fresh collection"
