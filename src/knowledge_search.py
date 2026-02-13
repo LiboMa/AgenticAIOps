@@ -563,7 +563,7 @@ class KnowledgeStore:
     def _load_from_s3(self):
         try:
             import boto3
-            s3 = boto3.client('s3')
+            s3 = boto3.client('s3', region_name='ap-southeast-1')
             paginator = s3.get_paginator('list_objects_v2')
             for page in paginator.paginate(Bucket=self.s3_bucket, Prefix='learned/'):
                 for obj in page.get('Contents', []):
@@ -584,7 +584,7 @@ class KnowledgeStore:
         self.patterns[pattern.pattern_id] = pattern
         try:
             import boto3
-            s3 = boto3.client('s3')
+            s3 = boto3.client('s3', region_name='ap-southeast-1')
             key = f"learned/{pattern.service}/{pattern.pattern_id}.json"
             s3.put_object(
                 Bucket=self.s3_bucket, Key=key,
