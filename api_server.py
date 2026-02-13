@@ -9,7 +9,7 @@ import os
 import json
 from datetime import datetime
 from typing import Optional, List, Dict, Any
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
@@ -2979,6 +2979,28 @@ async def incident_stats():
         return {"success": True, **orchestrator.get_stats()}
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+# =============================================================================
+# Webhook: CloudWatch Alarm → Auto Incident Pipeline (L4)
+# =============================================================================
+
+@app.post("/api/webhook/alarm")
+async def webhook_alarm(request: Request):
+    """
+    Receive CloudWatch Alarm notifications via SNS.
+    Automatically triggers the full incident pipeline.
+    
+    Setup: CloudWatch Alarm → SNS Topic → HTTPS Subscription → this endpoint
+    """
+    try:
+        body = await request.json()
+        from src.alarm_webhook import handle_alarm_webhook
+        result = await handle_alarm_webhook(body)
+        return result
+    except Exception as e:
+        import traceback
+        return {"status": "error", "error": str(e), "traceback": traceback.format_exc()[:500]}
 
 
 @app.get("/health")
