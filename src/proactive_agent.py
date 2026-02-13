@@ -69,7 +69,7 @@ class ProactiveAgentSystem:
         self.callbacks: Dict[str, Callable] = {}
         self._running = False
         self._heartbeat_task: Optional[asyncio.Task] = None
-        self._last_correlated_event = None  # Cached for RCA reuse
+        self._last_detect_result = None  # DetectResult from last quick_scan
         
         # Default tasks
         self._init_default_tasks()
@@ -204,64 +204,56 @@ class ProactiveAgentSystem:
             )
     
     async def _action_quick_scan(self, task: ProactiveTask) -> ProactiveResult:
-        """Quick scan action - uses EventCorrelator for real AWS data collection."""
+        """Quick scan action - delegates to DetectAgent (R3: ProactiveAgent only schedules)."""
         findings = []
-        
+
         try:
-            from src.event_correlator import get_correlator
-            
-            correlator = get_correlator()
-            event = await correlator.collect(
+            from src.detect_agent import get_detect_agent
+
+            detect_agent = await get_detect_agent()
+            detect_result = await detect_agent.run_detection(
+                source="proactive_scan",
                 services=task.config.get("services", ["ec2", "rds", "lambda"]),
                 lookback_minutes=15,
             )
-            
-            # Convert anomalies to findings
-            for anomaly in event.anomalies:
-                findings.append({
-                    "type": anomaly.get("type", "unknown"),
-                    "resource": anomaly.get("resource", ""),
-                    "metric": anomaly.get("metric", ""),
-                    "value": anomaly.get("value", 0),
-                    "severity": anomaly.get("severity", "warning"),
-                    "description": anomaly.get("description", ""),
-                })
-            
-            # Convert firing alarms to findings
-            for alarm in event.alarms:
-                if alarm.state == "ALARM":
+
+            # Cache the DetectResult for _handle_result to pass to Orchestrator
+            self._last_detect_result = detect_result
+
+            if detect_result.error:
+                logger.error(f"DetectAgent error: {detect_result.error}")
+            else:
+                # Convert anomalies to findings
+                for anomaly in detect_result.anomalies_detected:
                     findings.append({
-                        "type": "cloudwatch_alarm",
-                        "resource": alarm.resource_id,
-                        "metric": alarm.metric_name,
-                        "value": alarm.threshold,
-                        "severity": "high",
-                        "description": f"ALARM: {alarm.name} — {alarm.reason[:100]}",
+                        "type": anomaly.get("type", "unknown"),
+                        "resource": anomaly.get("resource", ""),
+                        "metric": anomaly.get("metric", ""),
+                        "value": anomaly.get("value", 0),
+                        "severity": anomaly.get("severity", "warning"),
+                        "description": anomaly.get("description", ""),
                     })
-            
-            # Store the correlated event for downstream consumption (RCA skip Stage 1)
-            self._last_correlated_event = event
-            
+
+                # Convert firing alarms from correlated event
+                if detect_result.correlated_event:
+                    for alarm in detect_result.correlated_event.alarms:
+                        if alarm.state == "ALARM":
+                            findings.append({
+                                "type": "cloudwatch_alarm",
+                                "resource": alarm.resource_id,
+                                "metric": alarm.metric_name,
+                                "value": alarm.threshold,
+                                "severity": "high",
+                                "description": f"ALARM: {alarm.name} — {alarm.reason[:100]}",
+                            })
+
         except Exception as e:
-            logger.error(f"Quick scan collection error: {e}")
-            # Fallback: try aws_scanner for basic resource issues
-            try:
-                from src.aws_scanner import get_scanner
-                scanner = get_scanner()
-                scan_result = scanner.scan_all_resources()
-                for issue in scan_result.get("summary", {}).get("issues_found", []):
-                    findings.append({
-                        "type": issue.get("type", "unknown"),
-                        "resource": issue.get("service", ""),
-                        "severity": issue.get("severity", "medium"),
-                        "description": f"{issue.get('service')}: {issue.get('type')} (count: {issue.get('count', 0)})",
-                    })
-            except Exception as fallback_err:
-                logger.error(f"Fallback scanner also failed: {fallback_err}")
-        
+            logger.error(f"Quick scan via DetectAgent failed: {e}")
+            self._last_detect_result = None
+
         status = "ok" if len(findings) == 0 else "alert"
         summary = "HEARTBEAT_OK" if status == "ok" else f"{len(findings)} issues detected"
-        
+
         return ProactiveResult(
             task_name=task.name,
             task_type=task.task_type,
@@ -269,7 +261,10 @@ class ProactiveAgentSystem:
             timestamp=datetime.now(timezone.utc),
             findings=findings,
             summary=summary,
-            details={"correlated_event_id": getattr(getattr(self, '_last_correlated_event', None), 'collection_id', None)},
+            details={
+                "detect_id": getattr(self._last_detect_result, 'detect_id', None),
+                "freshness": getattr(self._last_detect_result, 'freshness_label', None),
+            },
         )
     
     async def _action_full_report(self, task: ProactiveTask) -> ProactiveResult:
@@ -384,24 +379,12 @@ class ProactiveAgentSystem:
             # Alert - push notification + trigger incident pipeline
             logger.warning(f"🚨 {result.task_name}: {result.summary}")
             await self.results_queue.put(result)
-            
-            # Trigger IncidentOrchestrator with pre-collected data (skip Stage 1)
-            if self._last_correlated_event is not None:
+
+            # Trigger IncidentOrchestrator with DetectAgent's cached result (R3)
+            if self._last_detect_result is not None:
                 try:
-                    from src.detect_agent import DetectResult
                     from src.incident_orchestrator import get_orchestrator
-                    
-                    # Wrap CorrelatedEvent in DetectResult for Orchestrator consumption
-                    import uuid
-                    detect_result = DetectResult(
-                        detect_id=f"det-proactive-{uuid.uuid4().hex[:8]}",
-                        timestamp=datetime.now(timezone.utc).isoformat(),
-                        source="proactive_scan",
-                        region=self._last_correlated_event.region,
-                        correlated_event=self._last_correlated_event,
-                        anomalies_detected=result.findings,
-                    )
-                    
+
                     orchestrator = get_orchestrator()
                     incident = await orchestrator.handle_incident(
                         trigger_type="proactive",
@@ -410,13 +393,13 @@ class ProactiveAgentSystem:
                             "findings_count": len(result.findings),
                             "summary": result.summary,
                         },
-                        detect_result=detect_result,
-                        auto_execute=False,  # Default: don't auto-execute, let safety layer decide
+                        detect_result=self._last_detect_result,
+                        auto_execute=False,
                     )
                     logger.info(f"Incident pipeline triggered: {incident.incident_id} → {incident.status.value}")
                 except Exception as e:
                     logger.error(f"Failed to trigger incident pipeline: {e}")
-            
+
             # Call registered callbacks
             if "alert" in self.callbacks:
                 await self.callbacks["alert"](result)
@@ -466,14 +449,14 @@ class ProactiveAgentSystem:
             self.tasks[task_name].interval_seconds = interval_seconds
             logger.info(f"Task {task_name} interval updated to {interval_seconds}s")
     
-    def get_last_correlated_event(self):
+    def get_last_detect_result(self):
         """
-        Return the last CorrelatedEvent from quick_scan.
-        
-        This allows the IncidentOrchestrator to reuse pre-collected data
-        via handle_incident(pre_collected_event=...) instead of re-collecting.
+        Return the last DetectResult from quick_scan.
+
+        IncidentOrchestrator can consume this via
+        handle_incident(detect_result=...) to skip Stage 1.
         """
-        return self._last_correlated_event
+        return self._last_detect_result
 
 
 # Singleton instance
