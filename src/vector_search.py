@@ -51,9 +51,10 @@ class VectorKnowledgeSearch:
             import boto3
             
             # Initialize Bedrock client for embeddings
+            # Titan Embed v2 is available in us-east-1 (not ap-southeast-1)
             session = boto3.Session()
-            region = session.region_name or 'ap-southeast-1'
-            self.bedrock = boto3.client('bedrock-runtime', region_name=region)
+            embedding_region = os.getenv("BEDROCK_EMBEDDING_REGION", "us-east-1")
+            self.bedrock = boto3.client('bedrock-runtime', region_name=embedding_region)
             
             # Try basic auth first if credentials provided
             if OPENSEARCH_USER and OPENSEARCH_PASSWORD:
@@ -72,11 +73,12 @@ class VectorKnowledgeSearch:
                 try:
                     from requests_aws4auth import AWS4Auth
                     credentials = session.get_credentials()
+                    os_region = session.region_name or 'ap-southeast-1'
                     
                     awsauth = AWS4Auth(
                         credentials.access_key,
                         credentials.secret_key,
-                        region,
+                        os_region,
                         'es',
                         session_token=credentials.token
                     )
@@ -119,7 +121,7 @@ class VectorKnowledgeSearch:
                     "index": {
                         "knn": True,
                         "number_of_shards": 3,
-                        "number_of_replicas": 1
+                        "number_of_replicas": 2  # 3-AZ cluster: 3 copies (1 primary + 2 replicas)
                     }
                 },
                 "mappings": {
