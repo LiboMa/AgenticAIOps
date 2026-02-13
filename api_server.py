@@ -6,13 +6,59 @@ FastAPI server providing REST endpoints for the React dashboard.
 """
 
 import os
+import sys
 import json
-from datetime import datetime
+import signal
+import atexit
+from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
+
+# ---------------------------------------------------------------------------
+# PID lockfile — prevents multiple instances binding the same port
+# ---------------------------------------------------------------------------
+PID_FILE = "/tmp/aiops-api.pid"
+
+
+def _acquire_pid_lock():
+    """Acquire PID lockfile. Exit if another instance is running."""
+    if os.path.exists(PID_FILE):
+        try:
+            with open(PID_FILE) as f:
+                old_pid = int(f.read().strip())
+            # Check if the old process is still alive
+            os.kill(old_pid, 0)
+            # Process exists — refuse to start
+            print(f"❌ Another API server is already running (PID {old_pid}). "
+                  f"Remove {PID_FILE} if this is stale.")
+            sys.exit(1)
+        except (ValueError, ProcessLookupError, PermissionError):
+            # PID file is stale — safe to overwrite
+            pass
+
+    with open(PID_FILE, "w") as f:
+        f.write(str(os.getpid()))
+
+
+def _release_pid_lock():
+    """Remove PID lockfile on exit."""
+    try:
+        if os.path.exists(PID_FILE):
+            with open(PID_FILE) as f:
+                stored_pid = int(f.read().strip())
+            if stored_pid == os.getpid():
+                os.remove(PID_FILE)
+    except Exception:
+        pass
+
+
+# Register cleanup
+atexit.register(_release_pid_lock)
+# Also handle SIGTERM gracefully
+signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 
 # AWS Scanner imports (early import for chat handler)
 try:
@@ -2595,7 +2641,7 @@ async def detect_anomalies():
                     "resource": pod.get('name'),
                     "namespace": pod.get('namespace'),
                     "message": f"Pod has restarted {restarts} times",
-                    "timestamp": datetime.utcnow().isoformat(),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                     "aiSuggestion": "Check application logs and configuration."
                 })
             elif 'OOM' in status:
@@ -2606,7 +2652,7 @@ async def detect_anomalies():
                     "resource": pod.get('name'),
                     "namespace": pod.get('namespace'),
                     "message": "Container killed due to out of memory",
-                    "timestamp": datetime.utcnow().isoformat(),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                     "aiSuggestion": "Increase memory limits in deployment spec."
                 })
             elif restarts > 5:
@@ -2617,7 +2663,7 @@ async def detect_anomalies():
                     "resource": pod.get('name'),
                     "namespace": pod.get('namespace'),
                     "message": f"Pod restart count ({restarts}) exceeds threshold",
-                    "timestamp": datetime.utcnow().isoformat(),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                     "aiSuggestion": "Review application health and probe configurations."
                 })
                 
@@ -2988,7 +3034,7 @@ async def webhook_alarm(request: Request):
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
-    return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
+    return {"status": "healthy", "timestamp": datetime.now(timezone.utc).isoformat()}
 
 
 # =============================================================================
@@ -3013,6 +3059,8 @@ class ClusterAddRequest(BaseModel):
 @app.on_event("startup")
 async def startup_event():
     """Initialize plugins from manifests on startup."""
+    # Acquire PID lock to prevent multiple instances
+    _acquire_pid_lock()
     try:
         # Try loading from manifests first
         import os
@@ -3281,7 +3329,7 @@ async def aci_status():
     return {
         "aci_available": ACI_AVAILABLE,
         "voting_available": VOTING_AVAILABLE,
-        "timestamp": datetime.utcnow().isoformat()
+        "timestamp": datetime.now(timezone.utc).isoformat()
     }
 
 
@@ -3357,7 +3405,7 @@ async def get_aci_telemetry(namespace: str):
         
         return {
             "namespace": namespace,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "logs": logs.to_dict(),
             "metrics": metrics.to_dict(),
             "events": events.to_dict()
@@ -3897,6 +3945,7 @@ async def startup_proactive_system():
 async def shutdown_proactive_system():
     """Stop proactive agent system on server shutdown."""
     await proactive_system.stop()
+    _release_pid_lock()
     print("🛑 Proactive Agent System stopped")
 
 @app.get("/api/proactive/status")
@@ -4623,5 +4672,6 @@ async def get_cloudwatch_logs(request: CloudWatchLogsRequest):
 # =============================================================================
 
 if __name__ == "__main__":
+    _acquire_pid_lock()
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)

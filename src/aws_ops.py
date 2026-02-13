@@ -13,7 +13,7 @@ Similar to EKS support but for EC2, RDS, Lambda, S3, etc.
 
 import boto3
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, List
 from botocore.exceptions import ClientError
 import statistics
@@ -60,7 +60,7 @@ class AWSServiceOps:
         
         results = {
             "service": "EC2",
-            "checked_at": datetime.utcnow().isoformat(),
+            "checked_at": datetime.now(timezone.utc).isoformat(),
             "overall_status": "healthy",
             "instances": [],
             "issues": [],
@@ -263,7 +263,7 @@ class AWSServiceOps:
         
         results = {
             "service": "RDS",
-            "checked_at": datetime.utcnow().isoformat(),
+            "checked_at": datetime.now(timezone.utc).isoformat(),
             "overall_status": "healthy",
             "databases": [],
             "issues": [],
@@ -479,7 +479,7 @@ class AWSServiceOps:
         
         results = {
             "service": "Lambda",
-            "checked_at": datetime.utcnow().isoformat(),
+            "checked_at": datetime.now(timezone.utc).isoformat(),
             "overall_status": "healthy",
             "functions": [],
             "issues": [],
@@ -584,7 +584,7 @@ class AWSServiceOps:
         
         log_group = f"/aws/lambda/{function_name}"
         
-        end_time = int(datetime.utcnow().timestamp() * 1000)
+        end_time = int(datetime.now(timezone.utc).timestamp() * 1000)
         start_time = end_time - (hours * 3600 * 1000)
         
         try:
@@ -677,7 +677,7 @@ class AWSServiceOps:
         
         results = {
             "service": "S3",
-            "checked_at": datetime.utcnow().isoformat(),
+            "checked_at": datetime.now(timezone.utc).isoformat(),
             "overall_status": "healthy",
             "buckets": [],
             "issues": [],
@@ -783,7 +783,7 @@ class AWSServiceOps:
         """Get metric statistics."""
         cw = self._get_client('cloudwatch')
         
-        end_time = datetime.utcnow()
+        end_time = datetime.now(timezone.utc)
         start_time = end_time - timedelta(minutes=minutes)
         
         try:
@@ -820,7 +820,7 @@ class AWSServiceOps:
             "service": service,
             "resource_id": resource_id,
             "anomalies": [],
-            "checked_at": datetime.utcnow().isoformat(),
+            "checked_at": datetime.now(timezone.utc).isoformat(),
         }
         
         if service.lower() == 'ec2':
@@ -906,7 +906,7 @@ class AWSServiceOps:
         
         results = {
             "service": "VPC",
-            "checked_at": datetime.utcnow().isoformat(),
+            "checked_at": datetime.now(timezone.utc).isoformat(),
             "overall_status": "healthy",
             "vpcs": [],
             "issues": [],
@@ -1051,7 +1051,7 @@ class AWSServiceOps:
         
         results = {
             "service": "ELB",
-            "checked_at": datetime.utcnow().isoformat(),
+            "checked_at": datetime.now(timezone.utc).isoformat(),
             "overall_status": "healthy",
             "load_balancers": [],
             "issues": [],
@@ -1215,7 +1215,7 @@ class AWSServiceOps:
         
         results = {
             "service": "Route53",
-            "checked_at": datetime.utcnow().isoformat(),
+            "checked_at": datetime.now(timezone.utc).isoformat(),
             "overall_status": "healthy",
             "hosted_zones": [],
             "health_checks": [],
@@ -1326,7 +1326,7 @@ class AWSServiceOps:
         
         results = {
             "service": "DynamoDB",
-            "checked_at": datetime.utcnow().isoformat(),
+            "checked_at": datetime.now(timezone.utc).isoformat(),
             "overall_status": "healthy",
             "tables": [],
             "issues": [],
@@ -1497,7 +1497,7 @@ class AWSServiceOps:
         
         results = {
             "service": "ECS",
-            "checked_at": datetime.utcnow().isoformat(),
+            "checked_at": datetime.now(timezone.utc).isoformat(),
             "overall_status": "healthy",
             "clusters": [],
             "issues": [],
@@ -1629,7 +1629,7 @@ class AWSServiceOps:
         
         results = {
             "service": "ElastiCache",
-            "checked_at": datetime.utcnow().isoformat(),
+            "checked_at": datetime.now(timezone.utc).isoformat(),
             "overall_status": "healthy",
             "clusters": [],
             "issues": [],

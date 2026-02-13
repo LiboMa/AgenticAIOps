@@ -5,7 +5,7 @@ Defines data structures for root cause analysis patterns and results.
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import List, Dict, Optional, Any
 
@@ -126,7 +126,7 @@ class RCAResult:
     matched_symptoms: List[str]
     remediation: Remediation
     evidence: List[str] = field(default_factory=list)
-    timestamp: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""

@@ -12,7 +12,7 @@ Flow:
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
 from dataclasses import dataclass, field, asdict
 
@@ -109,7 +109,7 @@ class RCASOPResult:
     
     # Bridge metadata
     bridge_confidence: float = 0.0  # How confident the SOP suggestion is
-    timestamp: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -156,7 +156,7 @@ class SOPFeedback:
     steps_total: int
     root_cause_confirmed: bool
     notes: str = ""
-    timestamp: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
 class RCASOPBridge:

@@ -18,7 +18,7 @@ This is the bridge from AWS-native alerting to our AI-powered response.
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -44,7 +44,7 @@ def parse_cloudwatch_alarm(sns_message: Dict[str, Any]) -> Dict[str, Any]:
         "new_state": alarm_data.get('NewStateValue', ''),
         "old_state": alarm_data.get('OldStateValue', ''),
         "reason": alarm_data.get('NewStateReason', ''),
-        "timestamp": alarm_data.get('StateChangeTime', datetime.utcnow().isoformat()),
+        "timestamp": alarm_data.get('StateChangeTime', datetime.now(timezone.utc).isoformat()),
         "region": alarm_data.get('Region', 'ap-southeast-1'),
         "account_id": alarm_data.get('AWSAccountId', ''),
         

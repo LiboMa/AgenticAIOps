@@ -3,7 +3,7 @@ Tests for Issue Management System
 """
 
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import tempfile
 import os
 
@@ -60,8 +60,8 @@ class TestIssueModels:
             "title": "Test Issue",
             "namespace": "test-ns",
             "resource": "test-pod",
-            "created_at": datetime.utcnow().isoformat(),
-            "updated_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         
         issue = Issue.from_dict(data)

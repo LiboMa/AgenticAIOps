@@ -19,7 +19,7 @@ Design ref: docs/designs/SOP_RCA_ENHANCEMENT_DESIGN.md
 
 import logging
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, List, Tuple
 from dataclasses import dataclass, field, asdict
 from enum import Enum
@@ -198,7 +198,7 @@ class ExecutionSnapshot:
     sop_id: str
     resource_ids: List[str]
     pre_state: Dict[str, Any]
-    timestamp: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
 @dataclass
@@ -243,7 +243,7 @@ class SOPSafetyLayer:
         self._pending_approvals: Dict[str, PendingApproval] = {}
         # Execution count tracking (circuit breaker)
         self._execution_counts: Dict[str, int] = {}  # sop_id → count today
-        self._count_reset_date: str = datetime.utcnow().strftime("%Y-%m-%d")
+        self._count_reset_date: str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         
         # Configurable limits
         self.max_daily_executions = {
@@ -357,7 +357,7 @@ class SOPSafetyLayer:
     
     def record_execution(self, sop_id: str, resource_ids: List[str]):
         """Record that a SOP was executed (update cooldowns + counts)."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         
         # SOP-level cooldown
         for rid in resource_ids:
@@ -406,7 +406,7 @@ class SOPSafetyLayer:
         expires_minutes: int = 60,
     ) -> PendingApproval:
         """Create an approval request for L2/L3 SOPs."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         approval_id = f"approval-{sop_id}-{int(time.time())}"
         
         approval = PendingApproval(
@@ -435,14 +435,14 @@ class SOPSafetyLayer:
         
         # Check expiry
         expires = datetime.fromisoformat(approval.expires_at)
-        if datetime.utcnow() > expires:
+        if datetime.now(timezone.utc) > expires:
             approval.approved = False
             logger.warning(f"Approval {approval_id} expired")
             return approval
         
         approval.approved = True
         approval.approved_by = approved_by
-        approval.approved_at = datetime.utcnow().isoformat()
+        approval.approved_at = datetime.now(timezone.utc).isoformat()
         logger.info(f"Approved {approval_id} by {approved_by}")
         return approval
     
@@ -454,14 +454,14 @@ class SOPSafetyLayer:
         
         approval.approved = False
         approval.approved_by = rejected_by
-        approval.approved_at = datetime.utcnow().isoformat()
+        approval.approved_at = datetime.now(timezone.utc).isoformat()
         logger.info(f"Rejected {approval_id} by {rejected_by}")
         return approval
     
     def get_pending_approvals(self) -> List[Dict[str, Any]]:
         """Get all pending approvals."""
         pending = []
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         for a in self._pending_approvals.values():
             if a.approved is None:
                 expires = datetime.fromisoformat(a.expires_at)
@@ -516,7 +516,7 @@ class SOPSafetyLayer:
         self, sop_id: str, resource_ids: List[str], risk_level: RiskLevel
     ) -> Optional[Tuple[int, str]]:
         """Check if cooldown period is active. Returns (remaining_seconds, source) or None."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         cooldown_period = COOLDOWN_CONFIG.get(risk_level, timedelta(minutes=5))
         
         if cooldown_period.total_seconds() == 0:
@@ -590,7 +590,7 @@ class SOPSafetyLayer:
     
     def _reset_daily_counts(self):
         """Reset daily execution counts if date changed."""
-        today = datetime.utcnow().strftime("%Y-%m-%d")
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         if today != self._count_reset_date:
             self._execution_counts.clear()
             self._count_reset_date = today

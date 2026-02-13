@@ -8,7 +8,7 @@ Designed for easy migration to Redis in production.
 import sqlite3
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 from contextlib import contextmanager
@@ -226,7 +226,7 @@ class IssueStore:
     
     def get_recent(self, hours: int = 24, include_resolved: bool = True) -> List[Issue]:
         """Get issues from the last N hours."""
-        cutoff = (datetime.utcnow() - timedelta(hours=hours)).isoformat()
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
         
         with self._get_connection() as conn:
             if include_resolved:
@@ -245,7 +245,7 @@ class IssueStore:
     
     def get_resolved_today(self) -> List[Issue]:
         """Get issues resolved in the last 24 hours."""
-        cutoff = (datetime.utcnow() - timedelta(hours=24)).isoformat()
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
         
         with self._get_connection() as conn:
             rows = conn.execute("""
@@ -283,7 +283,7 @@ class IssueStore:
                     severity_counts[severity.value] = count
             
             # Recent 24h
-            cutoff = (datetime.utcnow() - timedelta(hours=24)).isoformat()
+            cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
             recent_24h = conn.execute(
                 "SELECT COUNT(*) as count FROM issues WHERE created_at >= ?",
                 (cutoff,)

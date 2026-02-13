@@ -10,7 +10,7 @@ import logging
 import os
 from typing import Optional, Dict, Any, List
 import hashlib
-from datetime import datetime
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -218,8 +218,8 @@ class VectorKnowledgeSearch:
                 "severity": severity,
                 "tags": tags or [],
                 "embedding": embedding,
-                "created_at": datetime.utcnow().isoformat(),
-                "updated_at": datetime.utcnow().isoformat()
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat()
             }
             
             # Index document

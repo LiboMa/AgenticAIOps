@@ -11,7 +11,7 @@ This module provides:
 import json
 import logging
 import yaml
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
 from dataclasses import dataclass, field, asdict
 from enum import Enum
@@ -266,7 +266,7 @@ class SOPStore:
                 )
             ],
             tags=["ec2", "cpu", "performance"],
-            created_at=datetime.utcnow().isoformat()
+            created_at=datetime.now(timezone.utc).isoformat()
         )
     
     def _create_rds_failover_sop(self) -> SOP:
@@ -331,7 +331,7 @@ class SOPStore:
                 )
             ],
             tags=["rds", "failover", "maintenance"],
-            created_at=datetime.utcnow().isoformat()
+            created_at=datetime.now(timezone.utc).isoformat()
         )
     
     def _create_lambda_error_sop(self) -> SOP:
@@ -398,7 +398,7 @@ class SOPStore:
                 )
             ],
             tags=["lambda", "errors", "investigation"],
-            created_at=datetime.utcnow().isoformat()
+            created_at=datetime.now(timezone.utc).isoformat()
         )
     
     def _create_ec2_disk_full_sop(self) -> SOP:
@@ -432,7 +432,7 @@ class SOPStore:
                     estimated_minutes=3),
             ],
             tags=["ec2", "disk", "storage", "cleanup"],
-            created_at=datetime.utcnow().isoformat()
+            created_at=datetime.now(timezone.utc).isoformat()
         )
     
     def _create_rds_storage_low_sop(self) -> SOP:
@@ -464,7 +464,7 @@ class SOPStore:
                     estimated_minutes=5),
             ],
             tags=["rds", "storage", "expansion"],
-            created_at=datetime.utcnow().isoformat()
+            created_at=datetime.now(timezone.utc).isoformat()
         )
     
     def _create_elb_5xx_spike_sop(self) -> SOP:
@@ -497,7 +497,7 @@ class SOPStore:
                     step_type=StepType.MANUAL, estimated_minutes=10),
             ],
             tags=["elb", "alb", "5xx", "errors", "backend"],
-            created_at=datetime.utcnow().isoformat()
+            created_at=datetime.now(timezone.utc).isoformat()
         )
     
     def _create_ec2_unreachable_sop(self) -> SOP:
@@ -532,7 +532,7 @@ class SOPStore:
                     estimated_minutes=3),
             ],
             tags=["ec2", "unreachable", "status", "network"],
-            created_at=datetime.utcnow().isoformat()
+            created_at=datetime.now(timezone.utc).isoformat()
         )
     
     def _create_dynamodb_throttle_sop(self) -> SOP:
@@ -566,7 +566,7 @@ class SOPStore:
                     estimated_minutes=5),
             ],
             tags=["dynamodb", "throttle", "capacity", "rcu", "wcu"],
-            created_at=datetime.utcnow().isoformat()
+            created_at=datetime.now(timezone.utc).isoformat()
         )
     
     def _load_from_s3(self):
@@ -687,7 +687,7 @@ class SOPExecutor:
             return None
         
         execution_id = hashlib.sha256(
-            f"{sop_id}:{datetime.utcnow().isoformat()}".encode()
+            f"{sop_id}:{datetime.now(timezone.utc).isoformat()}".encode()
         ).hexdigest()[:12]
         
         execution = SOPExecution(
@@ -698,7 +698,7 @@ class SOPExecutor:
             trigger_context=context or {},
             status="in_progress",
             current_step=0,
-            started_at=datetime.utcnow().isoformat()
+            started_at=datetime.now(timezone.utc).isoformat()
         )
         
         self.sop_store.executions[execution_id] = execution
@@ -728,7 +728,7 @@ class SOPExecutor:
         if sop and execution.current_step >= len(sop.steps):
             execution.status = "completed"
             execution.success = True
-            execution.completed_at = datetime.utcnow().isoformat()
+            execution.completed_at = datetime.now(timezone.utc).isoformat()
             
             # Update SOP statistics
             sop.execution_count += 1

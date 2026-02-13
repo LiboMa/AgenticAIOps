@@ -6,7 +6,7 @@ Simulates realistic Kubernetes and AWS responses.
 """
 
 from typing import Dict, Any, List, Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import random
 
 
@@ -263,7 +263,7 @@ Killed
             "deployment": deployment_name,
             "namespace": namespace,
             "message": f"Initiated rolling restart for {deployment_name}",
-            "restarted_at": datetime.utcnow().isoformat()
+            "restarted_at": datetime.now(timezone.utc).isoformat()
         }
 
 

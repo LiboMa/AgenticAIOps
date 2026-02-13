@@ -22,7 +22,7 @@ import asyncio
 import logging
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
 from dataclasses import dataclass, field, asdict
 from enum import Enum
@@ -67,7 +67,7 @@ class IncidentRecord:
     execution_result: Optional[Dict[str, Any]] = None
     
     # Timing
-    created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     completed_at: Optional[str] = None
     duration_ms: int = 0
     stage_timings: Dict[str, int] = field(default_factory=dict)
@@ -336,7 +336,7 @@ class IncidentOrchestrator:
             if incident.status not in (IncidentStatus.WAITING_APPROVAL,):
                 incident.status = IncidentStatus.COMPLETED
             
-            incident.completed_at = datetime.utcnow().isoformat()
+            incident.completed_at = datetime.now(timezone.utc).isoformat()
             incident.duration_ms = int((time.time() - start_time) * 1000)
             
             # ── Feedback Loop: Auto-learn from results ────────────

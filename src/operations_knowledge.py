@@ -10,7 +10,7 @@ This module provides:
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
 from dataclasses import dataclass, field, asdict
 import hashlib
@@ -209,14 +209,14 @@ class IncidentLearner:
         if incident.incident_id not in pattern.source_incidents:
             pattern.source_incidents.append(incident.incident_id)
         
-        pattern.updated_at = datetime.utcnow().isoformat()
+        pattern.updated_at = datetime.now(timezone.utc).isoformat()
         
         return pattern
     
     def _create_pattern(self, incident: IncidentRecord, category: str, keywords: List[str]) -> LearnedPattern:
         """Create new pattern from incident."""
         pattern_id = hashlib.sha256(
-            f"{incident.service}:{incident.title}:{datetime.utcnow().isoformat()}".encode()
+            f"{incident.service}:{incident.title}:{datetime.now(timezone.utc).isoformat()}".encode()
         ).hexdigest()[:12]
         
         return LearnedPattern(
@@ -233,8 +233,8 @@ class IncidentLearner:
             remediation_steps=incident.resolution_steps,
             confidence=0.7,
             match_count=1,
-            created_at=datetime.utcnow().isoformat(),
-            updated_at=datetime.utcnow().isoformat(),
+            created_at=datetime.now(timezone.utc).isoformat(),
+            updated_at=datetime.now(timezone.utc).isoformat(),
             source_incidents=[incident.incident_id]
         )
 
@@ -260,7 +260,7 @@ class PatternFeedback:
             pattern.feedback_score = max(-1.0, pattern.feedback_score - 0.1)
             pattern.confidence = max(0.5, pattern.confidence - 0.05)
         
-        pattern.updated_at = datetime.utcnow().isoformat()
+        pattern.updated_at = datetime.now(timezone.utc).isoformat()
         
         # Save updated pattern
         self.knowledge_store.save_pattern(pattern)

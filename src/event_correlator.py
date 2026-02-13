@@ -22,7 +22,7 @@ Design Decisions:
 import asyncio
 import boto3
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, List
 from dataclasses import dataclass, field, asdict
 from concurrent.futures import ThreadPoolExecutor
@@ -266,7 +266,7 @@ class EventCorrelator:
             CorrelatedEvent with all collected data.
         """
         import hashlib
-        start_time = datetime.utcnow()
+        start_time = datetime.now(timezone.utc)
         collection_id = hashlib.sha256(
             f"{start_time.isoformat()}:{self.region}".encode()
         ).hexdigest()[:12]
@@ -286,7 +286,7 @@ class EventCorrelator:
         results = await asyncio.gather(*tasks, return_exceptions=True)
         
         # Unpack results
-        duration_ms = int((datetime.utcnow() - start_time).total_seconds() * 1000)
+        duration_ms = int((datetime.now(timezone.utc) - start_time).total_seconds() * 1000)
         
         event = CorrelatedEvent(
             collection_id=collection_id,
@@ -364,7 +364,7 @@ class EventCorrelator:
     ) -> List[MetricDataPoint]:
         """Synchronous metric collection (runs in thread)."""
         cw = self._session.client('cloudwatch')
-        end_time = datetime.utcnow()
+        end_time = datetime.now(timezone.utc)
         start_time = end_time - timedelta(minutes=lookback_minutes)
         metrics = []
         
@@ -465,7 +465,7 @@ class EventCorrelator:
                         comparison=alarm.get('ComparisonOperator', ''),
                         resource_id=resource_id,
                         reason=alarm.get('StateReason', '')[:200],
-                        updated_at=alarm.get('StateUpdatedTimestamp', datetime.utcnow()).isoformat(),
+                        updated_at=alarm.get('StateUpdatedTimestamp', datetime.now(timezone.utc)).isoformat(),
                     ))
             
             # Also get INSUFFICIENT_DATA alarms (potential issues)
@@ -486,7 +486,7 @@ class EventCorrelator:
                         comparison=alarm.get('ComparisonOperator', ''),
                         resource_id=resource_id,
                         reason=alarm.get('StateReason', '')[:200],
-                        updated_at=alarm.get('StateUpdatedTimestamp', datetime.utcnow()).isoformat(),
+                        updated_at=alarm.get('StateUpdatedTimestamp', datetime.now(timezone.utc)).isoformat(),
                     ))
         except ClientError as e:
             logger.error(f"Failed to describe alarms: {e}")
@@ -507,14 +507,14 @@ class EventCorrelator:
         ct = self._session.client('cloudtrail')
         events = []
         
-        start_time = datetime.utcnow() - timedelta(minutes=lookback_minutes)
+        start_time = datetime.now(timezone.utc) - timedelta(minutes=lookback_minutes)
         
         try:
             # Focus on write events and errors
             paginator = ct.get_paginator('lookup_events')
             for page in paginator.paginate(
                 StartTime=start_time,
-                EndTime=datetime.utcnow(),
+                EndTime=datetime.now(timezone.utc),
                 MaxResults=50,
                 LookupAttributes=[{
                     'AttributeKey': 'ReadOnly',
@@ -538,7 +538,7 @@ class EventCorrelator:
                         event_name=event.get('EventName', ''),
                         event_source=event.get('EventSource', ''),
                         username=event.get('Username', 'unknown'),
-                        timestamp=event.get('EventTime', datetime.utcnow()).isoformat(),
+                        timestamp=event.get('EventTime', datetime.now(timezone.utc)).isoformat(),
                         resource_type=resource_type,
                         resource_id=resource_id,
                         error_code=detail.get('errorCode', ''),
@@ -576,7 +576,7 @@ class EventCorrelator:
                     event_type=event.get('eventTypeCode', ''),
                     status=event.get('statusCode', ''),
                     description=event.get('eventTypeCategory', ''),
-                    start_time=event.get('startTime', datetime.utcnow()).isoformat(),
+                    start_time=event.get('startTime', datetime.now(timezone.utc)).isoformat(),
                 ))
         except ClientError as e:
             # Health API may not be available in all accounts

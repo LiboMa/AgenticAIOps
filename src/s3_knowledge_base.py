@@ -12,7 +12,7 @@ Design: Agent filters patterns before storage to ensure high quality.
 import json
 import logging
 import hashlib
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
 from dataclasses import dataclass, field, asdict
 
@@ -111,7 +111,7 @@ class S3KnowledgeBase:
             pattern.pattern_id = self._generate_pattern_id(pattern)
         
         # Set timestamps
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         if not pattern.created_at:
             pattern.created_at = now
         pattern.updated_at = now
@@ -238,7 +238,7 @@ class S3KnowledgeBase:
                 confidence=0.0,
                 analysis="No matching pattern found in knowledge base.",
                 recommendations=["Manual investigation required."],
-                timestamp=datetime.utcnow().isoformat()
+                timestamp=datetime.now(timezone.utc).isoformat()
             )
         
         # Score patterns
@@ -258,7 +258,7 @@ class S3KnowledgeBase:
                 confidence=best_score,
                 analysis=f"Matched pattern: {best_pattern.title}\n\nRoot cause: {best_pattern.root_cause}",
                 recommendations=[best_pattern.remediation] if best_pattern.remediation else [],
-                timestamp=datetime.utcnow().isoformat()
+                timestamp=datetime.now(timezone.utc).isoformat()
             )
         
         return RCAResult(
@@ -267,7 +267,7 @@ class S3KnowledgeBase:
             confidence=best_score,
             analysis="No high-confidence match found.",
             recommendations=["Review manually and consider adding to knowledge base."],
-            timestamp=datetime.utcnow().isoformat()
+            timestamp=datetime.now(timezone.utc).isoformat()
         )
     
     def _calculate_match_score(self, issue: Dict[str, Any], pattern: AnomalyPattern) -> float:

@@ -9,7 +9,7 @@ Provides APIs for:
 
 import boto3
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, List
 from botocore.exceptions import ClientError
 
@@ -111,7 +111,7 @@ class AWSCloudScanner:
         
         results = {
             "region": self.region,
-            "scanned_at": datetime.utcnow().isoformat(),
+            "scanned_at": datetime.now(timezone.utc).isoformat(),
             "account": self.get_account_info(),
             "services": {},
             "issues": [],
@@ -623,7 +623,7 @@ class AWSCloudScanner:
         """Get CloudWatch metrics for a resource."""
         cw = self._get_client('cloudwatch')
         
-        end_time = datetime.utcnow()
+        end_time = datetime.now(timezone.utc)
         start_time = end_time - timedelta(hours=hours)
         
         try:
@@ -698,7 +698,7 @@ class AWSCloudScanner:
         """Get CloudWatch logs."""
         logs = self._get_client('logs')
         
-        end_time = int(datetime.utcnow().timestamp() * 1000)
+        end_time = int(datetime.now(timezone.utc).timestamp() * 1000)
         start_time = end_time - (hours * 3600 * 1000)
         
         try:

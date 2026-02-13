@@ -7,7 +7,7 @@ AWS SDK (boto3) wrappers for EKS and related services.
 import boto3
 from botocore.exceptions import ClientError, NoCredentialsError
 from typing import Optional, List, Dict, Any
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 
 class AWSTools:
@@ -244,7 +244,7 @@ class AWSTools:
             ]
         
         try:
-            end_time = datetime.utcnow()
+            end_time = datetime.now(timezone.utc)
             start_time = end_time - timedelta(minutes=period_minutes)
             
             results = {}
@@ -311,7 +311,7 @@ class AWSTools:
             Container Insights metrics
         """
         try:
-            end_time = datetime.utcnow()
+            end_time = datetime.now(timezone.utc)
             start_time = end_time - timedelta(minutes=period_minutes)
             
             dimensions = [
@@ -394,8 +394,8 @@ class AWSTools:
             Log events
         """
         try:
-            end_time = int(datetime.utcnow().timestamp() * 1000)
-            start_time = int((datetime.utcnow() - timedelta(minutes=start_time_minutes_ago)).timestamp() * 1000)
+            end_time = int(datetime.now(timezone.utc).timestamp() * 1000)
+            start_time = int((datetime.now(timezone.utc) - timedelta(minutes=start_time_minutes_ago)).timestamp() * 1000)
             
             kwargs = {
                 "logGroupName": log_group,

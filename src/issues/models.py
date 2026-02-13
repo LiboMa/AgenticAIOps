@@ -5,7 +5,7 @@ Defines the core data structures for issue tracking.
 """
 
 from dataclasses import dataclass, field, asdict
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Optional, List, Dict, Any
 import uuid
@@ -87,8 +87,8 @@ class Issue:
     suggested_fix: str = ""
     auto_fixable: bool = True
     fix_actions: List[Dict[str, Any]] = field(default_factory=list)
-    created_at: datetime = field(default_factory=datetime.utcnow)
-    updated_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     resolved_at: Optional[datetime] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
     
@@ -131,8 +131,8 @@ class Issue:
             suggested_fix=data.get("suggested_fix", ""),
             auto_fixable=data.get("auto_fixable", True),
             fix_actions=data.get("fix_actions", []),
-            created_at=datetime.fromisoformat(data["created_at"]) if data.get("created_at") else datetime.utcnow(),
-            updated_at=datetime.fromisoformat(data["updated_at"]) if data.get("updated_at") else datetime.utcnow(),
+            created_at=datetime.fromisoformat(data["created_at"]) if data.get("created_at") else datetime.now(timezone.utc),
+            updated_at=datetime.fromisoformat(data["updated_at"]) if data.get("updated_at") else datetime.now(timezone.utc),
             resolved_at=datetime.fromisoformat(data["resolved_at"]) if data.get("resolved_at") else None,
             metadata=data.get("metadata", {}),
         )
@@ -148,10 +148,10 @@ class Issue:
     def update_status(self, new_status: IssueStatus) -> None:
         """Update issue status with timestamp."""
         self.status = new_status
-        self.updated_at = datetime.utcnow()
+        self.updated_at = datetime.now(timezone.utc)
         
         if new_status in [IssueStatus.FIXED, IssueStatus.CLOSED]:
-            self.resolved_at = datetime.utcnow()
+            self.resolved_at = datetime.now(timezone.utc)
     
     def add_fix_action(self, action: str, result: str, success: bool) -> None:
         """Record a fix action attempt."""
@@ -159,6 +159,6 @@ class Issue:
             "action": action,
             "result": result,
             "success": success,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         })
-        self.updated_at = datetime.utcnow()
+        self.updated_at = datetime.now(timezone.utc)

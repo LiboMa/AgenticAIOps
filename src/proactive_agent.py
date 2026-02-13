@@ -12,7 +12,7 @@ Design reference: OpenClaw's HEARTBEAT.md + Cron Jobs pattern
 import asyncio
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional, Dict, Any, List
 from dataclasses import dataclass, field
 from enum import Enum
@@ -151,7 +151,7 @@ class ProactiveAgentSystem:
                     if task.interval_seconds and self._should_run(task):
                         result = await self._execute_task(task)
                         await self._handle_result(result)
-                        task.last_run = datetime.utcnow()
+                        task.last_run = datetime.now(timezone.utc)
                 
                 # Sleep for 30 seconds between checks
                 await asyncio.sleep(30)
@@ -168,7 +168,7 @@ class ProactiveAgentSystem:
             return True
         
         if task.interval_seconds:
-            elapsed = (datetime.utcnow() - task.last_run).total_seconds()
+            elapsed = (datetime.now(timezone.utc) - task.last_run).total_seconds()
             return elapsed >= task.interval_seconds
         
         return False
@@ -189,7 +189,7 @@ class ProactiveAgentSystem:
                     task_name=task.name,
                     task_type=task.task_type,
                     status="error",
-                    timestamp=datetime.utcnow(),
+                    timestamp=datetime.now(timezone.utc),
                     summary=f"Unknown action: {task.action}"
                 )
         except Exception as e:
@@ -198,7 +198,7 @@ class ProactiveAgentSystem:
                 task_name=task.name,
                 task_type=task.task_type,
                 status="error",
-                timestamp=datetime.utcnow(),
+                timestamp=datetime.now(timezone.utc),
                 summary=f"Error: {str(e)}"
             )
     
@@ -227,7 +227,7 @@ class ProactiveAgentSystem:
             task_name=task.name,
             task_type=task.task_type,
             status=status,
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
             findings=findings,
             summary=summary
         )
@@ -245,13 +245,13 @@ class ProactiveAgentSystem:
 **Issues**: 2 open, 1 resolved
 **Security**: 3 findings requiring attention
 
-Report generated at: """ + datetime.utcnow().isoformat()
+Report generated at: """ + datetime.now(timezone.utc).isoformat()
         
         return ProactiveResult(
             task_name=task.name,
             task_type=task.task_type,
             status="ok",
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
             summary=summary
         )
     
@@ -268,7 +268,7 @@ Report generated at: """ + datetime.utcnow().isoformat()
             task_name=task.name,
             task_type=task.task_type,
             status=status,
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
             findings=findings,
             summary=summary
         )
