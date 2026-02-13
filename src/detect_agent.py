@@ -61,6 +61,9 @@ class DetectResult:
     # Raw trigger data (alarm payload, etc.)
     raw_data: Dict[str, Any] = field(default_factory=dict)
 
+    # Collection timing (milliseconds)
+    collection_duration_ms: int = 0
+
     # Collection config — what was collected (services, lookback, region)
     # Lets RCA know coverage scope and decide if supplemental collection needed
     collection_config: Dict[str, Any] = field(default_factory=dict)
@@ -99,7 +102,8 @@ class DetectResult:
         """One-line summary for logging."""
         return (
             f"DetectResult({self.detect_id}, {self.freshness_label}, "
-            f"anomalies={len(self.anomalies_detected)}, source={self.source})"
+            f"anomalies={len(self.anomalies_detected)}, "
+            f"collect={self.collection_duration_ms}ms, source={self.source})"
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -116,6 +120,7 @@ class DetectResult:
             "freshness": self.freshness_label,  # alias
             "anomalies_detected": self.anomalies_detected,
             "pattern_matches": self.pattern_matches,
+            "collection_duration_ms": self.collection_duration_ms,
             "collection_config": self.collection_config,
             "error": self.error,
             "has_correlated_event": self.correlated_event is not None,
@@ -187,6 +192,7 @@ class DetectAgent:
                     ttl_seconds=ttl_seconds,
                     correlated_event=event,
                     anomalies_detected=event.anomalies if event else [],
+                    collection_duration_ms=event.duration_ms,
                     collection_config=collection_cfg,
                     error=None,
                 )
