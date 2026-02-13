@@ -135,7 +135,7 @@ ProactiveAgent (定时巡检)          CloudWatch Alarm (事件触发)
 | **ACI Interface** | `src/aci/interface.py` | 383 | Agent-Cloud 统一接口 |
 | **MCP Bridge** | `src/aci/mcp_bridge.py` | 177 | MCP 协议桥接 |
 | **Telemetry** | `src/aci/telemetry/` | ~872 | 指标/日志/事件/Prometheus |
-| **Operations** | `src/aci/operations/` | ~249 | kubectl/shell 操作 |
+| **Operations** | `src/aci/operations/shell.py` | 101 | Shell 操作 (kubectl.py 已移除，使用 kubectl_wrapper.py) |
 | **Security** | `src/aci/security/` | ~314 | 审计 + 过滤 |
 
 ### 3.6 其他
