@@ -508,16 +508,25 @@ class EventCorrelator:
         """Synchronous CloudTrail collection with retry and page limit.
         
         Bug-013: CloudTrail API throttles under load. Mitigations:
-        - Exponential backoff retry (3 attempts, 1s/2s/4s)
+        - Exponential backoff retry (4 attempts, 2s/4s/8s/16s + jitter)
         - Max 3 pages to cap total API calls
         - Specific ThrottlingException handling
+        - Disable SDK built-in retries to avoid double-retry storms
         """
-        ct = self._session.client('cloudtrail')
+        import random
+        from botocore.config import Config
+        
+        # Disable SDK built-in retries — we handle retries ourselves
+        # to avoid double-retry storms (SDK retries × our retries = API flood)
+        ct = self._session.client(
+            'cloudtrail',
+            config=Config(retries={'max_attempts': 1, 'mode': 'standard'}),
+        )
         events = []
         
         start_time = datetime.now(timezone.utc) - timedelta(minutes=lookback_minutes)
         max_pages = 3  # Cap pages to reduce API pressure
-        max_retries = 3
+        max_retries = 4
         
         for attempt in range(max_retries):
             try:
@@ -567,10 +576,11 @@ class EventCorrelator:
             except ClientError as e:
                 error_code = e.response.get('Error', {}).get('Code', '')
                 if error_code in ('ThrottlingException', 'Throttling', 'RequestLimitExceeded'):
-                    backoff = 2 ** attempt  # 1s, 2s, 4s
+                    # Exponential backoff with jitter: 2s, 4s, 8s, 16s + random 0-1s
+                    backoff = (2 ** (attempt + 1)) + random.uniform(0, 1)
                     logger.warning(
                         f"CloudTrail throttled (attempt {attempt + 1}/{max_retries}), "
-                        f"backing off {backoff}s"
+                        f"backing off {backoff:.1f}s"
                     )
                     time.sleep(backoff)
                     events = []  # Reset for retry
@@ -579,7 +589,7 @@ class EventCorrelator:
                     logger.error(f"CloudTrail lookup failed: {e}")
                     return events
         
-        logger.error(f"CloudTrail collection failed after {max_retries} retries")
+        logger.error(f"CloudTrail collection failed after {max_retries} retries (Bug-013)")
         return events
     
     async def _collect_health_events(self) -> List[HealthEvent]:
