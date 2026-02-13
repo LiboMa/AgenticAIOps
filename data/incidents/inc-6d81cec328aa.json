@@ -1,0 +1,106 @@
+{
+  "incident_id": "inc-6d81cec328aa",
+  "trigger_type": "alarm",
+  "trigger_data": {
+    "alarm_name": "EC2-HighCPU-E2E-Test",
+    "metric_name": "CPUUtilization",
+    "threshold": 90,
+    "current_value": 95.2,
+    "instance_id": "i-0abc123",
+    "region": "ap-southeast-1"
+  },
+  "region": "ap-southeast-1",
+  "status": "completed",
+  "collection_summary": {
+    "collection_id": "55ebeacc8817",
+    "metrics": 0,
+    "alarms": 1,
+    "trail_events": 0,
+    "anomalies": 0,
+    "health_events": 10,
+    "duration_ms": 1321,
+    "source": "fresh_collection"
+  },
+  "rca_result": {
+    "pattern_id": "llm-sonnet-config",
+    "pattern_name": "Claude Sonnet Analysis",
+    "root_cause": "Multiple AWS service health events detected including Auto Scaling launch template not found, VPN redundancy loss, and high-risk Kafka configuration, but no active operational impact observed",
+    "severity": "medium",
+    "confidence": 0.7,
+    "matched_symptoms": [
+      "autoscaling-launch-template",
+      "vpn-connections",
+      "kafka-cluster"
+    ],
+    "evidence": [
+      "AWS_EC2_AUTOSCALING_LAUNCH_TEMPLATE_NOT_FOUND health event indicates missing launch template",
+      "Multiple AWS_VPN_REDUNDANCY_LOSS events suggest VPN tunnel failures",
+      "AWS_KAFKA_HIGH_RISK_CONFIG_RF_EQUALS_ONE indicates Kafka replication factor of 1",
+      "Multiple AWS_LAMBDA_PLANNED_LIFECYCLE_EVENT notifications for upcoming maintenance",
+      "All monitoring systems report healthy status despite health events"
+    ],
+    "timestamp": "2026-02-13T13:37:45.480805+00:00",
+    "remediation": {
+      "action": "review_health_events",
+      "auto_execute": false,
+      "params": {},
+      "suggestion": "Review and address AWS Health Dashboard events to prevent potential service disruptions",
+      "checklist": [
+        "Check Auto Scaling groups for missing launch templates and recreate if necessary",
+        "Verify VPN connection status and troubleshoot tunnel connectivity",
+        "Review Kafka cluster configuration and increase replication factor if needed",
+        "Plan for upcoming Lambda lifecycle events and test applications",
+        "Monitor services closely for any degradation despite current healthy status"
+      ]
+    }
+  },
+  "matched_sops": [
+    {
+      "sop_id": "sop-ec2-unreachable",
+      "name": "EC2 Instance Unreachable Response",
+      "description": "Handle EC2 instances failing status checks",
+      "service": "ec2",
+      "severity": "high",
+      "steps": 5,
+      "est_minutes": 18,
+      "match_type": "pattern_match",
+      "match_confidence": 0.9,
+      "auto_execute": false,
+      "risk_level": "L2"
+    }
+  ],
+  "safety_check": {
+    "passed": true,
+    "risk_level": "L2",
+    "execution_mode": "dry_run",
+    "reason": "Dry-run \u6a21\u5f0f: \u9884\u89c8 sop-ec2-unreachable \u5bf9 3 \u4e2a\u8d44\u6e90\u7684\u64cd\u4f5c",
+    "cooldown_remaining_seconds": 0,
+    "warnings": [],
+    "required_approvers": [],
+    "dry_run_preview": {
+      "sop_id": "sop-ec2-unreachable",
+      "risk_level": "L2",
+      "target_resources": [
+        "autoscaling-launch-template",
+        "vpn-connections",
+        "kafka-cluster"
+      ],
+      "execution_mode": "confirm",
+      "cooldown_after": "0:30:00",
+      "daily_limit": 5,
+      "current_daily_count": 0,
+      "preview_note": "This is a dry-run. No changes will be made."
+    }
+  },
+  "execution_result": null,
+  "created_at": "2026-02-13T13:37:36.006329+00:00",
+  "completed_at": "2026-02-13T13:37:45.481211+00:00",
+  "duration_ms": 9474,
+  "stage_timings": {
+    "collect": 1321,
+    "analyze": 8153,
+    "sop_match": 0,
+    "safety_check": 0
+  },
+  "error": null
+}

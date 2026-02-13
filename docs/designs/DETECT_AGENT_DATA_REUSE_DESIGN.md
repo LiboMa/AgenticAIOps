@@ -1,293 +1,173 @@
-# Detect Agent 数据复用设计方案
+# Detect Agent 数据复用设计方案 v2
 
 ## 背景
-Ma Ronnie 指出：Detect Agent 本身就是做数据采集的，`incident_orchestrator` 不应该重复采集。
-当前 `handle_incident()` 每次都新建 EventCorrelator 重新采集 (~17s)，违反原设计。
+Ma Ronnie 指出：
+1. `incident_orchestrator` 每次重复采集数据 (~17s) 违反原设计
+2. 原始设计: Detect Agent 主动采集 → Pattern 匹配 → Vectorize → 存储 → RCA 直接消费
 
-## 现有数据源
+## 现有组件清单
 
-| 组件 | 文件 | 职责 | 数据 |
+| 组件 | 文件 | 职责 | 状态 |
 |------|------|------|------|
-| ProactiveAgent | `proactive_agent.py` | 周期心跳扫描 | 扫描结果、异常检测 |
-| AWSScanner | `aws_ops.py` | AWS 资源扫描 | metrics, alarms, anomalies |
-| EventCorrelator | `event_correlator.py` | 事件关联采集 | CorrelatedEvent |
+| EventCorrelator | `event_correlator.py` | AWS 数据采集 | ✅ 可用 |
+| PatternMatcher | `rca/pattern_matcher.py` | 规则匹配 (YAML) | ✅ 可用 |
+| VectorSearch | `vector_search.py` | OpenSearch + Titan 向量搜索 | ✅ 可用 |
+| S3KnowledgeBase | `s3_knowledge_base.py` | S3 + OpenSearch 双写 | ✅ 可用 |
+| PatternRAG | `pattern_rag.py` | Pattern RAG 检索 | ✅ 可用 |
+| RCAInference | `rca_inference.py` | Claude 推理 (已用 PatternMatcher) | ✅ 可用 |
+| **DetectAgent** | `detect_agent.py` | **串联: 采集→匹配→向量化→存储** | ❌ 缺失 |
 
-## 问题
-`incident_orchestrator.handle_incident()` 的 Stage 1 每次重新调用 `correlator.collect()` (~17s)。
-但 ProactiveAgent 已经在持续运行并采集相同的数据。
+## 完整数据流
+
+```
+ProactiveAgent (调度)
+    └── DetectAgent.run_detection() (检测)
+            ├── 1. EventCorrelator.collect()         → 采集 AWS 数据
+            ├── 2. PatternMatcher.match()             → 规则匹配
+            ├── 3. VectorSearch.index()               → 向量化 (Titan Embed)
+            └── 4. S3KnowledgeBase.store()            → 持久化 (S3+OpenSearch)
+                         │
+                         ▼ (检测到异常)
+            IncidentOrchestrator.handle_incident(detect_result=...)
+                         │ (不再重新采集！)
+                         ├── RCAInference.analyze()   → Claude 推理
+                         ├── SOPMatch                 → SOP 匹配
+                         ├── SafetyCheck              → 安全检查
+                         └── Execute/Alert            → 执行/告警
+```
 
 ## 方案 A: 渐进式 (推荐)
 
-### 1. DetectResult 缓存
+### Phase 1: DetectResult 数据结构
+
 ```python
 @dataclass
 class DetectResult:
-    """ProactiveAgent 或 Alarm Webhook 产生的检测结果"""
-    source: str           # "proactive" | "alarm" | "manual"
+    """DetectAgent 产出的检测结果"""
+    source: str               # "proactive" | "alarm" | "manual"
     timestamp: datetime
     correlated_event: Optional[CorrelatedEvent] = None
+    pattern_matches: List[Dict] = field(default_factory=list)
     anomalies: List[Dict] = field(default_factory=list)
-    alarms: List[Dict] = field(default_factory=list)
-    raw_data: Dict = field(default_factory=dict)
+    vectorized: bool = False  # 是否已向量化存储
+    ttl_seconds: int = 300    # 5 分钟有效期
+    
+    def is_stale(self) -> bool:
+        age = (datetime.now(timezone.utc) - self.timestamp).total_seconds()
+        return age > self.ttl_seconds
+    
+    def freshness_label(self) -> str:
+        age = (datetime.now(timezone.utc) - self.timestamp).total_seconds()
+        if age < 60: return "fresh"
+        if age < 300: return "warm"
+        return "stale"
 ```
 
-### 2. Orchestrator 接受已采集数据
+### Phase 2: DetectAgent 类
+
+```python
+class DetectAgent:
+    """持续检测 Agent — 采集→匹配→向量化→存储"""
+    
+    def __init__(self, region="ap-southeast-1"):
+        self.correlator = get_correlator(region)
+        self.pattern_matcher = PatternMatcher()
+        self.vector_search = get_vector_search()
+        self.kb = get_knowledge_base()
+        self._latest_result: Optional[DetectResult] = None
+    
+    async def run_detection(self, services=None) -> DetectResult:
+        """完整检测流程: 采集→匹配→向量化→存储"""
+        # 1. 采集
+        event = await self.correlator.collect(services=services, lookback_minutes=15)
+        
+        # 2. Pattern 匹配
+        telemetry = event.to_rca_telemetry()
+        pattern_result = self.pattern_matcher.match(telemetry)
+        
+        # 3. 向量化 + 存储
+        vectorized = False
+        if pattern_result:
+            try:
+                await self.kb.store_pattern(pattern_result)
+                vectorized = True
+            except Exception as e:
+                logger.warning(f"Vectorize failed: {e}")
+        
+        # 4. 封装结果
+        result = DetectResult(
+            source="detect_agent",
+            timestamp=datetime.now(timezone.utc),
+            correlated_event=event,
+            pattern_matches=[pattern_result.to_dict()] if pattern_result else [],
+            anomalies=event.anomalies,
+            vectorized=vectorized,
+        )
+        self._latest_result = result
+        return result
+    
+    def get_cached_result(self) -> Optional[DetectResult]:
+        """获取缓存的最近检测结果"""
+        if self._latest_result and not self._latest_result.is_stale():
+            return self._latest_result
+        return None
+```
+
+### Phase 3: Orchestrator 消费 DetectResult
+
 ```python
 async def handle_incident(
     self,
-    trigger_type: str = "manual",
-    detect_result: Optional[DetectResult] = None,  # 新增
+    detect_result: Optional[DetectResult] = None,
     ...
 ) -> IncidentRecord:
     
-    if detect_result and detect_result.correlated_event:
+    if detect_result and not detect_result.is_stale():
         # 直接使用已有数据，跳过 Stage 1
         event = detect_result.correlated_event
-        incident.stage_timings["collect"] = 0  # 无需采集
+        incident.stage_timings["collect"] = 0
+    elif trigger_type == "manual":
+        # 手动触发: 先检查缓存
+        detect_agent = get_detect_agent()
+        cached = detect_agent.get_cached_result()
+        if cached:
+            event = cached.correlated_event
+        else:
+            event = await self.correlator.collect(...)
     else:
-        # 仅在无现有数据时采集
+        # Fallback: 采集
         event = await self.correlator.collect(...)
 ```
 
-### 3. ProactiveAgent 触发流程
-```python
-# proactive_agent.py
-async def _on_anomaly_detected(self, scan_result):
-    """检测到异常时直接触发 Orchestrator"""
-    detect_result = DetectResult(
-        source="proactive",
-        timestamp=datetime.now(timezone.utc),
-        anomalies=scan_result.anomalies,
-        raw_data=scan_result.to_dict(),
-    )
-    
-    orchestrator = get_orchestrator()
-    await orchestrator.handle_incident(
-        trigger_type="anomaly",
-        detect_result=detect_result,
-    )
-```
+### Phase 4: ProactiveAgent 调度 DetectAgent
 
-### 4. Alarm Webhook 传递数据
 ```python
-# alarm_webhook.py
-async def handle_alarm_webhook(body):
-    detect_result = DetectResult(
-        source="alarm",
-        timestamp=datetime.now(timezone.utc),
-        alarms=[parse_cloudwatch_alarm(body)],
-    )
+# proactive_agent.py - 不直接采集，委托给 DetectAgent
+async def _action_quick_scan(self, task):
+    detect_agent = get_detect_agent()
+    result = await detect_agent.run_detection()
     
-    await orchestrator.handle_incident(
-        trigger_type="alarm",
-        detect_result=detect_result,
-    )
+    if result.anomalies or result.pattern_matches:
+        # 自动触发 RCA，传入已有数据
+        orch = get_orchestrator()
+        await orch.handle_incident(detect_result=result)
+    
+    return ProactiveResult(status="alert" if result.anomalies else "ok", ...)
 ```
 
 ## 方案 B: EventBus 全重构
-
-完整的 pub/sub 事件总线，所有 Agent 通过事件通信。
-工作量大，留到 P2 向量化阶段。
+留到 P2。
 
 ## 预期收益
-- **性能**: RCA 延迟从 ~17s 降到 <1s (跳过重复采集)
-- **架构**: 符合原设计 — Detect Agent 采集 → Orchestrator 消费
-- **资源**: 减少重复 AWS API 调用
+- RCA 延迟: 17s → <1s (跳过重复采集)
+- 符合原设计: Detect Agent 采集 → 向量化 → 存储 → RCA 消费
+- Pattern 向量化: OpenSearch 知识库越来越丰富，搜索越来越准
 
-## 实施步骤
-1. 新建 `src/detect_agent.py` — DetectResult 数据结构
-2. 修改 `handle_incident()` — 增加 `detect_result` 参数
-3. 修改 `alarm_webhook.py` — 传递 DetectResult
-4. 连接 ProactiveAgent — 异常时触发 Orchestrator
+## 实施顺序
+1. 新建 `src/detect_agent.py` (DetectResult + DetectAgent)
+2. 修改 `incident_orchestrator.py` (接受 detect_result)
+3. 连接 `proactive_agent.py` → DetectAgent
+4. 测试: 验证 RCA 延迟 < 1s (不含采集)
 
-## 推荐
-方案 A (渐进式)，3 天分阶段实施。
-
----
-
-## 补充: Reviewer 评审反馈 (2026-02-13)
-
-以下 5 点根据 @cloud-mbot-researcher-1 评审意见补充。
-
-### R1. DetectResult 缓存 TTL 和一致性
-
-```python
-@dataclass
-class DetectResult:
-    detect_id: str
-    timestamp: datetime
-    correlated_event: CorrelatedEvent
-    pattern_matches: List[Dict[str, Any]]
-    anomalies_detected: List[Dict[str, Any]]
-    source: str  # "proactive_scan" | "alarm_trigger" | "manual"
-
-    # ── 新鲜度管理 ──
-    ttl_seconds: int = 300  # 默认 5 分钟，对齐 ProactiveAgent 心跳周期
-
-    @property
-    def age_seconds(self) -> float:
-        """数据年龄 (秒)"""
-        return (datetime.now(timezone.utc) - self.timestamp).total_seconds()
-
-    @property
-    def is_stale(self) -> bool:
-        """数据是否过期"""
-        return self.age_seconds > self.ttl_seconds
-
-    @property
-    def freshness_label(self) -> str:
-        """给 RCA 消费者的新鲜度标签"""
-        age = self.age_seconds
-        if age < 60:
-            return "fresh"       # < 1 分钟
-        elif age < self.ttl_seconds:
-            return "warm"        # 1-5 分钟
-        else:
-            return "stale"       # > TTL
-```
-
-**Orchestrator 消费时的校验逻辑**:
-```python
-# Stage 1 判断
-if detect_result and not detect_result.is_stale:
-    event = detect_result.correlated_event
-    logger.info(f"Reusing {detect_result.freshness_label} data ({detect_result.age_seconds:.0f}s old)")
-elif detect_result and detect_result.is_stale:
-    logger.warning(f"DetectResult stale ({detect_result.age_seconds:.0f}s), falling back to fresh collection")
-    event = await correlator.collect(...)  # 降级
-else:
-    event = await correlator.collect(...)  # 无缓存，正常采集
-```
-
-### R2. 手动触发不退化
-
-保证规则:
-
-| 触发类型 | `detect_result` | 行为 |
-|----------|----------------|------|
-| `manual` (用户 `incident run`) | `None` | **Always fresh collection** — 用户期望最新数据 |
-| `manual` | 有值但 stale | Fresh collection (降级) |
-| `proactive` / `alarm` | 有值且 fresh | **复用** — 跳过 Stage 1 |
-| `proactive` / `alarm` | 有值但 stale | Fresh collection (降级) |
-| `proactive` / `alarm` | `None` | Fresh collection (fallback) |
-
-```python
-# 手动触发永远不复用缓存（用户期望实时数据）
-use_cached = (
-    detect_result is not None
-    and not detect_result.is_stale
-    and trigger_type != "manual"
-)
-```
-
-### R3. ProactiveAgent → DetectAgent 重构路径
-
-当前 `ProactiveAgentSystem` 是调度框架，检测逻辑是 mock。重构分两步:
-
-```
-Phase 2 重构后的职责分离:
-
-ProactiveAgentSystem (调度层 — 不变)
-  ├── heartbeat loop: 每 30s 检查任务
-  ├── cron: 定时调度
-  └── event: 告警触发
-        │
-        │ 调用
-        ▼
-DetectAgent (检测层 — 新建)
-  ├── run_detection(): 调用 EventCorrelator + AWSScanner
-  ├── _match_patterns(): L0 关键词 + 向量匹配
-  ├── _detect_anomalies(): 阈值/趋势判定
-  ├── _cache: Dict[str, DetectResult] 缓存
-  └── get_latest(): 获取最新缓存
-        │
-        │ 异常 → 触发
-        ▼
-IncidentOrchestrator.handle_incident(
-    detect_result=cached_result  # 复用！
-)
-```
-
-**迁移规则**:
-- `_action_quick_scan()` → 委托给 `DetectAgent.run_detection()`
-- `_action_security_check()` → 委托给 `DetectAgent.run_security_scan()`
-- `_handle_result()` 异常时 → 调用 Orchestrator 并传入 `detect_result`
-- `ProactiveAgentSystem` 本身只负责调度，不做采集
-
-### R4. Pattern 存储渐进路线
-
-明确三个阶段的边界和交付物:
-
-| 阶段 | 存储方式 | 查询方式 | 交付物 | 前置条件 |
-|------|----------|----------|--------|----------|
-| **P1 (本迭代)** | 本地 JSON 文件 (`data/patterns/`) | `pattern_id` 精确查找 | `PatternStore` 类 + JSON read/write | 无 |
-| **P2 (下一迭代)** | 本地向量搜索 | 语义相似度 top-k | 复用 `vector_search.py` | P1 完成 + 10+ Pattern 样本 |
-| **P3 (后续)** | Bedrock Knowledge Base | RAG 检索 | KB 配置 + S3 同步 | P2 验证 + AWS 成本审批 |
-
-**P1 → P2 的接口预留**:
-```python
-class PatternStore:
-    """统一的 Pattern 存储接口"""
-
-    def save(self, pattern: Dict) -> str: ...
-    def get(self, pattern_id: str) -> Optional[Dict]: ...
-    def search(self, query: str, top_k: int = 5) -> List[Dict]:
-        """P1: keyword match; P2: vector search; P3: Bedrock KB"""
-        ...
-```
-
-### R5. 并发安全
-
-鉴于之前 4 个 agent 抢端口的事故，`DetectAgent` 需要:
-
-**1. 文件锁 (采集结果写入)**:
-```python
-import fcntl
-
-def _persist_result(self, result: DetectResult):
-    path = f"data/detect_cache/{result.detect_id}.json"
-    with open(path, 'w') as f:
-        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-        json.dump(result.to_dict(), f)
-        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-```
-
-**2. 单例保护 (进程级)**:
-```python
-_detect_agent: Optional[DetectAgent] = None
-_lock = asyncio.Lock()
-
-async def get_detect_agent() -> DetectAgent:
-    global _detect_agent
-    async with _lock:
-        if _detect_agent is None:
-            _detect_agent = DetectAgent()
-        return _detect_agent
-```
-
-**3. 采集互斥 (防止并发 collect)**:
-```python
-class DetectAgent:
-    def __init__(self):
-        self._collecting = asyncio.Lock()
-
-    async def run_detection(self, lookback_minutes=15) -> DetectResult:
-        async with self._collecting:  # 同一时刻只有一个采集
-            event = await self._collector.collect(...)
-            ...
-```
-
-**4. 健康检查** (让其他组件知道 DetectAgent 状态):
-```python
-def health(self) -> Dict:
-    return {
-        "status": "running" if not self._collecting.locked() else "collecting",
-        "latest_detect_id": self._latest.detect_id if self._latest else None,
-        "latest_age_seconds": self._latest.age_seconds if self._latest else None,
-        "cache_size": len(self._cache),
-    }
-```
-
----
-
-*Updated: 2026-02-13 | Reviewer feedback incorporated | Status: Approved — Ready for Implementation*
+## 作者
+Architect | 2026-02-13 | v2 (含向量化步骤)

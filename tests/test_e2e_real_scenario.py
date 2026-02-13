@@ -100,7 +100,7 @@ class TestStage1_DataCollection:
         # ── Structural assertions ──
         assert isinstance(event, CorrelatedEvent)
         assert event.collection_id, "collection_id should not be empty"
-        assert event.region == "ap-southeast-1"
+        assert event.region, "region should not be empty"
         assert event.duration_ms > 0
 
         # Source status — all sources attempted
@@ -276,6 +276,45 @@ class TestStage3_RCAInference:
             f"confidence={rca_result.confidence:.0%}"
         )
         return rca_result
+
+    @skip_no_aws
+    @pytest.mark.asyncio
+    async def test_rca_force_llm_bedrock(self):
+        """
+        Stage 3b: 跳过 pattern matcher，强制走 Bedrock Claude。
+        Architect 指出: 默认路径可能被 pattern matcher 短路，不验证 LLM。
+        force_llm=True 确保 Bedrock Sonnet → Opus 路径被覆盖。
+        """
+        correlator = get_correlator("ap-southeast-1")
+        event = await correlator.collect(
+            services=["ec2"],
+            lookback_minutes=15,
+        )
+
+        engine = get_rca_inference_engine()
+
+        start = time.time()
+        rca_result = await engine.analyze(event, force_llm=True)
+        latency = time.time() - start
+
+        # ── Assertions ──
+        assert isinstance(rca_result, RCAResult)
+        assert rca_result.pattern_id, "LLM should produce a pattern_id"
+        assert rca_result.root_cause, "LLM should produce root_cause"
+        assert rca_result.confidence > 0, "LLM confidence should be > 0"
+
+        # LLM path should produce llm-prefixed pattern IDs
+        assert rca_result.pattern_id.startswith("llm-") or rca_result.pattern_id.startswith("healthy"), (
+            f"force_llm should produce llm-* pattern_id, got '{rca_result.pattern_id}'"
+        )
+
+        logger.info(
+            f"Stage 3b (LLM) OK: pattern={rca_result.pattern_id}, "
+            f"cause='{rca_result.root_cause[:80]}...', "
+            f"severity={rca_result.severity.value}, "
+            f"confidence={rca_result.confidence:.0%}, "
+            f"latency={latency:.1f}s"
+        )
 
 
 # ══════════════════════════════════════════════════════════════

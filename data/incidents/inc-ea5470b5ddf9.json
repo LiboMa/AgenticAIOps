@@ -1,0 +1,118 @@
+{
+  "incident_id": "inc-ea5470b5ddf9",
+  "trigger_type": "anomaly",
+  "trigger_data": {
+    "source": "detect_agent",
+    "detect_id": "det-6175dee2cf13"
+  },
+  "region": "ap-southeast-1",
+  "status": "completed",
+  "collection_summary": {
+    "collection_id": "2aeca59ac926",
+    "metrics": 0,
+    "alarms": 1,
+    "trail_events": 0,
+    "anomalies": 0,
+    "health_events": 10,
+    "duration_ms": 1407,
+    "source": "detect_agent_reuse",
+    "detect_id": "det-6175dee2cf13",
+    "data_age_seconds": 1.4
+  },
+  "rca_result": {
+    "pattern_id": "llm-sonnet-resource",
+    "pattern_name": "Claude Sonnet Analysis",
+    "root_cause": "Multiple AWS service health events are active, with the most critical being Auto Scaling launch template not found and VPN redundancy loss affecting infrastructure availability",
+    "severity": "high",
+    "confidence": 0.85,
+    "matched_symptoms": [
+      "autoscaling-launch-template",
+      "vpn-connections",
+      "lambda-functions",
+      "kafka-cluster"
+    ],
+    "evidence": [
+      "AWS_EC2_AUTOSCALING_LAUNCH_TEMPLATE_NOT_FOUND event is open - prevents new instance launches",
+      "Multiple AWS_VPN_REDUNDANCY_LOSS events are open - indicates VPN connectivity issues",
+      "Multiple AWS_LAMBDA_PLANNED_LIFECYCLE_EVENT events - planned maintenance affecting Lambda functions",
+      "AWS_KAFKA_HIGH_RISK_CONFIG_RF_EQUALS_ONE - Kafka cluster has replication factor of 1, creating single point of failure"
+    ],
+    "timestamp": "2026-02-13T13:34:36.888014+00:00",
+    "remediation": {
+      "action": "fix_launch_template_and_vpn",
+      "auto_execute": false,
+      "params": {},
+      "suggestion": "Address the missing launch template and VPN redundancy issues immediately to restore service availability",
+      "checklist": [
+        "Verify Auto Scaling group configuration and recreate missing launch template",
+        "Check VPN connection status and restore redundancy by bringing up backup tunnels",
+        "Review Kafka cluster configuration and increase replication factor to at least 2",
+        "Monitor Lambda functions during planned lifecycle events for any service disruption",
+        "Set up monitoring alerts for launch template and VPN health status"
+      ]
+    }
+  },
+  "matched_sops": [
+    {
+      "sop_id": "sop-ec2-high-cpu",
+      "name": "EC2 High CPU Response",
+      "description": "Standard procedure for handling EC2 instances with high CPU utilization",
+      "service": "ec2",
+      "severity": "high",
+      "steps": 5,
+      "est_minutes": 38,
+      "match_type": "pattern_match",
+      "match_confidence": 0.9,
+      "auto_execute": false,
+      "risk_level": "L1"
+    },
+    {
+      "sop_id": "sop-ec2-disk-full",
+      "name": "EC2 Disk Full Response",
+      "description": "Handle EC2 instances with disk usage > 90%",
+      "service": "ec2",
+      "severity": "high",
+      "steps": 4,
+      "est_minutes": 21,
+      "match_type": "pattern_match",
+      "match_confidence": 0.9,
+      "auto_execute": false,
+      "risk_level": "L1"
+    }
+  ],
+  "safety_check": {
+    "passed": true,
+    "risk_level": "L1",
+    "execution_mode": "dry_run",
+    "reason": "Dry-run \u6a21\u5f0f: \u9884\u89c8 sop-ec2-high-cpu \u5bf9 4 \u4e2a\u8d44\u6e90\u7684\u64cd\u4f5c",
+    "cooldown_remaining_seconds": 0,
+    "warnings": [],
+    "required_approvers": [],
+    "dry_run_preview": {
+      "sop_id": "sop-ec2-high-cpu",
+      "risk_level": "L1",
+      "target_resources": [
+        "autoscaling-launch-template",
+        "vpn-connections",
+        "lambda-functions",
+        "kafka-cluster"
+      ],
+      "execution_mode": "notify",
+      "cooldown_after": "0:05:00",
+      "daily_limit": 20,
+      "current_daily_count": 0,
+      "preview_note": "This is a dry-run. No changes will be made."
+    }
+  },
+  "execution_result": null,
+  "created_at": "2026-02-13T13:34:28.815020+00:00",
+  "completed_at": "2026-02-13T13:34:36.888366+00:00",
+  "duration_ms": 8073,
+  "stage_timings": {
+    "collect": 0,
+    "analyze": 8073,
+    "sop_match": 0,
+    "safety_check": 0
+  },
+  "error": null
+}

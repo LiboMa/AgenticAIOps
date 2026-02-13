@@ -1,0 +1,17 @@
+{
+  "detect_id": "det-96f41046f426",
+  "timestamp": "2026-02-13T13:48:59.764453+00:00",
+  "source": "proactive_scan",
+  "region": "ap-southeast-1",
+  "ttl_seconds": 300,
+  "age_seconds": 0.0,
+  "is_stale": false,
+  "freshness_label": "fresh",
+  "freshness": "fresh",
+  "anomalies_detected": [],
+  "pattern_matches": [],
+  "collection_duration_ms": 0,
+  "collection_config": {},
+  "error": "AWS timeout",
+  "has_correlated_event": false
+}

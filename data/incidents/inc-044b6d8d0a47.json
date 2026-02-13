@@ -1,0 +1,127 @@
+{
+  "incident_id": "inc-044b6d8d0a47",
+  "trigger_type": "manual",
+  "trigger_data": {
+    "reason": "user requested analysis"
+  },
+  "region": "ap-southeast-1",
+  "status": "completed",
+  "collection_summary": {
+    "collection_id": "93dff6145851",
+    "metrics": 0,
+    "alarms": 1,
+    "trail_events": 0,
+    "anomalies": 0,
+    "health_events": 10,
+    "duration_ms": 1349,
+    "source": "fresh_collection"
+  },
+  "rca_result": {
+    "pattern_id": "llm-sonnet-config",
+    "pattern_name": "Claude Sonnet Analysis",
+    "root_cause": "Multiple infrastructure vulnerabilities detected: Auto Scaling launch template misconfiguration preventing instance launches, VPN redundancy loss creating network connectivity risks, and high-risk Kafka configuration with replication factor of 1",
+    "severity": "high",
+    "confidence": 0.85,
+    "matched_symptoms": [
+      "autoscaling-launch-template",
+      "vpn-connections",
+      "kafka-cluster"
+    ],
+    "evidence": [
+      "AWS_EC2_AUTOSCALING_LAUNCH_TEMPLATE_NOT_FOUND health event indicates missing or deleted launch template",
+      "Multiple AWS_VPN_REDUNDANCY_LOSS events indicate VPN tunnel failures across multiple connections",
+      "AWS_KAFKA_HIGH_RISK_CONFIG_RF_EQUALS_ONE indicates Kafka cluster has replication factor of 1, creating single point of failure",
+      "Multiple AWS_LAMBDA_PLANNED_LIFECYCLE_EVENT events suggest upcoming service changes",
+      "Pattern matches historical incidents with 0.63-0.67 similarity score"
+    ],
+    "timestamp": "2026-02-13T13:49:41.290706+00:00",
+    "remediation": {
+      "action": "fix_infrastructure_vulnerabilities",
+      "auto_execute": false,
+      "params": {},
+      "suggestion": "Address critical infrastructure misconfigurations to prevent service disruptions",
+      "checklist": [
+        "Verify and recreate missing Auto Scaling launch template with correct configuration",
+        "Check VPN tunnel status and restore redundancy by bringing up failed tunnels",
+        "Increase Kafka cluster replication factor from 1 to at least 3 for fault tolerance",
+        "Review Lambda lifecycle events and plan for upcoming changes",
+        "Implement monitoring alerts for launch template deletion and VPN tunnel failures"
+      ]
+    }
+  },
+  "matched_sops": [
+    {
+      "sop_id": "sop-ec2-unreachable",
+      "name": "EC2 Instance Unreachable Response",
+      "description": "Handle EC2 instances failing status checks",
+      "service": "ec2",
+      "severity": "high",
+      "steps": 5,
+      "est_minutes": 18,
+      "match_type": "pattern_match",
+      "match_confidence": 0.9,
+      "auto_execute": false,
+      "risk_level": "L2"
+    },
+    {
+      "sop_id": "sop-ec2-high-cpu",
+      "name": "EC2 High CPU Response",
+      "description": "Standard procedure for handling EC2 instances with high CPU utilization",
+      "service": "ec2",
+      "severity": "high",
+      "steps": 5,
+      "est_minutes": 38,
+      "match_type": "fuzzy_match",
+      "match_confidence": 0.5,
+      "auto_execute": false,
+      "risk_level": "L1"
+    },
+    {
+      "sop_id": "sop-ec2-disk-full",
+      "name": "EC2 Disk Full Response",
+      "description": "Handle EC2 instances with disk usage > 90%",
+      "service": "ec2",
+      "severity": "high",
+      "steps": 4,
+      "est_minutes": 21,
+      "match_type": "fuzzy_match",
+      "match_confidence": 0.5,
+      "auto_execute": false,
+      "risk_level": "L1"
+    }
+  ],
+  "safety_check": {
+    "passed": true,
+    "risk_level": "L2",
+    "execution_mode": "dry_run",
+    "reason": "Dry-run \u6a21\u5f0f: \u9884\u89c8 sop-ec2-unreachable \u5bf9 3 \u4e2a\u8d44\u6e90\u7684\u64cd\u4f5c",
+    "cooldown_remaining_seconds": 0,
+    "warnings": [],
+    "required_approvers": [],
+    "dry_run_preview": {
+      "sop_id": "sop-ec2-unreachable",
+      "risk_level": "L2",
+      "target_resources": [
+        "autoscaling-launch-template",
+        "vpn-connections",
+        "kafka-cluster"
+      ],
+      "execution_mode": "confirm",
+      "cooldown_after": "0:30:00",
+      "daily_limit": 5,
+      "current_daily_count": 0,
+      "preview_note": "This is a dry-run. No changes will be made."
+    }
+  },
+  "execution_result": null,
+  "created_at": "2026-02-13T13:49:32.668044+00:00",
+  "completed_at": "2026-02-13T13:49:41.291129+00:00",
+  "duration_ms": 8623,
+  "stage_timings": {
+    "collect": 1350,
+    "analyze": 7272,
+    "sop_match": 0,
+    "safety_check": 0
+  },
+  "error": null
+}

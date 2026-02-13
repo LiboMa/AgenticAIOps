@@ -210,7 +210,7 @@ class ProactiveAgentSystem:
         try:
             from src.detect_agent import get_detect_agent
 
-            detect_agent = await get_detect_agent()
+            detect_agent = get_detect_agent()
             detect_result = await detect_agent.run_detection(
                 source="proactive_scan",
                 services=task.config.get("services", ["ec2", "rds", "lambda"]),
