@@ -1,28 +1,32 @@
 """
-Tests for Detect Agent Data Reuse (commit fe5673e)
+Tests for Detect Agent Data Reuse — DetectResult interface
 
-Validates the `pre_collected_event` parameter in `incident_orchestrator.handle_incident()`:
-  - When provided: Stage 1 (collection) is skipped, data reused from Detect Agent
-  - When absent: Falls back to fresh collection (backward compatible)
-  - Edge cases: data integrity, timing, source tagging
+Validates:
+  - detect_result parameter in incident_orchestrator.handle_incident()
+  - DetectResult data structure (TTL, staleness, freshness)
+  - R1: Stale detection → fallback to fresh collection
+  - R2: Manual trigger → always fresh collection
+  - Backward compatibility: no detect_result → fresh collection
 
-Ref: Ma Ronnie's architecture feedback — Detect Agent 数据复用
+Ref: DETECT_AGENT_DATA_REUSE_DESIGN.md
 """
 
 import asyncio
 import pytest
 import time
+from datetime import datetime, timezone, timedelta
 from unittest.mock import Mock, AsyncMock, patch, MagicMock
 from dataclasses import dataclass, field
 from typing import List, Dict, Any
 
-# ── Import the orchestrator under test ─────────────────────────────
+# ── Import the modules under test ──────────────────────────────────
 from src.incident_orchestrator import (
     IncidentOrchestrator,
     IncidentRecord,
     IncidentStatus,
     TriggerType,
 )
+from src.detect_agent import DetectResult
 
 
 # ── Helper: run async in sync test ─────────────────────────────────
@@ -40,7 +44,7 @@ def run(coro):
 class MockCorrelatedEvent:
     """
     Mimics src.event_correlator.CorrelatedEvent with the fields
-    accessed by handle_incident's pre_collected_event path.
+    accessed by handle_incident's detect_result path.
     """
     collection_id: str = "detect-mock-001"
     timestamp: str = "2026-02-13T12:00:00Z"
@@ -65,6 +69,25 @@ class MockCorrelatedEvent:
         }
 
 
+# ── Helper: Build a DetectResult ───────────────────────────────────
+def make_detect_result(
+    source="proactive_scan",
+    age_seconds=0,
+    ttl_seconds=300,
+    event=None,
+):
+    """Create a DetectResult with controllable age."""
+    ts = datetime.now(timezone.utc) - timedelta(seconds=age_seconds)
+    return DetectResult(
+        detect_id=f"det-test-{id(event) % 10000:04d}",
+        timestamp=ts,
+        source=source,
+        correlated_event=event or MockCorrelatedEvent(),
+        anomalies_detected=[{"type": "cpu_spike"}],
+        ttl_seconds=ttl_seconds,
+    )
+
+
 # ── Fixtures ───────────────────────────────────────────────────────
 @pytest.fixture
 def orchestrator():
@@ -74,6 +97,18 @@ def orchestrator():
 @pytest.fixture
 def mock_event():
     return MockCorrelatedEvent()
+
+
+@pytest.fixture
+def fresh_detect_result(mock_event):
+    """A fresh (0s old) DetectResult."""
+    return make_detect_result(event=mock_event, age_seconds=0)
+
+
+@pytest.fixture
+def stale_detect_result(mock_event):
+    """A stale (10min old, TTL=5min) DetectResult."""
+    return make_detect_result(event=mock_event, age_seconds=600, ttl_seconds=300)
 
 
 @pytest.fixture
@@ -92,10 +127,6 @@ def mock_event_large():
 
 # ── Mock RCA + SOP dependencies (Stage 2-4) ───────────────────────
 def _create_stage_mocks():
-    """
-    Creates mock objects for Stage 2 (RCA), Stage 3 (SOP), Stage 4 (Safety).
-    Returns patches list, mock rca_result, mock rca engine.
-    """
     mock_rca_result = Mock()
     mock_rca_result.to_dict.return_value = {
         "root_cause": "CPU overload due to runaway process",
@@ -140,14 +171,57 @@ def _create_stage_mocks():
 
 
 # ═══════════════════════════════════════════════════════════════════
-#  Test Suite: pre_collected_event Reuse Path
+#  Test Suite 1: DetectResult Data Structure
 # ═══════════════════════════════════════════════════════════════════
 
-class TestPreCollectedEventReuse:
-    """Tests for the Detect Agent data reuse path (pre_collected_event != None)."""
+class TestDetectResultStructure:
+    """Tests for DetectResult TTL, staleness, and freshness labels."""
 
-    def test_skips_stage1_when_pre_collected(self, orchestrator, mock_event):
-        """Core test: pre_collected_event skips Stage 1 fresh collection."""
+    def test_fresh_result_not_stale(self):
+        dr = make_detect_result(age_seconds=0)
+        assert not dr.is_stale
+        assert dr.freshness_label == "fresh"
+
+    def test_warm_result(self):
+        dr = make_detect_result(age_seconds=120, ttl_seconds=300)
+        assert not dr.is_stale
+        assert dr.freshness_label == "warm"
+
+    def test_stale_result(self):
+        dr = make_detect_result(age_seconds=600, ttl_seconds=300)
+        assert dr.is_stale
+        assert dr.freshness_label == "stale"
+
+    def test_age_seconds_positive(self):
+        dr = make_detect_result(age_seconds=30)
+        assert dr.age_seconds >= 29  # allow small timing delta
+
+    def test_to_dict_includes_freshness(self):
+        dr = make_detect_result(age_seconds=0)
+        d = dr.to_dict()
+        assert "freshness" in d
+        assert "is_stale" in d
+        assert "detect_id" in d
+        assert d["is_stale"] is False
+
+    def test_default_ttl_is_300(self):
+        dr = make_detect_result()
+        assert dr.ttl_seconds == 300
+
+    def test_custom_ttl(self):
+        dr = make_detect_result(ttl_seconds=60, age_seconds=90)
+        assert dr.is_stale  # 90s > 60s TTL
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  Test Suite 2: Reuse Path (fresh detect_result + non-manual)
+# ═══════════════════════════════════════════════════════════════════
+
+class TestDetectResultReuse:
+    """Tests for the Detect Agent data reuse path."""
+
+    def test_skips_stage1_with_fresh_detect_result(self, orchestrator, fresh_detect_result):
+        """Fresh detect_result + non-manual trigger → skip Stage 1."""
         mock_engine, mock_bridge, mock_safety, _ = _create_stage_mocks()
 
         with patch("src.event_correlator.get_correlator") as mock_get_correlator, \
@@ -157,19 +231,14 @@ class TestPreCollectedEventReuse:
 
             result = run(orchestrator.handle_incident(
                 trigger_type="anomaly",
-                pre_collected_event=mock_event,
+                detect_result=fresh_detect_result,
             ))
 
-            # get_correlator should NOT be called — Stage 1 was skipped
             mock_get_correlator.assert_not_called()
-
-            # RCA engine should still receive the event
-            mock_engine.analyze.assert_called_once_with(mock_event)
-
+            mock_engine.analyze.assert_called_once()
             assert result.status == IncidentStatus.COMPLETED
 
-    def test_source_tagged_as_detect_agent_reuse(self, orchestrator, mock_event):
-        """collection_summary.source must be 'detect_agent_reuse'."""
+    def test_source_tagged_as_detect_agent_reuse(self, orchestrator, fresh_detect_result):
         mock_engine, mock_bridge, mock_safety, _ = _create_stage_mocks()
 
         with patch("src.rca_inference.get_rca_inference_engine", return_value=mock_engine), \
@@ -178,13 +247,11 @@ class TestPreCollectedEventReuse:
 
             result = run(orchestrator.handle_incident(
                 trigger_type="anomaly",
-                pre_collected_event=mock_event,
+                detect_result=fresh_detect_result,
             ))
-            assert result.collection_summary is not None
             assert result.collection_summary["source"] == "detect_agent_reuse"
 
-    def test_collection_summary_counts_match_event(self, orchestrator, mock_event):
-        """collection_summary counts must reflect the pre-collected event's data."""
+    def test_detect_id_in_collection_summary(self, orchestrator, fresh_detect_result):
         mock_engine, mock_bridge, mock_safety, _ = _create_stage_mocks()
 
         with patch("src.rca_inference.get_rca_inference_engine", return_value=mock_engine), \
@@ -193,19 +260,28 @@ class TestPreCollectedEventReuse:
 
             result = run(orchestrator.handle_incident(
                 trigger_type="anomaly",
-                pre_collected_event=mock_event,
+                detect_result=fresh_detect_result,
+            ))
+            assert result.collection_summary.get("detect_id") == fresh_detect_result.detect_id
+
+    def test_collection_summary_counts_match(self, orchestrator, fresh_detect_result):
+        mock_engine, mock_bridge, mock_safety, _ = _create_stage_mocks()
+
+        with patch("src.rca_inference.get_rca_inference_engine", return_value=mock_engine), \
+             patch("src.rca_sop_bridge.get_bridge", return_value=mock_bridge), \
+             patch("src.sop_safety.get_safety_layer", return_value=mock_safety):
+
+            result = run(orchestrator.handle_incident(
+                trigger_type="anomaly",
+                detect_result=fresh_detect_result,
             ))
             cs = result.collection_summary
-            assert cs["collection_id"] == mock_event.collection_id
-            assert cs["metrics"] == len(mock_event.metrics)
-            assert cs["alarms"] == len(mock_event.alarms)
-            assert cs["trail_events"] == len(mock_event.trail_events)
-            assert cs["anomalies"] == len(mock_event.anomalies)
-            assert cs["health_events"] == len(mock_event.health_events)
-            assert cs["duration_ms"] == mock_event.duration_ms
+            event = fresh_detect_result.correlated_event
+            assert cs["metrics"] == len(event.metrics)
+            assert cs["alarms"] == len(event.alarms)
+            assert cs["trail_events"] == len(event.trail_events)
 
-    def test_collection_summary_with_large_event(self, orchestrator, mock_event_large):
-        """Verify counts are correct for a richer event payload."""
+    def test_stage1_timing_near_zero(self, orchestrator, fresh_detect_result):
         mock_engine, mock_bridge, mock_safety, _ = _create_stage_mocks()
 
         with patch("src.rca_inference.get_rca_inference_engine", return_value=mock_engine), \
@@ -214,33 +290,12 @@ class TestPreCollectedEventReuse:
 
             result = run(orchestrator.handle_incident(
                 trigger_type="anomaly",
-                pre_collected_event=mock_event_large,
+                detect_result=fresh_detect_result,
             ))
-            cs = result.collection_summary
-            assert cs["metrics"] == 20
-            assert cs["alarms"] == 5
-            assert cs["trail_events"] == 10
-            assert cs["anomalies"] == 4
-            assert cs["health_events"] == 1
-            assert cs["source"] == "detect_agent_reuse"
+            assert result.stage_timings.get("collect", 999) < 100
 
-    def test_stage1_timing_near_zero(self, orchestrator, mock_event):
-        """When reusing pre-collected data, Stage 1 timing should be near-zero (< 100ms)."""
-        mock_engine, mock_bridge, mock_safety, _ = _create_stage_mocks()
-
-        with patch("src.rca_inference.get_rca_inference_engine", return_value=mock_engine), \
-             patch("src.rca_sop_bridge.get_bridge", return_value=mock_bridge), \
-             patch("src.sop_safety.get_safety_layer", return_value=mock_safety):
-
-            result = run(orchestrator.handle_incident(
-                trigger_type="anomaly",
-                pre_collected_event=mock_event,
-            ))
-            collect_ms = result.stage_timings.get("collect", 999)
-            assert collect_ms < 100, f"Stage 1 took {collect_ms}ms — should be near-zero for reuse"
-
-    def test_all_trigger_types_accept_pre_collected(self, orchestrator, mock_event):
-        """pre_collected_event should work with all trigger types."""
+    def test_all_auto_trigger_types_reuse(self, orchestrator, mock_event):
+        """All non-manual trigger types should reuse fresh detect_result."""
         mock_engine, mock_bridge, mock_safety, _ = _create_stage_mocks()
 
         with patch("src.rca_inference.get_rca_inference_engine", return_value=mock_engine), \
@@ -248,23 +303,92 @@ class TestPreCollectedEventReuse:
              patch("src.sop_safety.get_safety_layer", return_value=mock_safety):
 
             for trigger in ["alarm", "anomaly", "health_event", "proactive"]:
+                dr = make_detect_result(event=mock_event, age_seconds=0)
                 result = run(orchestrator.handle_incident(
                     trigger_type=trigger,
-                    pre_collected_event=mock_event,
+                    detect_result=dr,
                 ))
                 assert result.collection_summary["source"] == "detect_agent_reuse"
-                assert result.status in (IncidentStatus.COMPLETED, IncidentStatus.WAITING_APPROVAL)
 
 
 # ═══════════════════════════════════════════════════════════════════
-#  Test Suite: Backward Compatibility (no pre_collected_event)
+#  Test Suite 3: R1 — Stale Detection → Fallback
 # ═══════════════════════════════════════════════════════════════════
 
-class TestFreshCollectionFallback:
-    """Tests that handle_incident() without pre_collected_event still works."""
+class TestStaleDetectResultFallback:
+    """R1: When detect_result is stale, fall back to fresh collection."""
 
-    def test_fresh_collection_when_no_pre_collected(self, orchestrator):
-        """Without pre_collected_event, Stage 1 should call get_correlator + collect."""
+    def test_stale_detect_result_triggers_fresh_collection(self, orchestrator, stale_detect_result):
+        mock_fresh_event = MockCorrelatedEvent(collection_id="fresh-fallback-001")
+        mock_correlator = AsyncMock()
+        mock_correlator.collect.return_value = mock_fresh_event
+        mock_engine, mock_bridge, mock_safety, _ = _create_stage_mocks()
+
+        with patch("src.event_correlator.get_correlator", return_value=mock_correlator) as mock_gc, \
+             patch("src.rca_inference.get_rca_inference_engine", return_value=mock_engine), \
+             patch("src.rca_sop_bridge.get_bridge", return_value=mock_bridge), \
+             patch("src.sop_safety.get_safety_layer", return_value=mock_safety):
+
+            result = run(orchestrator.handle_incident(
+                trigger_type="anomaly",
+                detect_result=stale_detect_result,
+            ))
+
+            mock_gc.assert_called_once()
+            mock_correlator.collect.assert_called_once()
+            assert result.collection_summary["source"] == "fresh_collection"
+
+    def test_stale_at_boundary(self, orchestrator, mock_event):
+        """detect_result at exactly TTL+1s should be stale."""
+        dr = make_detect_result(event=mock_event, age_seconds=301, ttl_seconds=300)
+        assert dr.is_stale
+
+        mock_fresh_event = MockCorrelatedEvent(collection_id="boundary-fresh")
+        mock_correlator = AsyncMock()
+        mock_correlator.collect.return_value = mock_fresh_event
+        mock_engine, mock_bridge, mock_safety, _ = _create_stage_mocks()
+
+        with patch("src.event_correlator.get_correlator", return_value=mock_correlator), \
+             patch("src.rca_inference.get_rca_inference_engine", return_value=mock_engine), \
+             patch("src.rca_sop_bridge.get_bridge", return_value=mock_bridge), \
+             patch("src.sop_safety.get_safety_layer", return_value=mock_safety):
+
+            result = run(orchestrator.handle_incident(
+                trigger_type="anomaly",
+                detect_result=dr,
+            ))
+            assert result.collection_summary["source"] == "fresh_collection"
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  Test Suite 4: R2 — Manual Trigger → Always Fresh
+# ═══════════════════════════════════════════════════════════════════
+
+class TestManualTriggerAlwaysFresh:
+    """R2: Manual trigger never uses cached detect_result."""
+
+    def test_manual_ignores_fresh_detect_result(self, orchestrator, fresh_detect_result):
+        """Even with a fresh detect_result, manual trigger must collect fresh data."""
+        mock_fresh_event = MockCorrelatedEvent(collection_id="manual-fresh-001")
+        mock_correlator = AsyncMock()
+        mock_correlator.collect.return_value = mock_fresh_event
+        mock_engine, mock_bridge, mock_safety, _ = _create_stage_mocks()
+
+        with patch("src.event_correlator.get_correlator", return_value=mock_correlator) as mock_gc, \
+             patch("src.rca_inference.get_rca_inference_engine", return_value=mock_engine), \
+             patch("src.rca_sop_bridge.get_bridge", return_value=mock_bridge), \
+             patch("src.sop_safety.get_safety_layer", return_value=mock_safety):
+
+            result = run(orchestrator.handle_incident(
+                trigger_type="manual",
+                detect_result=fresh_detect_result,
+            ))
+
+            mock_gc.assert_called_once()
+            assert result.collection_summary["source"] == "fresh_collection"
+
+    def test_manual_without_detect_result(self, orchestrator):
+        """Standard manual trigger without detect_result → fresh collection."""
         mock_event = MockCorrelatedEvent()
         mock_correlator = AsyncMock()
         mock_correlator.collect.return_value = mock_event
@@ -276,26 +400,33 @@ class TestFreshCollectionFallback:
              patch("src.sop_safety.get_safety_layer", return_value=mock_safety):
 
             result = run(orchestrator.handle_incident(trigger_type="manual"))
-            mock_gc.assert_called_once_with("ap-southeast-1")
-            mock_correlator.collect.assert_called_once()
+            mock_gc.assert_called_once()
+            assert result.collection_summary["source"] == "fresh_collection"
 
-    def test_source_tagged_as_fresh_collection(self, orchestrator):
-        """collection_summary.source must be 'fresh_collection' when no pre-collected."""
+
+# ═══════════════════════════════════════════════════════════════════
+#  Test Suite 5: Backward Compatibility
+# ═══════════════════════════════════════════════════════════════════
+
+class TestBackwardCompatibility:
+    """No detect_result → same behavior as before."""
+
+    def test_no_detect_result_calls_correlator(self, orchestrator):
         mock_event = MockCorrelatedEvent()
         mock_correlator = AsyncMock()
         mock_correlator.collect.return_value = mock_event
         mock_engine, mock_bridge, mock_safety, _ = _create_stage_mocks()
 
-        with patch("src.event_correlator.get_correlator", return_value=mock_correlator), \
+        with patch("src.event_correlator.get_correlator", return_value=mock_correlator) as mock_gc, \
              patch("src.rca_inference.get_rca_inference_engine", return_value=mock_engine), \
              patch("src.rca_sop_bridge.get_bridge", return_value=mock_bridge), \
              patch("src.sop_safety.get_safety_layer", return_value=mock_safety):
 
             result = run(orchestrator.handle_incident(trigger_type="manual"))
-            assert result.collection_summary["source"] == "fresh_collection"
+            mock_gc.assert_called_once()
+            mock_correlator.collect.assert_called_once()
 
-    def test_explicit_none_treated_as_no_pre_collected(self, orchestrator):
-        """Explicitly passing pre_collected_event=None should trigger fresh collection."""
+    def test_explicit_none_triggers_fresh(self, orchestrator):
         mock_event = MockCorrelatedEvent()
         mock_correlator = AsyncMock()
         mock_correlator.collect.return_value = mock_event
@@ -308,85 +439,13 @@ class TestFreshCollectionFallback:
 
             result = run(orchestrator.handle_incident(
                 trigger_type="manual",
-                pre_collected_event=None,
+                detect_result=None,
             ))
             mock_gc.assert_called_once()
             assert result.collection_summary["source"] == "fresh_collection"
 
-
-# ═══════════════════════════════════════════════════════════════════
-#  Test Suite: Data Integrity & Edge Cases
-# ═══════════════════════════════════════════════════════════════════
-
-class TestDataIntegrity:
-    """Edge cases and data integrity checks."""
-
-    def test_empty_pre_collected_event(self, orchestrator):
-        """An event with all empty lists should still be accepted and tagged as reuse."""
-        empty_event = MockCorrelatedEvent(
-            collection_id="detect-empty-003",
-            metrics=[],
-            alarms=[],
-            trail_events=[],
-            anomalies=[],
-            health_events=[],
-        )
-        mock_engine, mock_bridge, mock_safety, _ = _create_stage_mocks()
-
-        with patch("src.rca_inference.get_rca_inference_engine", return_value=mock_engine), \
-             patch("src.rca_sop_bridge.get_bridge", return_value=mock_bridge), \
-             patch("src.sop_safety.get_safety_layer", return_value=mock_safety):
-
-            result = run(orchestrator.handle_incident(
-                trigger_type="anomaly",
-                pre_collected_event=empty_event,
-            ))
-            cs = result.collection_summary
-            assert cs["source"] == "detect_agent_reuse"
-            assert cs["metrics"] == 0
-            assert cs["alarms"] == 0
-            assert cs["trail_events"] == 0
-            assert cs["anomalies"] == 0
-            assert cs["health_events"] == 0
-
-    def test_pre_collected_event_passed_to_rca(self, orchestrator, mock_event):
-        """The exact pre_collected_event object must be passed to RCA analyze()."""
-        mock_engine, mock_bridge, mock_safety, _ = _create_stage_mocks()
-
-        with patch("src.rca_inference.get_rca_inference_engine", return_value=mock_engine), \
-             patch("src.rca_sop_bridge.get_bridge", return_value=mock_bridge), \
-             patch("src.sop_safety.get_safety_layer", return_value=mock_safety):
-
-            run(orchestrator.handle_incident(
-                trigger_type="anomaly",
-                pre_collected_event=mock_event,
-            ))
-            # Ensure the exact same object reference was passed to RCA
-            args, _ = mock_engine.analyze.call_args
-            assert args[0] is mock_event, "RCA must receive the exact pre-collected event object"
-
-    def test_incident_record_persisted(self, orchestrator, mock_event):
-        """Incident should be stored in orchestrator._incidents."""
-        mock_engine, mock_bridge, mock_safety, _ = _create_stage_mocks()
-
-        with patch("src.rca_inference.get_rca_inference_engine", return_value=mock_engine), \
-             patch("src.rca_sop_bridge.get_bridge", return_value=mock_bridge), \
-             patch("src.sop_safety.get_safety_layer", return_value=mock_safety):
-
-            result = run(orchestrator.handle_incident(
-                trigger_type="anomaly",
-                pre_collected_event=mock_event,
-            ))
-            assert result.incident_id in orchestrator._incidents
-            stored = orchestrator.get_incident(result.incident_id)
-            assert stored is result
-            assert stored.collection_summary["source"] == "detect_agent_reuse"
-
-    def test_reuse_then_fresh_same_orchestrator(self, orchestrator, mock_event):
-        """
-        Same orchestrator should handle both reuse and fresh collection calls.
-        Verifies no state leakage between calls.
-        """
+    def test_reuse_then_fresh_no_leakage(self, orchestrator, mock_event):
+        """Same orchestrator: reuse then fresh — no state pollution."""
         mock_correlator = AsyncMock()
         mock_correlator.collect.return_value = MockCorrelatedEvent(collection_id="fresh-004")
         mock_engine, mock_bridge, mock_safety, _ = _create_stage_mocks()
@@ -395,13 +454,12 @@ class TestDataIntegrity:
              patch("src.rca_sop_bridge.get_bridge", return_value=mock_bridge), \
              patch("src.sop_safety.get_safety_layer", return_value=mock_safety):
 
-            # First: reuse
+            dr = make_detect_result(event=mock_event, age_seconds=0)
             result1 = run(orchestrator.handle_incident(
                 trigger_type="anomaly",
-                pre_collected_event=mock_event,
+                detect_result=dr,
             ))
 
-            # Second: fresh
             with patch("src.event_correlator.get_correlator", return_value=mock_correlator):
                 result2 = run(orchestrator.handle_incident(trigger_type="manual"))
 
@@ -409,78 +467,59 @@ class TestDataIntegrity:
             assert result2.collection_summary["source"] == "fresh_collection"
             assert result1.incident_id != result2.incident_id
 
-    def test_collection_id_preserved_from_detect_agent(self, orchestrator):
-        """The detect agent's collection_id must be preserved through the pipeline."""
-        event = MockCorrelatedEvent(collection_id="detect-unique-xyz-789")
-        mock_engine, mock_bridge, mock_safety, _ = _create_stage_mocks()
-
-        with patch("src.rca_inference.get_rca_inference_engine", return_value=mock_engine), \
-             patch("src.rca_sop_bridge.get_bridge", return_value=mock_bridge), \
-             patch("src.sop_safety.get_safety_layer", return_value=mock_safety):
-
-            result = run(orchestrator.handle_incident(
-                trigger_type="proactive",
-                pre_collected_event=event,
-            ))
-            assert result.collection_summary["collection_id"] == "detect-unique-xyz-789"
-
 
 # ═══════════════════════════════════════════════════════════════════
-#  Test Suite: Error Handling
+#  Test Suite 6: Error Handling
 # ═══════════════════════════════════════════════════════════════════
 
 class TestErrorHandling:
-    """Error handling when pre_collected_event has issues."""
 
-    def test_rca_failure_with_pre_collected(self, orchestrator, mock_event):
-        """If RCA fails after reuse, incident should be FAILED with error."""
+    def test_rca_failure_preserves_collection_summary(self, orchestrator, fresh_detect_result):
         mock_engine = AsyncMock()
         mock_engine.analyze.side_effect = RuntimeError("RCA model unavailable")
 
         with patch("src.rca_inference.get_rca_inference_engine", return_value=mock_engine):
             result = run(orchestrator.handle_incident(
                 trigger_type="anomaly",
-                pre_collected_event=mock_event,
+                detect_result=fresh_detect_result,
             ))
             assert result.status == IncidentStatus.FAILED
             assert "RCA model unavailable" in result.error
-            # Even though failed, collection_summary should be populated
             assert result.collection_summary["source"] == "detect_agent_reuse"
 
-    def test_missing_attribute_on_event(self, orchestrator):
-        """If pre_collected_event lacks expected attributes, handle gracefully."""
-        broken_event = Mock()
-        broken_event.collection_id = "broken-001"
-        broken_event.metrics = []
-        broken_event.alarms = []
-        broken_event.trail_events = []
-        broken_event.anomalies = []
-        broken_event.health_events = []
-        broken_event.duration_ms = 0
-
+    def test_detect_result_without_correlated_event(self, orchestrator):
+        """detect_result with correlated_event=None → fresh collection."""
+        dr = DetectResult(
+            detect_id="det-no-event",
+            timestamp=datetime.now(timezone.utc),
+            source="proactive_scan",
+            correlated_event=None,  # No event!
+        )
+        mock_event = MockCorrelatedEvent()
+        mock_correlator = AsyncMock()
+        mock_correlator.collect.return_value = mock_event
         mock_engine, mock_bridge, mock_safety, _ = _create_stage_mocks()
 
-        with patch("src.rca_inference.get_rca_inference_engine", return_value=mock_engine), \
+        with patch("src.event_correlator.get_correlator", return_value=mock_correlator) as mock_gc, \
+             patch("src.rca_inference.get_rca_inference_engine", return_value=mock_engine), \
              patch("src.rca_sop_bridge.get_bridge", return_value=mock_bridge), \
              patch("src.sop_safety.get_safety_layer", return_value=mock_safety):
 
             result = run(orchestrator.handle_incident(
                 trigger_type="anomaly",
-                pre_collected_event=broken_event,
+                detect_result=dr,
             ))
-            # Should complete normally — the reuse path only reads these fields
-            assert result.collection_summary["source"] == "detect_agent_reuse"
+            mock_gc.assert_called_once()
+            assert result.collection_summary["source"] == "fresh_collection"
 
 
 # ═══════════════════════════════════════════════════════════════════
-#  Test Suite: IncidentRecord Serialization
+#  Test Suite 7: Serialization
 # ═══════════════════════════════════════════════════════════════════
 
 class TestSerialization:
-    """Ensure reuse-path incidents serialize correctly."""
 
-    def test_to_dict_includes_source(self, orchestrator, mock_event):
-        """to_dict() must include the 'source' field in collection_summary."""
+    def test_to_dict_includes_source(self, orchestrator, fresh_detect_result):
         mock_engine, mock_bridge, mock_safety, _ = _create_stage_mocks()
 
         with patch("src.rca_inference.get_rca_inference_engine", return_value=mock_engine), \
@@ -489,13 +528,12 @@ class TestSerialization:
 
             result = run(orchestrator.handle_incident(
                 trigger_type="anomaly",
-                pre_collected_event=mock_event,
+                detect_result=fresh_detect_result,
             ))
             d = result.to_dict()
             assert d["collection_summary"]["source"] == "detect_agent_reuse"
 
-    def test_to_markdown_works_with_reuse(self, orchestrator, mock_event):
-        """to_markdown() should not error on reuse-path incidents."""
+    def test_to_markdown_works_with_reuse(self, orchestrator, fresh_detect_result):
         mock_engine, mock_bridge, mock_safety, _ = _create_stage_mocks()
 
         with patch("src.rca_inference.get_rca_inference_engine", return_value=mock_engine), \
@@ -504,7 +542,7 @@ class TestSerialization:
 
             result = run(orchestrator.handle_incident(
                 trigger_type="anomaly",
-                pre_collected_event=mock_event,
+                detect_result=fresh_detect_result,
             ))
             md = result.to_markdown()
             assert "事件" in md

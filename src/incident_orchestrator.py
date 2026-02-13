@@ -181,7 +181,7 @@ class IncidentOrchestrator:
         dry_run: bool = False,
         force: bool = False,
         lookback_minutes: int = 15,
-        pre_collected_event=None,
+        detect_result=None,
     ) -> IncidentRecord:
         """
         Full closed-loop incident handling pipeline.
@@ -193,11 +193,13 @@ class IncidentOrchestrator:
             auto_execute: Auto-execute matched SOPs
             dry_run: Preview only
             force: Override cooldowns
-            pre_collected_event: Optional CorrelatedEvent from Detect Agent.
-                When provided, Stage 1 (data collection) is skipped entirely,
-                reusing the already-collected data. This avoids duplicate AWS
-                API calls and aligns with the multi-agent architecture where
-                Detect Agent owns data collection.
+            detect_result: Optional DetectResult from Detect Agent.
+                When provided (and fresh), Stage 1 (data collection) is
+                skipped, reusing the pre-collected CorrelatedEvent.
+                Rules:
+                  - manual trigger → always fresh collection (user expects live data)
+                  - stale detect_result → fallback to fresh collection
+                  - fresh detect_result + non-manual → reuse (skip Stage 1)
             
         Returns:
             IncidentRecord with full pipeline results
@@ -215,16 +217,28 @@ class IncidentOrchestrator:
         
         try:
             # ── Stage 1: Data Collection ──────────────────────────
-            # If Detect Agent already collected data, reuse it (skip AWS calls).
+            # Reuse DetectResult from Detect Agent when available + fresh.
+            # Manual triggers always get fresh data (R2).
+            # Stale results fall back to fresh collection (R1).
             incident.status = IncidentStatus.COLLECTING
             stage_start = time.time()
             
-            if pre_collected_event is not None:
+            # Determine whether to reuse cached detection data
+            use_cached = (
+                detect_result is not None
+                and hasattr(detect_result, "is_stale")
+                and not detect_result.is_stale
+                and trigger_type != "manual"  # R2: manual → always fresh
+                and detect_result.correlated_event is not None
+            )
+            
+            if use_cached:
                 # Reuse Detect Agent's pre-collected CorrelatedEvent
-                event = pre_collected_event
+                event = detect_result.correlated_event
                 logger.info(
-                    f"[{incident_id}] Reusing pre-collected event "
-                    f"{event.collection_id} — skipping Stage 1 collection"
+                    f"[{incident_id}] Reusing DetectResult {detect_result.detect_id} "
+                    f"({detect_result.freshness_label}, {detect_result.age_seconds:.0f}s old) "
+                    f"— skipping Stage 1 collection"
                 )
                 incident.collection_summary = {
                     "collection_id": event.collection_id,
@@ -235,9 +249,22 @@ class IncidentOrchestrator:
                     "health_events": len(event.health_events),
                     "duration_ms": event.duration_ms,
                     "source": "detect_agent_reuse",
+                    "detect_id": detect_result.detect_id,
+                    "data_age_seconds": round(detect_result.age_seconds, 1),
                 }
             else:
-                # Fresh collection (manual trigger / no pre-collected data)
+                # Fresh collection — manual trigger, stale data, or no detect_result
+                if detect_result is not None and hasattr(detect_result, "is_stale") and detect_result.is_stale:
+                    logger.warning(
+                        f"[{incident_id}] DetectResult {detect_result.detect_id} is stale "
+                        f"({detect_result.age_seconds:.0f}s old), falling back to fresh collection"
+                    )
+                elif trigger_type == "manual" and detect_result is not None:
+                    logger.info(
+                        f"[{incident_id}] Manual trigger — ignoring cached DetectResult, "
+                        f"collecting fresh data"
+                    )
+                
                 from src.event_correlator import get_correlator
                 correlator = get_correlator(self.region)
                 
