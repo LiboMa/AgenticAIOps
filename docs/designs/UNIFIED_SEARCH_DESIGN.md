@@ -3,7 +3,13 @@
 **作者**: Architect  
 **日期**: 2026-02-13  
 **版本**: 1.0  
-**状态**: Draft — 待 Reviewer 评审
+**状态**: ✅ Approved — Reviewer 评审通过 (2026-02-13)
+
+### Reviewer 评审反馈 (已采纳)
+1. **Bedrock Titan region**: `BEDROCK_EMBEDDING_REGION` 已存在于 `vector_search.py`，P1 加 `_verify_embedding()` 启动检查
+2. **L1/L2 分数不可比**: L1 命中且 score ≥ 0.7 → 直接返回；`SearchResult.hits` 加 `search_level` 字段
+3. **双写时序**: P0 `add_pattern()` 双写暂保留，P1 迁移到 `KnowledgeSearchService.index()`
+4. **Feedback 闭环持久化**: `_strengthen_pattern()` 只更新内存 → P0-4 修复写回 S3+OS
 
 ---
 
