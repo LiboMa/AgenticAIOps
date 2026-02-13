@@ -248,7 +248,9 @@ EC2: mbot-sg-1 (m6i.xlarge, ap-southeast-1)
 | 限制 | 描述 | 优先级 |
 |------|------|--------|
 | 单账户 | 仅支持一个 AWS 账户 | P1 |
+| PatternMatcher 规则 | YAML 规则面向 K8s，需扩充 CloudWatch 场景 | P1 |
 | api_server.py 过大 | ~4,700 行，待拆分 Router | P2 |
+| Bedrock KB | PatternRAG 未接入 (需 KB ID 配置) | P2 |
 | 无 RBAC | 所有用户同权限 | P3 |
 | 单点部署 | 无 HA/灾备 | P3 |
 
