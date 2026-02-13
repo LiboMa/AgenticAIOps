@@ -388,7 +388,20 @@ class ProactiveAgentSystem:
             # Trigger IncidentOrchestrator with pre-collected data (skip Stage 1)
             if self._last_correlated_event is not None:
                 try:
+                    from src.detect_agent import DetectResult
                     from src.incident_orchestrator import get_orchestrator
+                    
+                    # Wrap CorrelatedEvent in DetectResult for Orchestrator consumption
+                    import uuid
+                    detect_result = DetectResult(
+                        detect_id=f"det-proactive-{uuid.uuid4().hex[:8]}",
+                        timestamp=datetime.now(timezone.utc).isoformat(),
+                        source="proactive_scan",
+                        region=self._last_correlated_event.region,
+                        correlated_event=self._last_correlated_event,
+                        anomalies_detected=result.findings,
+                    )
+                    
                     orchestrator = get_orchestrator()
                     incident = await orchestrator.handle_incident(
                         trigger_type="proactive",
@@ -397,7 +410,7 @@ class ProactiveAgentSystem:
                             "findings_count": len(result.findings),
                             "summary": result.summary,
                         },
-                        pre_collected_event=self._last_correlated_event,
+                        detect_result=detect_result,
                         auto_execute=False,  # Default: don't auto-execute, let safety layer decide
                     )
                     logger.info(f"Incident pipeline triggered: {incident.incident_id} → {incident.status.value}")
