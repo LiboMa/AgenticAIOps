@@ -180,6 +180,7 @@ class IncidentOrchestrator:
         dry_run: bool = False,
         force: bool = False,
         lookback_minutes: int = 15,
+        pre_collected_event=None,
     ) -> IncidentRecord:
         """
         Full closed-loop incident handling pipeline.
@@ -191,6 +192,11 @@ class IncidentOrchestrator:
             auto_execute: Auto-execute matched SOPs
             dry_run: Preview only
             force: Override cooldowns
+            pre_collected_event: Optional CorrelatedEvent from Detect Agent.
+                When provided, Stage 1 (data collection) is skipped entirely,
+                reusing the already-collected data. This avoids duplicate AWS
+                API calls and aligns with the multi-agent architecture where
+                Detect Agent owns data collection.
             
         Returns:
             IncidentRecord with full pipeline results
@@ -208,26 +214,48 @@ class IncidentOrchestrator:
         
         try:
             # ── Stage 1: Data Collection ──────────────────────────
+            # If Detect Agent already collected data, reuse it (skip AWS calls).
             incident.status = IncidentStatus.COLLECTING
             stage_start = time.time()
             
-            from src.event_correlator import get_correlator
-            correlator = get_correlator(self.region)
+            if pre_collected_event is not None:
+                # Reuse Detect Agent's pre-collected CorrelatedEvent
+                event = pre_collected_event
+                logger.info(
+                    f"[{incident_id}] Reusing pre-collected event "
+                    f"{event.collection_id} — skipping Stage 1 collection"
+                )
+                incident.collection_summary = {
+                    "collection_id": event.collection_id,
+                    "metrics": len(event.metrics),
+                    "alarms": len(event.alarms),
+                    "trail_events": len(event.trail_events),
+                    "anomalies": len(event.anomalies),
+                    "health_events": len(event.health_events),
+                    "duration_ms": event.duration_ms,
+                    "source": "detect_agent_reuse",
+                }
+            else:
+                # Fresh collection (manual trigger / no pre-collected data)
+                from src.event_correlator import get_correlator
+                correlator = get_correlator(self.region)
+                
+                event = await correlator.collect(
+                    services=services,
+                    lookback_minutes=lookback_minutes,
+                )
+                
+                incident.collection_summary = {
+                    "collection_id": event.collection_id,
+                    "metrics": len(event.metrics),
+                    "alarms": len(event.alarms),
+                    "trail_events": len(event.trail_events),
+                    "anomalies": len(event.anomalies),
+                    "health_events": len(event.health_events),
+                    "duration_ms": event.duration_ms,
+                    "source": "fresh_collection",
+                }
             
-            event = await correlator.collect(
-                services=services,
-                lookback_minutes=lookback_minutes,  # User-configurable, default 15
-            )
-            
-            incident.collection_summary = {
-                "collection_id": event.collection_id,
-                "metrics": len(event.metrics),
-                "alarms": len(event.alarms),
-                "trail_events": len(event.trail_events),
-                "anomalies": len(event.anomalies),
-                "health_events": len(event.health_events),
-                "duration_ms": event.duration_ms,
-            }
             incident.stage_timings["collect"] = int((time.time() - stage_start) * 1000)
             
             # ── Stage 2: RCA Inference ────────────────────────────
