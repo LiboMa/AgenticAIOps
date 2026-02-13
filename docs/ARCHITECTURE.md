@@ -90,7 +90,7 @@ ProactiveAgent (定时巡检)          CloudWatch Alarm (事件触发)
 | 模块 | 文件 | 行数 | 功能 |
 |------|------|------|------|
 | **ProactiveAgent** | `src/proactive_agent.py` | 471 | 定时巡检，调度 DetectAgent |
-| **DetectAgent** | `src/detect_agent.py` | 374 | 采集 + 缓存 + 异常分发 |
+| **DetectAgent** | `src/detect_agent.py` | 418 | 采集 + 缓存 + Pattern Match + 异常分发 |
 | **EventCorrelator** | `src/event_correlator.py` | 729 | AWS 数据采集 (CloudWatch/Trail/Health) |
 | **IncidentOrchestrator** | `src/incident_orchestrator.py` | 660 | 闭环管道编排 |
 | **RCA Inference** | `src/rca_inference.py` | 368 | Bedrock Claude 根因分析 |
@@ -103,10 +103,9 @@ ProactiveAgent (定时巡检)          CloudWatch Alarm (事件触发)
 
 | 模块 | 文件 | 行数 | 功能 |
 |------|------|------|------|
-| **KnowledgeSearch** | `src/knowledge_search.py` | 375 | 统一检索 (L1 keyword / L2 vector / L3 RAG) |
+| **KnowledgeSearch** | `src/knowledge_search.py` | 665 | 统一检索 (L1 keyword / L2 vector / L3 RAG) + legacy compat |
 | **S3 KnowledgeBase** | `src/s3_knowledge_base.py` | 440 | S3 Pattern 持久化 |
 | **Vector Search** | `src/vector_search.py` | 438 | OpenSearch kNN + Bedrock Titan Embeddings |
-| **Operations Knowledge** | `src/operations_knowledge.py` | 337 | 兼容 shim (→ knowledge_search) |
 
 ### 3.3 RCA 引擎模块
 
@@ -209,7 +208,6 @@ agentic-aiops-mvp/
 │   ├── intent_classifier.py   # 意图分类
 │   ├── notifications.py       # Slack 通知
 │   ├── kubectl_wrapper.py     # K8s 封装
-│   ├── operations_knowledge.py # 兼容 shim
 │   ├── utils/time.py          # 时间工具
 │   ├── rca/                   # RCA 引擎 + Pattern Matcher
 │   ├── aci/                   # Agent-Cloud Interface
@@ -220,10 +218,10 @@ agentic-aiops-mvp/
 │   └── voting/                # Multi-Agent 投票
 ├── config/
 │   ├── plugins/               # 插件配置 YAML
-│   ├── sops/                  # SOP 定义 YAML
-│   └── patterns/              # Pattern 规则 YAML
+│   └── rca_patterns.yaml      # Pattern 规则 YAML
+├── agents/                    # Agent manifests (5 roles)
 ├── dashboard/                 # React 前端
-├── tests/                     # 测试 (503+ cases)
+├── tests/                     # 测试 (455+ cases)
 └── docs/                      # 文档
     ├── ARCHITECTURE.md        # 本文件 (唯一架构文档)
     └── designs/               # 设计文档
@@ -250,9 +248,6 @@ EC2: mbot-sg-1 (m6i.xlarge, ap-southeast-1)
 | 限制 | 描述 | 优先级 |
 |------|------|--------|
 | 单账户 | 仅支持一个 AWS 账户 | P1 |
-| DetectAgent → Pattern Match | 采集后未自动走 PatternMatcher | P1 |
-| DetectAgent → Vectorize | 采集后未自动向量化存储 | P1 |
-| S3 Bucket | `agentic-aiops-knowledge-base` 需手动创建 | P2 |
 | api_server.py 过大 | ~4,700 行，待拆分 Router | P2 |
 | 无 RBAC | 所有用户同权限 | P3 |
 | 单点部署 | 无 HA/灾备 | P3 |
