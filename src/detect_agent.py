@@ -61,6 +61,10 @@ class DetectResult:
     # Raw trigger data (alarm payload, etc.)
     raw_data: Dict[str, Any] = field(default_factory=dict)
 
+    # Collection config — what was collected (services, lookback, region)
+    # Lets RCA know coverage scope and decide if supplemental collection needed
+    collection_config: Dict[str, Any] = field(default_factory=dict)
+
     # Error (if collection failed)
     error: Optional[str] = None
 
@@ -112,6 +116,7 @@ class DetectResult:
             "freshness": self.freshness_label,  # alias
             "anomalies_detected": self.anomalies_detected,
             "pattern_matches": self.pattern_matches,
+            "collection_config": self.collection_config,
             "error": self.error,
             "has_correlated_event": self.correlated_event is not None,
         }
@@ -168,6 +173,12 @@ class DetectAgent:
                     lookback_minutes=lookback_minutes,
                 )
 
+                collection_cfg = {
+                    "services": services,
+                    "lookback_minutes": lookback_minutes,
+                    "region": self.region,
+                }
+
                 result = DetectResult(
                     detect_id=detect_id,
                     timestamp=now.isoformat(),
@@ -176,6 +187,7 @@ class DetectAgent:
                     ttl_seconds=ttl_seconds,
                     correlated_event=event,
                     anomalies_detected=event.anomalies if event else [],
+                    collection_config=collection_cfg,
                     error=None,
                 )
 
@@ -205,6 +217,35 @@ class DetectAgent:
             self._persist_result(result)
 
             return result
+
+    async def on_anomaly_detected(self, result: DetectResult):
+        """
+        Called when anomalies are found in a detection cycle.
+        Dispatches to the incident pipeline.
+
+        Override _dispatch() to change routing (e.g., EventBus in Phase B).
+        """
+        if result.anomalies_detected:
+            logger.info(
+                f"[{result.detect_id}] {len(result.anomalies_detected)} anomalies "
+                f"detected, dispatching to incident pipeline"
+            )
+            await self._dispatch(result)
+
+    async def _dispatch(self, result: DetectResult):
+        """
+        Dispatch DetectResult to the incident pipeline.
+
+        Phase A: Direct function call to IncidentOrchestrator.
+        Phase B: Replace with self.event_bus.publish(DetectEvent(result)).
+        Only this method changes during A→B migration.
+        """
+        from src.incident_orchestrator import get_orchestrator
+        orchestrator = get_orchestrator(self.region)
+        await orchestrator.handle_incident(
+            trigger_type=result.source.replace("_scan", "").replace("_trigger", ""),
+            detect_result=result,
+        )
 
     def get_latest(self) -> Optional[DetectResult]:
         """Get the most recent DetectResult (may be stale — caller checks)."""
