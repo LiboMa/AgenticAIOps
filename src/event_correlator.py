@@ -21,7 +21,9 @@ Design Decisions:
 
 import asyncio
 import boto3
+import json
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, List
 from dataclasses import dataclass, field, asdict
@@ -503,51 +505,81 @@ class EventCorrelator:
         )
     
     def _sync_collect_trail(self, lookback_minutes: int) -> List[TrailEvent]:
-        """Synchronous CloudTrail collection."""
+        """Synchronous CloudTrail collection with retry and page limit.
+        
+        Bug-013: CloudTrail API throttles under load. Mitigations:
+        - Exponential backoff retry (3 attempts, 1s/2s/4s)
+        - Max 3 pages to cap total API calls
+        - Specific ThrottlingException handling
+        """
         ct = self._session.client('cloudtrail')
         events = []
         
         start_time = datetime.now(timezone.utc) - timedelta(minutes=lookback_minutes)
+        max_pages = 3  # Cap pages to reduce API pressure
+        max_retries = 3
         
-        try:
-            # Focus on write events and errors
-            paginator = ct.get_paginator('lookup_events')
-            for page in paginator.paginate(
-                StartTime=start_time,
-                EndTime=datetime.now(timezone.utc),
-                MaxResults=50,
-                LookupAttributes=[{
-                    'AttributeKey': 'ReadOnly',
-                    'AttributeValue': 'false'
-                }],
-            ):
-                for event in page.get('Events', []):
-                    resources = event.get('Resources', [])
-                    resource_type = resources[0]['ResourceType'] if resources else ''
-                    resource_id = resources[0]['ResourceName'] if resources else ''
+        for attempt in range(max_retries):
+            try:
+                paginator = ct.get_paginator('lookup_events')
+                page_count = 0
+                for page in paginator.paginate(
+                    StartTime=start_time,
+                    EndTime=datetime.now(timezone.utc),
+                    MaxResults=50,
+                    LookupAttributes=[{
+                        'AttributeKey': 'ReadOnly',
+                        'AttributeValue': 'false'
+                    }],
+                ):
+                    page_count += 1
+                    for event in page.get('Events', []):
+                        resources = event.get('Resources', [])
+                        resource_type = resources[0]['ResourceType'] if resources else ''
+                        resource_id = resources[0]['ResourceName'] if resources else ''
+                        
+                        # Parse CloudTrail event for error info
+                        detail = {}
+                        try:
+                            detail = json.loads(event.get('CloudTrailEvent', '{}'))
+                        except (json.JSONDecodeError, TypeError):
+                            pass
+                        
+                        events.append(TrailEvent(
+                            event_name=event.get('EventName', ''),
+                            event_source=event.get('EventSource', ''),
+                            username=event.get('Username', 'unknown'),
+                            timestamp=event.get('EventTime', datetime.now(timezone.utc)).isoformat(),
+                            resource_type=resource_type,
+                            resource_id=resource_id,
+                            error_code=detail.get('errorCode', ''),
+                            error_message=detail.get('errorMessage', '')[:200] if detail.get('errorMessage') else '',
+                            read_only=False,
+                        ))
                     
-                    # Parse CloudTrail event for error info
-                    import json
-                    detail = {}
-                    try:
-                        detail = json.loads(event.get('CloudTrailEvent', '{}'))
-                    except (json.JSONDecodeError, TypeError):
-                        pass
-                    
-                    events.append(TrailEvent(
-                        event_name=event.get('EventName', ''),
-                        event_source=event.get('EventSource', ''),
-                        username=event.get('Username', 'unknown'),
-                        timestamp=event.get('EventTime', datetime.now(timezone.utc)).isoformat(),
-                        resource_type=resource_type,
-                        resource_id=resource_id,
-                        error_code=detail.get('errorCode', ''),
-                        error_message=detail.get('errorMessage', '')[:200] if detail.get('errorMessage') else '',
-                        read_only=False,
-                    ))
-        except ClientError as e:
-            logger.error(f"CloudTrail lookup failed: {e}")
+                    if page_count >= max_pages:
+                        logger.info(f"CloudTrail: hit page limit ({max_pages}), collected {len(events)} events")
+                        break
+                
+                # Success — exit retry loop
+                return events
+                
+            except ClientError as e:
+                error_code = e.response.get('Error', {}).get('Code', '')
+                if error_code in ('ThrottlingException', 'Throttling', 'RequestLimitExceeded'):
+                    backoff = 2 ** attempt  # 1s, 2s, 4s
+                    logger.warning(
+                        f"CloudTrail throttled (attempt {attempt + 1}/{max_retries}), "
+                        f"backing off {backoff}s"
+                    )
+                    time.sleep(backoff)
+                    events = []  # Reset for retry
+                    continue
+                else:
+                    logger.error(f"CloudTrail lookup failed: {e}")
+                    return events
         
+        logger.error(f"CloudTrail collection failed after {max_retries} retries")
         return events
     
     async def _collect_health_events(self) -> List[HealthEvent]:
