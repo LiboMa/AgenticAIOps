@@ -2734,9 +2734,11 @@ class RCAFeedbackRequest(BaseModel):
 
 
 @app.post("/api/rca/analyze")
-async def rca_analyze(request: RCAAnalyzeRequest):
+async def rca_analyze(request: RCAAnalyzeRequest = None):
     """Run RCA analysis with SOP recommendations."""
     try:
+        if request is None:
+            request = RCAAnalyzeRequest()
         from src.rca_sop_bridge import get_bridge
         bridge = get_bridge()
         
