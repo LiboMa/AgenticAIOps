@@ -250,7 +250,7 @@ class IncidentOrchestrator:
             bridge = get_bridge()
             
             # Match SOPs using the bridge (pass pre-computed RCA result)
-            matched_sops = bridge._find_matching_sops(rca_result)
+            matched_sops = bridge.match_sops(rca_result)
             
             # Enrich with auto_execute policy
             for sop in matched_sops:

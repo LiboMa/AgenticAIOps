@@ -1850,7 +1850,7 @@ POST /api/knowledge/learn
             
             # Step 3: SOP suggestion
             bridge = get_bridge()
-            sop_suggestions = bridge._find_matching_sops(rca_result)
+            sop_suggestions = bridge.match_sops(rca_result)
             
             # Build response
             from src.rca.models import Severity
@@ -2880,7 +2880,7 @@ async def rca_deep_analyze(
         
         # Step 3: SOP suggestions
         bridge = get_bridge()
-        sop_suggestions = bridge._find_matching_sops(rca_result)
+        sop_suggestions = bridge.match_sops(rca_result)
         
         return {
             "success": True,

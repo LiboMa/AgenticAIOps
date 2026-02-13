@@ -26,11 +26,11 @@ logger = logging.getLogger(__name__)
 # Maps RCA pattern IDs / root cause keywords to SOP IDs
 RCA_SOP_MAPPING = {
     # Pattern-based mapping (exact match)
-    "oom-killed": ["sop-ec2-high-cpu"],           # Memory → check resources
-    "crash-loop": ["sop-lambda-errors"],           # Crash → investigate errors
-    "image-pull-failure": [],                       # No built-in SOP yet
-    "node-not-ready": ["sop-ec2-high-cpu"],        # Node issues
-    "rds-connection-failure": ["sop-rds-failover"], # DB → failover SOP
+    "oom-killed": ["sop-ec2-high-cpu"],
+    "crash-loop": ["sop-lambda-errors"],
+    "image-pull-failure": [],
+    "node-not-ready": ["sop-ec2-unreachable"],
+    "rds-connection-failure": ["sop-rds-failover"],
     
     # Keyword-based mapping (fuzzy)
     "high_cpu": ["sop-ec2-high-cpu"],
@@ -38,7 +38,24 @@ RCA_SOP_MAPPING = {
     "database": ["sop-rds-failover"],
     "lambda_error": ["sop-lambda-errors"],
     "timeout": ["sop-lambda-errors"],
-    "disk_full": ["sop-ec2-high-cpu"],
+    "disk_full": ["sop-ec2-disk-full"],
+    "disk": ["sop-ec2-disk-full"],
+    "storage": ["sop-rds-storage-low"],
+    "5xx": ["sop-elb-5xx-spike"],
+    "error_spike": ["sop-elb-5xx-spike"],
+    "unreachable": ["sop-ec2-unreachable"],
+    "status_check": ["sop-ec2-unreachable"],
+    "throttl": ["sop-dynamodb-throttle"],
+    "dynamodb": ["sop-dynamodb-throttle"],
+    "capacity": ["sop-dynamodb-throttle"],
+    
+    # LLM pattern mappings
+    "llm-sonnet-resource": ["sop-ec2-high-cpu", "sop-ec2-disk-full"],
+    "llm-sonnet-config": ["sop-ec2-unreachable"],
+    "llm-sonnet-network": ["sop-ec2-unreachable", "sop-elb-5xx-spike"],
+    "llm-sonnet-application": ["sop-lambda-errors"],
+    "llm-opus-resource": ["sop-ec2-high-cpu", "sop-ec2-disk-full"],
+    "llm-opus-config": ["sop-ec2-unreachable"],
 }
 
 # Severity → auto-execution policy
@@ -206,6 +223,13 @@ class RCASOPBridge:
         self._execution_history[result.timestamp] = result
         
         return result
+    
+    def match_sops(self, rca_result) -> List[Dict[str, Any]]:
+        """
+        Public API: Match SOPs against an already-computed RCA result.
+        Use this when the orchestrator has already run RCA inference.
+        """
+        return self._find_matching_sops(rca_result)
     
     def _find_matching_sops(self, rca_result) -> List[Dict[str, Any]]:
         """Find SOPs matching an RCA result."""

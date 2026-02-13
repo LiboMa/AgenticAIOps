@@ -201,6 +201,11 @@ class SOPStore:
             self._create_ec2_high_cpu_sop(),
             self._create_rds_failover_sop(),
             self._create_lambda_error_sop(),
+            self._create_ec2_disk_full_sop(),
+            self._create_rds_storage_low_sop(),
+            self._create_elb_5xx_spike_sop(),
+            self._create_ec2_unreachable_sop(),
+            self._create_dynamodb_throttle_sop(),
         ]
         for sop in builtin_sops:
             self.sops[sop.sop_id] = sop
@@ -393,6 +398,174 @@ class SOPStore:
                 )
             ],
             tags=["lambda", "errors", "investigation"],
+            created_at=datetime.utcnow().isoformat()
+        )
+    
+    def _create_ec2_disk_full_sop(self) -> SOP:
+        """Built-in SOP for EC2 disk full."""
+        return SOP(
+            sop_id="sop-ec2-disk-full",
+            name="EC2 Disk Full Response",
+            description="Handle EC2 instances with disk usage > 90%",
+            category="incident", service="ec2", severity="high",
+            trigger_type="metric",
+            trigger_conditions={"metric": "DiskSpaceUtilization", "threshold": 90},
+            steps=[
+                SOPStep(step_id="1", name="Identify Large Files",
+                    description="Find files consuming disk space",
+                    step_type=StepType.AUTO, action="ssh_command",
+                    action_params={"command": "du -sh /var/log/* | sort -rh | head -10"},
+                    estimated_minutes=3),
+                SOPStep(step_id="2", name="Clean Old Logs",
+                    description="Rotate and clean old log files",
+                    step_type=StepType.AUTO, action="ssh_command",
+                    action_params={"command": "journalctl --vacuum-size=100M && find /var/log -name '*.gz' -mtime +7 -delete"},
+                    estimated_minutes=5),
+                SOPStep(step_id="3", name="Expand EBS Volume",
+                    description="If cleanup insufficient, expand EBS volume",
+                    step_type=StepType.APPROVAL, requires_approval=True,
+                    estimated_minutes=10),
+                SOPStep(step_id="4", name="Verify Disk Space",
+                    description="Confirm disk usage is below threshold",
+                    step_type=StepType.AUTO, action="check_metric",
+                    action_params={"metric": "DiskSpaceUtilization", "threshold": 80},
+                    estimated_minutes=3),
+            ],
+            tags=["ec2", "disk", "storage", "cleanup"],
+            created_at=datetime.utcnow().isoformat()
+        )
+    
+    def _create_rds_storage_low_sop(self) -> SOP:
+        """Built-in SOP for RDS low storage."""
+        return SOP(
+            sop_id="sop-rds-storage-low",
+            name="RDS Storage Low Response",
+            description="Handle RDS instances with storage < 10GB remaining",
+            category="incident", service="rds", severity="medium",
+            trigger_type="metric",
+            trigger_conditions={"metric": "FreeStorageSpace", "threshold": 10737418240, "operator": "<="},
+            steps=[
+                SOPStep(step_id="1", name="Check Current Usage",
+                    description="Describe RDS instance storage details",
+                    step_type=StepType.AUTO, action="rds_describe",
+                    estimated_minutes=2),
+                SOPStep(step_id="2", name="Create Snapshot",
+                    description="Create DB snapshot before changes",
+                    step_type=StepType.AUTO, action="rds_snapshot",
+                    estimated_minutes=5),
+                SOPStep(step_id="3", name="Expand Storage",
+                    description="Modify RDS instance to increase allocated storage",
+                    step_type=StepType.APPROVAL, requires_approval=True,
+                    action="rds_modify", action_params={"increase_gb": 50},
+                    estimated_minutes=15),
+                SOPStep(step_id="4", name="Verify Storage",
+                    description="Confirm storage expansion completed",
+                    step_type=StepType.AUTO, action="check_metric",
+                    estimated_minutes=5),
+            ],
+            tags=["rds", "storage", "expansion"],
+            created_at=datetime.utcnow().isoformat()
+        )
+    
+    def _create_elb_5xx_spike_sop(self) -> SOP:
+        """Built-in SOP for ELB 5xx spike."""
+        return SOP(
+            sop_id="sop-elb-5xx-spike",
+            name="ELB 5xx Error Spike Response",
+            description="Handle ALB/ELB with elevated 5xx error rate",
+            category="incident", service="elb", severity="high",
+            trigger_type="metric",
+            trigger_conditions={"metric": "HTTPCode_ELB_5XX_Count", "threshold": 10},
+            steps=[
+                SOPStep(step_id="1", name="Check Target Health",
+                    description="Verify target group health status",
+                    step_type=StepType.AUTO, action="describe_target_health",
+                    estimated_minutes=2),
+                SOPStep(step_id="2", name="Check Backend Logs",
+                    description="Review backend application logs for errors",
+                    step_type=StepType.MANUAL, estimated_minutes=5),
+                SOPStep(step_id="3", name="Deregister Unhealthy",
+                    description="Deregister unhealthy targets from target group",
+                    step_type=StepType.AUTO, action="deregister_targets",
+                    estimated_minutes=3),
+                SOPStep(step_id="4", name="Restart Unhealthy Instances",
+                    description="Reboot unhealthy backend instances",
+                    step_type=StepType.AUTO, action="reboot_instances",
+                    estimated_minutes=5),
+                SOPStep(step_id="5", name="Monitor Recovery",
+                    description="Monitor 5xx rate for 10 minutes",
+                    step_type=StepType.MANUAL, estimated_minutes=10),
+            ],
+            tags=["elb", "alb", "5xx", "errors", "backend"],
+            created_at=datetime.utcnow().isoformat()
+        )
+    
+    def _create_ec2_unreachable_sop(self) -> SOP:
+        """Built-in SOP for EC2 unreachable."""
+        return SOP(
+            sop_id="sop-ec2-unreachable",
+            name="EC2 Instance Unreachable Response",
+            description="Handle EC2 instances failing status checks",
+            category="incident", service="ec2", severity="high",
+            trigger_type="metric",
+            trigger_conditions={"metric": "StatusCheckFailed", "threshold": 1},
+            steps=[
+                SOPStep(step_id="1", name="Check Instance Status",
+                    description="Describe instance and system status checks",
+                    step_type=StepType.AUTO, action="describe_instance_status",
+                    estimated_minutes=2),
+                SOPStep(step_id="2", name="Reboot Instance",
+                    description="Attempt soft reboot",
+                    step_type=StepType.APPROVAL, action="reboot_instances",
+                    requires_approval=True, estimated_minutes=5),
+                SOPStep(step_id="3", name="Check Security Groups",
+                    description="Verify security group rules allow required traffic",
+                    step_type=StepType.AUTO, action="describe_security_groups",
+                    estimated_minutes=3),
+                SOPStep(step_id="4", name="Check VPC/Subnet",
+                    description="Verify VPC routing and subnet configuration",
+                    step_type=StepType.MANUAL, estimated_minutes=5),
+                SOPStep(step_id="5", name="Verify Recovery",
+                    description="Confirm instance is reachable",
+                    step_type=StepType.AUTO, action="check_metric",
+                    action_params={"metric": "StatusCheckFailed", "threshold": 0},
+                    estimated_minutes=3),
+            ],
+            tags=["ec2", "unreachable", "status", "network"],
+            created_at=datetime.utcnow().isoformat()
+        )
+    
+    def _create_dynamodb_throttle_sop(self) -> SOP:
+        """Built-in SOP for DynamoDB throttling."""
+        return SOP(
+            sop_id="sop-dynamodb-throttle",
+            name="DynamoDB Throttling Response",
+            description="Handle DynamoDB tables experiencing throttling events",
+            category="incident", service="dynamodb", severity="medium",
+            trigger_type="metric",
+            trigger_conditions={"metric": "ThrottledRequests", "threshold": 1},
+            steps=[
+                SOPStep(step_id="1", name="Check Table Capacity",
+                    description="Describe table provisioned/on-demand capacity",
+                    step_type=StepType.AUTO, action="describe_table",
+                    estimated_minutes=2),
+                SOPStep(step_id="2", name="Check Consumed Capacity",
+                    description="Review consumed RCU/WCU metrics",
+                    step_type=StepType.AUTO, action="check_metric",
+                    action_params={"metrics": ["ConsumedReadCapacityUnits", "ConsumedWriteCapacityUnits"]},
+                    estimated_minutes=3),
+                SOPStep(step_id="3", name="Increase Capacity",
+                    description="Increase RCU/WCU or switch to on-demand",
+                    step_type=StepType.AUTO, action="update_table",
+                    action_params={"billing_mode": "PAY_PER_REQUEST"},
+                    estimated_minutes=5),
+                SOPStep(step_id="4", name="Verify Throttling Stopped",
+                    description="Confirm no more throttling events",
+                    step_type=StepType.AUTO, action="check_metric",
+                    action_params={"metric": "ThrottledRequests", "threshold": 0},
+                    estimated_minutes=5),
+            ],
+            tags=["dynamodb", "throttle", "capacity", "rcu", "wcu"],
             created_at=datetime.utcnow().isoformat()
         )
     
