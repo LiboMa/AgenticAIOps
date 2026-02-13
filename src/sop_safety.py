@@ -497,8 +497,12 @@ class SOPSafetyLayer:
         if sop_id in SOP_RISK_MAP:
             return SOP_RISK_MAP[sop_id]
         
-        # Default based on SOP name heuristics
+        # Pattern matching: read-only operations → L0
         sop_lower = sop_id.lower()
+        if any(kw in sop_lower for kw in ['describe', 'list', 'get-', 'check', 'read']):
+            return RiskLevel.L0
+        
+        # Default based on SOP name heuristics
         if any(kw in sop_lower for kw in ['delete', 'terminate', 'destroy', 'failover']):
             return RiskLevel.L3
         if any(kw in sop_lower for kw in ['modify', 'config', 'stop', 'storage']):
