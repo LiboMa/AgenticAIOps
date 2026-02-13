@@ -98,7 +98,7 @@ except Exception as e:
 def get_hpa(ns=None): return {"hpas": []}
 
 from src.intent_classifier import analyze_query
-from src.voting.multi_agent_voting import extract_diagnosis, simple_vote
+from src.voting import extract_diagnosis, simple_vote
 
 # Import plugin system
 from src.plugins import PluginRegistry, PluginConfig
@@ -1584,7 +1584,7 @@ export SLACK_WEBHOOK_URL=https://hooks.slack.com/services/xxx
     # KB Stats
     if any(kw in message_lower for kw in ['kb stats', 'knowledge stats', '知识库统计']):
         try:
-            from src.operations_knowledge import get_knowledge_store
+            from src.knowledge_search import get_knowledge_store
             store = get_knowledge_store()
             stats = store.get_stats()
             
@@ -1611,7 +1611,7 @@ export SLACK_WEBHOOK_URL=https://hooks.slack.com/services/xxx
     # KB Search (keyword-based)
     if any(kw in message_lower for kw in ['kb search', 'knowledge search', '知识搜索']) and 'semantic' not in message_lower:
         try:
-            from src.operations_knowledge import get_knowledge_store
+            from src.knowledge_search import get_knowledge_store
             store = get_knowledge_store()
             
             import re
@@ -1750,7 +1750,7 @@ POST /api/knowledge/learn
             pattern_id = match.group(1)
             is_helpful = match.group(2) in ['good', 'helpful']
             
-            from src.operations_knowledge import get_feedback_handler
+            from src.knowledge_search import get_feedback_handler
             handler = get_feedback_handler()
             
             if handler.submit_feedback(pattern_id, is_helpful):
@@ -4102,7 +4102,7 @@ async def send_notification(request: AlertRequest):
 async def get_ops_knowledge_stats():
     """Get operations knowledge statistics."""
     try:
-        from src.operations_knowledge import get_knowledge_store
+        from src.knowledge_search import get_knowledge_store
         store = get_knowledge_store()
         return store.get_stats()
     except Exception as e:
@@ -4118,7 +4118,7 @@ async def list_ops_patterns(
 ):
     """List learned patterns."""
     try:
-        from src.operations_knowledge import get_knowledge_store
+        from src.knowledge_search import get_knowledge_store
         store = get_knowledge_store()
         patterns = store.search_patterns(
             service=service,
@@ -4138,7 +4138,7 @@ async def list_ops_patterns(
 async def search_ops_knowledge(request: Dict[str, Any]):
     """Search operations knowledge base."""
     try:
-        from src.operations_knowledge import get_knowledge_store
+        from src.knowledge_search import get_knowledge_store
         store = get_knowledge_store()
         
         keywords = request.get('keywords', [])
@@ -4175,7 +4175,7 @@ class IncidentLearnRequest(BaseModel):
 async def learn_from_incident(request: IncidentLearnRequest):
     """Learn pattern from a resolved incident."""
     try:
-        from src.operations_knowledge import get_incident_learner, IncidentRecord
+        from src.knowledge_search import get_incident_learner, IncidentRecord
         learner = get_incident_learner()
         
         incident = IncidentRecord(
@@ -4194,7 +4194,7 @@ async def learn_from_incident(request: IncidentLearnRequest):
         
         if pattern:
             # Save the pattern
-            from src.operations_knowledge import get_knowledge_store
+            from src.knowledge_search import get_knowledge_store
             store = get_knowledge_store()
             store.save_pattern(pattern)
             
@@ -4221,7 +4221,7 @@ class FeedbackRequest(BaseModel):
 async def submit_pattern_feedback(request: FeedbackRequest):
     """Submit feedback for a pattern."""
     try:
-        from src.operations_knowledge import get_feedback_handler
+        from src.knowledge_search import get_feedback_handler
         handler = get_feedback_handler()
         
         success = handler.submit_feedback(

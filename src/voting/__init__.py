@@ -25,6 +25,101 @@ logger = logging.getLogger(__name__)
 
 
 # =============================================================================
+# Diagnosis Extraction (moved from multi_agent_voting.py)
+# =============================================================================
+
+DIAGNOSIS_PATTERNS = {
+    "oom": [
+        "oom", "out of memory", "memory limit", "killed", "oomkilled",
+        "memory exceeded", "内存不足", "内存溢出"
+    ],
+    "crashloop": [
+        "crashloop", "crash loop", "backoff", "crashloopbackoff",
+        "container crash", "重启", "崩溃循环"
+    ],
+    "imagepull": [
+        "imagepull", "image pull", "pull image", "imagepullbackoff",
+        "image not found", "镜像拉取", "镜像失败"
+    ],
+    "pending": [
+        "pending", "unschedulable", "insufficient", "no nodes",
+        "无法调度", "等待", "资源不足"
+    ],
+    "network": [
+        "network", "connection", "timeout", "dns", "refused",
+        "unreachable", "网络", "连接失败"
+    ],
+    "config": [
+        "config", "env", "secret", "configmap", "missing",
+        "invalid", "配置", "环境变量"
+    ],
+    "resource": [
+        "resource", "cpu", "quota", "limit", "request",
+        "资源", "配额"
+    ],
+    "permission": [
+        "permission", "denied", "forbidden", "rbac", "unauthorized",
+        "权限", "拒绝"
+    ],
+    "healthy": [
+        "healthy", "running", "ready", "ok", "success",
+        "正常", "健康", "运行中"
+    ]
+}
+
+
+def extract_diagnosis(response: str) -> str:
+    """
+    Extract diagnosis conclusion from agent response.
+
+    Args:
+        response: Agent's text response
+
+    Returns:
+        Diagnosis category (e.g., "oom", "crashloop", "healthy")
+    """
+    response_lower = response.lower()
+    scores = {}
+
+    for diagnosis, keywords in DIAGNOSIS_PATTERNS.items():
+        score = sum(1 for kw in keywords if kw in response_lower)
+        if score > 0:
+            scores[diagnosis] = score
+
+    if scores:
+        return max(scores, key=scores.get)
+    return "unknown"
+
+
+def simple_vote(responses: List[str]) -> Dict[str, Any]:
+    """
+    Simple voting from a list of pre-generated responses.
+
+    Useful when you already have multiple responses and just need to vote.
+
+    Args:
+        responses: List of agent response strings
+
+    Returns:
+        Voting result dict
+    """
+    diagnoses = [extract_diagnosis(r) for r in responses]
+    vote_count = Counter(diagnoses)
+
+    if not vote_count:
+        return {"diagnosis": "unknown", "confidence": 0.0, "votes": {}}
+
+    winner, win_count = vote_count.most_common(1)[0]
+
+    return {
+        "diagnosis": winner,
+        "confidence": round(win_count / len(diagnoses), 2),
+        "votes": dict(vote_count),
+        "consensus": win_count == len(diagnoses)
+    }
+
+
+# =============================================================================
 # Enums and Types
 # =============================================================================
 
@@ -372,7 +467,6 @@ class MultiAgentVoting:
         
         # Import diagnosis extraction from existing module
         if extract_fn is None:
-            from .multi_agent_voting import extract_diagnosis
             extract_fn = extract_diagnosis
         
         for agent_id, response in agent_responses.items():
@@ -504,8 +598,6 @@ def vote_with_agents(
         }
     else:
         # Use existing simple voting
-        from .multi_agent_voting import simple_vote
-        
         responses = list(agent_responses.values())
         result = simple_vote(responses)
         result["method"] = "simple_voting"
@@ -527,4 +619,7 @@ __all__ = [
     "VotingWeightCalculator",
     "MultiAgentVoting",
     "vote_with_agents",
+    "extract_diagnosis",
+    "simple_vote",
+    "DIAGNOSIS_PATTERNS",
 ]
