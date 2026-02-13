@@ -411,7 +411,7 @@ class AWSTools:
             
             events = [
                 {
-                    "timestamp": datetime.fromtimestamp(e["timestamp"] / 1000).isoformat(),
+                    "timestamp": datetime.fromtimestamp(e["timestamp"] / 1000, tz=timezone.utc).isoformat(),
                     "message": e["message"],
                     "log_stream": e["logStreamName"]
                 }

@@ -374,8 +374,8 @@ class TestSingleton:
 
             mod._detect_agent = a1
 
-            result1 = await get_detect_agent()
-            result2 = await get_detect_agent()
+            result1 = get_detect_agent()
+            result2 = get_detect_agent()
 
             assert result1 is result2
 

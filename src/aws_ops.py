@@ -604,7 +604,7 @@ class AWSServiceOps:
                 "filter": filter_pattern,
                 "events": [
                     {
-                        "timestamp": datetime.fromtimestamp(e['timestamp'] / 1000).isoformat(),
+                        "timestamp": datetime.fromtimestamp(e['timestamp'] / 1000, tz=timezone.utc).isoformat(),
                         "message": e['message'][:500],  # Truncate long messages
                     }
                     for e in response.get('events', [])

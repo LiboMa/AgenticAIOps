@@ -20,6 +20,7 @@ Design ref: docs/designs/SOP_RCA_ENHANCEMENT_DESIGN.md
 import logging
 import time
 from datetime import datetime, timedelta, timezone
+from src.utils.time import ensure_aware
 from typing import Optional, Dict, Any, List, Tuple
 from dataclasses import dataclass, field, asdict
 from enum import Enum
@@ -434,7 +435,7 @@ class SOPSafetyLayer:
             return approval
         
         # Check expiry
-        expires = datetime.fromisoformat(approval.expires_at)
+        expires = ensure_aware(approval.expires_at)
         if datetime.now(timezone.utc) > expires:
             approval.approved = False
             logger.warning(f"Approval {approval_id} expired")

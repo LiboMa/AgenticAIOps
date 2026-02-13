@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 from ..models import TelemetryResult, ResultStatus, EventEntry
+from ...utils.time import ensure_aware
 
 logger = logging.getLogger(__name__)
 
@@ -143,7 +144,7 @@ class EventsProvider:
             if "." in timestamp_str:
                 timestamp_str = timestamp_str.split(".")[0] + "+00:00"
             
-            timestamp = datetime.fromisoformat(timestamp_str)
+            timestamp = ensure_aware(datetime.fromisoformat(timestamp_str))
             
             return EventEntry(
                 timestamp=timestamp,

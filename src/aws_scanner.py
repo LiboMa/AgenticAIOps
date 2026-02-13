@@ -715,7 +715,7 @@ class AWSCloudScanner:
                 "filter_pattern": filter_pattern,
                 "events": [
                     {
-                        "timestamp": datetime.fromtimestamp(e['timestamp'] / 1000).isoformat(),
+                        "timestamp": datetime.fromtimestamp(e['timestamp'] / 1000, tz=timezone.utc).isoformat(),
                         "message": e['message'],
                     }
                     for e in response.get('events', [])

@@ -1,0 +1,22 @@
+{
+  "detect_id": "det-ec7beb5f5d9b",
+  "timestamp": "2026-02-13T12:42:10.475467+00:00",
+  "source": "proactive_scan",
+  "ttl_seconds": 300,
+  "age_seconds": 0.0,
+  "is_stale": false,
+  "freshness_label": "fresh",
+  "anomalies_detected": [
+    {
+      "resource": "i-abc123",
+      "metric": "CPUUtilization",
+      "value": 95,
+      "severity": "critical"
+    }
+  ],
+  "pattern_matches": [],
+  "collection_duration_ms": 1200,
+  "region": "ap-southeast-1",
+  "error": null,
+  "has_correlated_event": true
+}

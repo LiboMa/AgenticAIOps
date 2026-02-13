@@ -1769,11 +1769,12 @@ POST /api/knowledge/learn
     if any(kw in message_lower for kw in ['incident run', '事件处理', 'incident handle', 'closed loop', '闭环']):
         try:
             import asyncio, re
-            from src.incident_orchestrator import get_orchestrator
+            from src.detect_agent import get_detect_agent
             
             # Parse options
             dry_run = 'dry' in message_lower or '预览' in message_lower
             auto_exec = 'auto' in message_lower or '自动' in message_lower
+            force_refresh = 'refresh' in message_lower or '刷新' in message_lower
             
             # Parse lookback (e.g., "incident run 30min")
             lb_match = re.search(r'(\d+)\s*min', message, re.IGNORECASE)
@@ -1782,11 +1783,10 @@ POST /api/knowledge/learn
             match = re.search(r'(?:incident|事件|闭环)\s+(?:run|handle|处理)?\s*(ec2|rds|lambda)?', message, re.IGNORECASE)
             service_filter = [match.group(1).lower()] if match and match.group(1) else None
             
-            orchestrator = get_orchestrator(_current_region)
-            
-            incident = await orchestrator.handle_incident(
+            # Use DetectAgent: collect once, reuse cached data
+            detect = get_detect_agent(_current_region)
+            incident = await detect.trigger_incident(
                     trigger_type="manual",
-                    trigger_data={"source": "chat", "message": message},
                     services=service_filter,
                     auto_execute=auto_exec,
                     dry_run=dry_run,
@@ -2970,14 +2970,21 @@ async def incident_run(
     services: str = None,
     auto_execute: bool = False,
     dry_run: bool = False,
+    force_refresh: bool = False,
 ):
-    """Full closed-loop incident pipeline: Collect → Analyze → Match → Safety → Execute."""
+    """Full closed-loop incident pipeline via DetectAgent.
+    
+    Uses DetectAgent for data collection with caching:
+    - First call: collects from AWS (~18s)
+    - Subsequent calls within 5min: reuses cached data (~1s)
+    - force_refresh=true: forces fresh collection
+    """
     try:
-        from src.incident_orchestrator import get_orchestrator
-        orchestrator = get_orchestrator(_current_region)
+        from src.detect_agent import get_detect_agent
+        detect = get_detect_agent(_current_region)
         service_list = services.split(',') if services else None
         
-        incident = await orchestrator.handle_incident(
+        incident = await detect.trigger_incident(
             trigger_type=trigger_type,
             services=service_list,
             auto_execute=auto_execute,
@@ -2987,6 +2994,15 @@ async def incident_run(
     except Exception as e:
         import traceback
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
+
+
+
+@app.get("/api/detect/status")
+async def detect_status():
+    """DetectAgent status: cache state, data freshness."""
+    from src.detect_agent import get_detect_agent
+    detect = get_detect_agent(_current_region)
+    return {"success": True, **detect.status()}
 
 
 @app.get("/api/incident/list")

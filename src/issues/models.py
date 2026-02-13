@@ -6,6 +6,7 @@ Defines the core data structures for issue tracking.
 
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
+from src.utils.time import ensure_aware
 from enum import Enum
 from typing import Optional, List, Dict, Any
 import uuid
@@ -131,9 +132,9 @@ class Issue:
             suggested_fix=data.get("suggested_fix", ""),
             auto_fixable=data.get("auto_fixable", True),
             fix_actions=data.get("fix_actions", []),
-            created_at=datetime.fromisoformat(data["created_at"]) if data.get("created_at") else datetime.now(timezone.utc),
-            updated_at=datetime.fromisoformat(data["updated_at"]) if data.get("updated_at") else datetime.now(timezone.utc),
-            resolved_at=datetime.fromisoformat(data["resolved_at"]) if data.get("resolved_at") else None,
+            created_at=ensure_aware(data["created_at"]) if data.get("created_at") else datetime.now(timezone.utc),
+            updated_at=ensure_aware(data["updated_at"]) if data.get("updated_at") else datetime.now(timezone.utc),
+            resolved_at=ensure_aware(data["resolved_at"]) if data.get("resolved_at") else None,
             metadata=data.get("metadata", {}),
         )
     

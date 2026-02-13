@@ -9,6 +9,7 @@ import sqlite3
 import json
 import logging
 from datetime import datetime, timedelta, timezone
+from src.utils.time import ensure_aware
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 from contextlib import contextmanager
@@ -319,9 +320,9 @@ class IssueStore:
             suggested_fix=row["suggested_fix"] or "",
             auto_fixable=bool(row["auto_fixable"]),
             fix_actions=json.loads(row["fix_actions"]) if row["fix_actions"] else [],
-            created_at=datetime.fromisoformat(row["created_at"]),
-            updated_at=datetime.fromisoformat(row["updated_at"]),
-            resolved_at=datetime.fromisoformat(row["resolved_at"]) if row["resolved_at"] else None,
+            created_at=ensure_aware(row["created_at"]),
+            updated_at=ensure_aware(row["updated_at"]),
+            resolved_at=ensure_aware(row["resolved_at"]) if row["resolved_at"] else None,
             metadata=json.loads(row["metadata"]) if row["metadata"] else {},
         )
     

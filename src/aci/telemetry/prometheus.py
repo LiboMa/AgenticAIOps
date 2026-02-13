@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import urljoin
 
 from ..models import TelemetryResult, ResultStatus, MetricPoint
+from ...utils.time import ensure_aware
 
 logger = logging.getLogger(__name__)
 
@@ -247,7 +248,7 @@ class PrometheusProvider:
             value_pair = item.get("value", [])
             
             if len(value_pair) >= 2:
-                timestamp = datetime.fromtimestamp(float(value_pair[0]))
+                timestamp = ensure_aware(datetime.fromtimestamp(float(value_pair[0]), tz=timezone.utc))
                 value = float(value_pair[1]) if value_pair[1] != "NaN" else 0.0
                 
                 metrics.append(MetricPoint(
@@ -270,7 +271,7 @@ class PrometheusProvider:
             data_points = []
             for value_pair in values:
                 if len(value_pair) >= 2:
-                    timestamp = datetime.fromtimestamp(float(value_pair[0]))
+                    timestamp = ensure_aware(datetime.fromtimestamp(float(value_pair[0]), tz=timezone.utc))
                     value = float(value_pair[1]) if value_pair[1] != "NaN" else 0.0
                     data_points.append({
                         "timestamp": timestamp.isoformat(),

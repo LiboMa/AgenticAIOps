@@ -36,6 +36,7 @@ class TriggerType(Enum):
     HEALTH_EVENT = "health_event"
     MANUAL = "manual"
     PROACTIVE = "proactive"
+    DETECT_AGENT = "detect_agent"
 
 
 class IncidentStatus(Enum):

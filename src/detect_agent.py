@@ -1,307 +1,154 @@
 """
-Detect Agent — Step 1 of Closed-Loop Enhancement
+Detect Agent — Bridges existing data collection to Incident Orchestrator.
 
-Wraps EventCorrelator.collect() with caching, TTL, and concurrency protection.
-Does NOT duplicate collection logic — delegates to EventCorrelator.
+Architecture (per CLOSED_LOOP_AIOPS_DESIGN.md):
+    Detect Agent (持续采集+异常检测)
+         │ 检测到异常 → 传递已采集数据
+         ▼
+    RCA Agent (不再重新采集)
+         │
+         ▼
+    Action Agent (SOP 匹配 + 安全执行)
 
-Design ref: docs/designs/DETECT_AGENT_DATA_REUSE_DESIGN.md
-Reviewer feedback: R1 (TTL/freshness), R3 (delegation), R5 (concurrency)
+This module wraps AWSScanner + EventCorrelator so that:
+1. Data is collected ONCE and cached
+2. IncidentOrchestrator receives pre_collected_event (skips Stage 1)
+3. Manual `incident run` also reuses cached data if fresh enough
 """
 
 import asyncio
-import fcntl
-import hashlib
-import json
 import logging
-import os
+import time
 from datetime import datetime, timezone
-from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, List
-
-from src.event_correlator import (
-    CorrelatedEvent,
-    EventCorrelator,
-    get_correlator,
-)
 
 logger = logging.getLogger(__name__)
 
-# Persistence directory
-DETECT_CACHE_DIR = os.path.join(os.path.dirname(__file__), '..', 'data', 'detect_cache')
-
-
-# =============================================================================
-# Data Models
-# =============================================================================
-
-@dataclass
-class DetectResult:
-    """
-    Output of a detection run.
-
-    Wraps a CorrelatedEvent with freshness metadata so downstream
-    consumers (IncidentOrchestrator) can decide whether to reuse or
-    re-collect.
-    """
-
-    detect_id: str
-    timestamp: str                                   # ISO-8601 UTC
-    source: str                                      # "proactive_scan" | "alarm_trigger" | "manual"
-    correlated_event: Optional[CorrelatedEvent] = None
-    anomalies_detected: List[Dict[str, Any]] = field(default_factory=list)
-    pattern_matches: List[Dict[str, Any]] = field(default_factory=list)
-
-    # ── Freshness management (R1) ──
-    ttl_seconds: int = 300                           # 5 min, aligned with heartbeat
-
-    # ── Metadata ──
-    collection_duration_ms: int = 0
-    region: str = "ap-southeast-1"
-    error: Optional[str] = None
-
-    # ------------------------------------------------------------------
-    # Properties
-    # ------------------------------------------------------------------
-
-    @property
-    def age_seconds(self) -> float:
-        """Seconds since this result was created."""
-        ts = datetime.fromisoformat(self.timestamp)
-        return (datetime.now(timezone.utc) - ts).total_seconds()
-
-    @property
-    def is_stale(self) -> bool:
-        """True when data is older than TTL."""
-        return self.age_seconds > self.ttl_seconds
-
-    @property
-    def freshness_label(self) -> str:
-        """Human-readable freshness tag for logging / RCA context."""
-        age = self.age_seconds
-        if age < 60:
-            return "fresh"       # < 1 min
-        elif age < self.ttl_seconds:
-            return "warm"        # 1-5 min
-        return "stale"           # > TTL
-
-    # ------------------------------------------------------------------
-    # Serialization
-    # ------------------------------------------------------------------
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Serialize to JSON-safe dict (excludes CorrelatedEvent internals)."""
-        return {
-            "detect_id": self.detect_id,
-            "timestamp": self.timestamp,
-            "source": self.source,
-            "ttl_seconds": self.ttl_seconds,
-            "age_seconds": round(self.age_seconds, 1),
-            "is_stale": self.is_stale,
-            "freshness_label": self.freshness_label,
-            "anomalies_detected": self.anomalies_detected,
-            "pattern_matches": self.pattern_matches,
-            "collection_duration_ms": self.collection_duration_ms,
-            "region": self.region,
-            "error": self.error,
-            "has_correlated_event": self.correlated_event is not None,
-        }
-
-    def summary(self) -> str:
-        """One-line summary for logs."""
-        anomaly_count = len(self.anomalies_detected)
-        return (
-            f"DetectResult({self.detect_id}) "
-            f"[{self.freshness_label}|{self.age_seconds:.0f}s] "
-            f"anomalies={anomaly_count} "
-            f"collect={self.collection_duration_ms}ms "
-            f"source={self.source}"
-        )
-
-
-# =============================================================================
-# Detect Agent
-# =============================================================================
 
 class DetectAgent:
     """
-    Detection layer — owns data collection and caching.
-
-    Delegates actual AWS calls to EventCorrelator (stable, read-only).
-    Provides cached DetectResult to IncidentOrchestrator so Stage 1
-    can be skipped when fresh data exists.
-
-    Concurrency: asyncio.Lock ensures only one collection runs at a time (R5).
+    Detect Agent: owns data collection and anomaly detection.
+    
+    Provides pre-collected data to IncidentOrchestrator,
+    eliminating duplicate AWS API calls.
     """
-
+    
+    CACHE_TTL_SECONDS = 300  # 5 minutes
+    
     def __init__(self, region: str = "ap-southeast-1"):
         self.region = region
-        self._correlator: EventCorrelator = get_correlator(region)
-        self._collecting = asyncio.Lock()            # R5: mutual exclusion
-        self._latest: Optional[DetectResult] = None
-        self._cache: Dict[str, DetectResult] = {}
-
-        # Ensure persistence dir exists
-        os.makedirs(DETECT_CACHE_DIR, exist_ok=True)
-
-    # ------------------------------------------------------------------
-    # Core detection
-    # ------------------------------------------------------------------
-
-    async def run_detection(
+        self._cached_event = None
+        self._cache_timestamp: float = 0
+        self._collecting = False
+    
+    @property
+    def has_fresh_data(self) -> bool:
+        if self._cached_event is None:
+            return False
+        return (time.time() - self._cache_timestamp) < self.CACHE_TTL_SECONDS
+    
+    @property
+    def cache_age_seconds(self) -> float:
+        if self._cached_event is None:
+            return float('inf')
+        return time.time() - self._cache_timestamp
+    
+    async def collect(
         self,
-        source: str = "proactive_scan",
         services: Optional[List[str]] = None,
         lookback_minutes: int = 15,
-        ttl_seconds: int = 300,
-    ) -> DetectResult:
+        force_refresh: bool = False,
+    ):
+        """Collect from AWS — returns cached data if fresh."""
+        if self.has_fresh_data and not force_refresh and services is None:
+            logger.info(
+                f"DetectAgent: Reusing cached data "
+                f"(age={self.cache_age_seconds:.0f}s)"
+            )
+            return self._cached_event
+        
+        if self._collecting:
+            for _ in range(60):
+                await asyncio.sleep(1)
+                if not self._collecting and self._cached_event is not None:
+                    return self._cached_event
+        
+        self._collecting = True
+        try:
+            from src.event_correlator import get_correlator
+            correlator = get_correlator(self.region)
+            
+            start = time.time()
+            event = await correlator.collect(
+                services=services,
+                lookback_minutes=lookback_minutes,
+            )
+            duration = time.time() - start
+            
+            if services is None:
+                self._cached_event = event
+                self._cache_timestamp = time.time()
+                logger.info(f"DetectAgent: Collected in {duration:.1f}s, cached")
+            
+            return event
+        finally:
+            self._collecting = False
+    
+    async def trigger_incident(
+        self,
+        trigger_type: str = "detect_agent",
+        services: Optional[List[str]] = None,
+        auto_execute: bool = False,
+        dry_run: bool = True,
+        lookback_minutes: int = 15,
+    ):
         """
-        Run a detection cycle.
-
-        1. Acquire lock (only one collection at a time).
-        2. Delegate to EventCorrelator.collect().
-        3. Wrap result in DetectResult with TTL metadata.
-        4. Cache and persist.
-
-        Args:
-            source: Origin of this detection run.
-            services: AWS services to scan (default: ec2, rds, lambda).
-            lookback_minutes: How far back to collect.
-            ttl_seconds: TTL for this result.
-
-        Returns:
-            DetectResult with correlated event and anomalies.
+        Full detect → RCA → SOP pipeline, reusing cached data.
+        
+        1. Detect Agent collects data (or reuses cache)
+        2. Passes pre_collected_event to IncidentOrchestrator
+        3. Orchestrator skips Stage 1, goes directly to RCA
         """
-        async with self._collecting:
-            detect_id = self._generate_id()
-            now = datetime.now(timezone.utc)
-
-            logger.info(f"[{detect_id}] Starting detection (source={source})")
-
-            try:
-                # Delegate to EventCorrelator — the ONLY collection path
-                event: CorrelatedEvent = await self._correlator.collect(
-                    services=services,
-                    lookback_minutes=lookback_minutes,
-                )
-
-                result = DetectResult(
-                    detect_id=detect_id,
-                    timestamp=now.isoformat(),
-                    source=source,
-                    correlated_event=event,
-                    anomalies_detected=event.anomalies,
-                    ttl_seconds=ttl_seconds,
-                    collection_duration_ms=event.duration_ms,
-                    region=self.region,
-                )
-
-                logger.info(f"[{detect_id}] Detection complete: {result.summary()}")
-
-            except Exception as e:
-                logger.error(f"[{detect_id}] Detection failed: {e}")
-                result = DetectResult(
-                    detect_id=detect_id,
-                    timestamp=now.isoformat(),
-                    source=source,
-                    ttl_seconds=ttl_seconds,
-                    region=self.region,
-                    error=str(e),
-                )
-
-            # Cache
-            self._latest = result
-            self._cache[detect_id] = result
-
-            # Persist (with file lock — R5)
-            self._persist_result(result)
-
-            # Prune old entries
-            self._prune_cache()
-
-            return result
-
-    # ------------------------------------------------------------------
-    # Cache access
-    # ------------------------------------------------------------------
-
-    def get_latest(self) -> Optional[DetectResult]:
-        """Return the most recent DetectResult (may be stale)."""
-        return self._latest
-
-    def get_latest_fresh(self) -> Optional[DetectResult]:
-        """Return latest result only if still within TTL."""
-        if self._latest and not self._latest.is_stale:
-            return self._latest
-        return None
-
-    def get_result(self, detect_id: str) -> Optional[DetectResult]:
-        """Lookup a specific result by ID."""
-        return self._cache.get(detect_id)
-
-    # ------------------------------------------------------------------
-    # Health (R5)
-    # ------------------------------------------------------------------
-
-    def health(self) -> Dict[str, Any]:
-        """Status snapshot for monitoring."""
+        from src.incident_orchestrator import get_orchestrator
+        
+        event = await self.collect(
+            services=services,
+            lookback_minutes=lookback_minutes,
+        )
+        
+        orchestrator = get_orchestrator(self.region)
+        incident = await orchestrator.handle_incident(
+            trigger_type=trigger_type,
+            trigger_data={"source": "detect_agent", "cache_age": self.cache_age_seconds},
+            services=services,
+            auto_execute=auto_execute,
+            dry_run=dry_run,
+            pre_collected_event=event,
+        )
+        
+        return incident
+    
+    def invalidate_cache(self):
+        self._cached_event = None
+        self._cache_timestamp = 0
+    
+    def status(self) -> Dict[str, Any]:
         return {
-            "status": "collecting" if self._collecting.locked() else "idle",
-            "region": self.region,
-            "latest_detect_id": self._latest.detect_id if self._latest else None,
-            "latest_age_seconds": round(self._latest.age_seconds, 1) if self._latest else None,
-            "latest_freshness": self._latest.freshness_label if self._latest else None,
-            "latest_is_stale": self._latest.is_stale if self._latest else None,
-            "cache_size": len(self._cache),
+            "has_cached_data": self._cached_event is not None,
+            "cache_age_seconds": round(self.cache_age_seconds, 1) if self._cached_event else None,
+            "cache_ttl_seconds": self.CACHE_TTL_SECONDS,
+            "cache_fresh": self.has_fresh_data,
+            "collecting": self._collecting,
         }
 
-    # ------------------------------------------------------------------
-    # Internals
-    # ------------------------------------------------------------------
 
-    @staticmethod
-    def _generate_id() -> str:
-        """Short unique ID for this detection run."""
-        now = datetime.now(timezone.utc).isoformat()
-        return "det-" + hashlib.sha256(now.encode()).hexdigest()[:12]
-
-    def _persist_result(self, result: DetectResult):
-        """Write result to disk with file-level lock (R5)."""
-        try:
-            path = os.path.join(DETECT_CACHE_DIR, f"{result.detect_id}.json")
-            with open(path, 'w') as f:
-                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-                try:
-                    json.dump(result.to_dict(), f, indent=2, default=str)
-                finally:
-                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-            logger.debug(f"Persisted {result.detect_id} to {path}")
-        except Exception as e:
-            logger.warning(f"Failed to persist {result.detect_id}: {e}")
-
-    def _prune_cache(self, max_entries: int = 50):
-        """Remove oldest cached results beyond limit."""
-        if len(self._cache) <= max_entries:
-            return
-        sorted_ids = sorted(
-            self._cache.keys(),
-            key=lambda k: self._cache[k].timestamp,
-        )
-        for old_id in sorted_ids[: len(sorted_ids) - max_entries]:
-            del self._cache[old_id]
-
-
-# =============================================================================
-# Singleton (R5: asyncio.Lock protected)
-# =============================================================================
-
+# Singleton
 _detect_agent: Optional[DetectAgent] = None
-_init_lock = asyncio.Lock()
 
 
-async def get_detect_agent(region: str = "ap-southeast-1") -> DetectAgent:
-    """Get or create the DetectAgent singleton (async-safe)."""
+def get_detect_agent(region: str = "ap-southeast-1") -> DetectAgent:
+    """Get or create the singleton DetectAgent."""
     global _detect_agent
-    async with _init_lock:
-        if _detect_agent is None:
-            _detect_agent = DetectAgent(region=region)
-        return _detect_agent
+    if _detect_agent is None or _detect_agent.region != region:
+        _detect_agent = DetectAgent(region=region)
+    return _detect_agent
