@@ -698,3 +698,243 @@ class TestEnums:
         assert IncidentStatus.TRIGGERED.value == "triggered"
         assert IncidentStatus.COMPLETED.value == "completed"
         assert IncidentStatus.FAILED.value == "failed"
+
+
+# =============================================================================
+# Additional Pipeline Paths
+# =============================================================================
+
+class TestHandleIncidentAdvanced:
+    """Cover auto_execute, approval, dry_run, no-SOP paths."""
+
+    @pytest.fixture
+    def orchestrator(self):
+        return IncidentOrchestrator(region="ap-southeast-1")
+
+    def _setup_full_pipeline_mocks(self, rca_result=None, matched_sops=None,
+                                    safety_passed=True, execution_mode="auto"):
+        """Helper to set up all pipeline stage mocks."""
+        rca = rca_result or _make_rca_result()
+        event = _make_correlated_event()
+
+        mock_correlator = MagicMock()
+        mock_correlator.collect = AsyncMock(return_value=event)
+
+        mock_engine = MagicMock()
+        mock_engine.analyze = AsyncMock(return_value=rca)
+
+        mock_bridge = MagicMock()
+        mock_bridge.match_sops.return_value = matched_sops or []
+
+        mock_safety = MagicMock()
+        mock_safety.check.return_value = MagicMock(
+            passed=safety_passed,
+            execution_mode=execution_mode,
+            to_dict=MagicMock(return_value={
+                "passed": safety_passed,
+                "risk_level": "L1",
+                "execution_mode": execution_mode,
+            })
+        )
+        mock_safety._classify_risk.return_value = MagicMock(value="L1")
+        mock_safety.request_approval.return_value = MagicMock(approval_id="appr-001")
+
+        return mock_correlator, mock_engine, mock_bridge, mock_safety
+
+    @pytest.mark.asyncio
+    async def test_auto_execute_with_safety_pass(self, orchestrator):
+        """auto_execute=True + safety pass → executes SOP."""
+        sops = [{"sop_id": "sop-test", "name": "Test SOP", "match_confidence": 0.9, "severity": "low"}]
+        mock_correlator, mock_engine, mock_bridge, mock_safety = \
+            self._setup_full_pipeline_mocks(matched_sops=sops, safety_passed=True)
+
+        with patch("src.event_correlator.get_correlator", return_value=mock_correlator), \
+             patch("src.rca_inference.get_rca_inference_engine", return_value=mock_engine), \
+             patch("src.rca_sop_bridge.get_bridge", return_value=mock_bridge), \
+             patch("src.sop_safety.get_safety_layer", return_value=mock_safety), \
+             patch.object(orchestrator, "_execute_sop", return_value={"success": True, "sop_id": "sop-test"}), \
+             patch.object(orchestrator, "_persist_incident"), \
+             patch.object(orchestrator, "_auto_feedback"):
+
+            incident = await orchestrator.handle_incident(
+                trigger_type="alarm",
+                auto_execute=True,
+            )
+
+        assert incident.execution_result is not None
+        assert incident.execution_result["success"] is True
+        assert "execute" in incident.stage_timings
+
+    @pytest.mark.asyncio
+    async def test_approval_mode_sets_waiting(self, orchestrator):
+        """safety execution_mode='approval' without auto_execute → WAITING_APPROVAL."""
+        sops = [{"sop_id": "sop-test", "name": "Test SOP", "match_confidence": 0.9, "severity": "high"}]
+        mock_correlator, mock_engine, mock_bridge, mock_safety = \
+            self._setup_full_pipeline_mocks(
+                matched_sops=sops, safety_passed=True, execution_mode="approval"
+            )
+
+        with patch("src.event_correlator.get_correlator", return_value=mock_correlator), \
+             patch("src.rca_inference.get_rca_inference_engine", return_value=mock_engine), \
+             patch("src.rca_sop_bridge.get_bridge", return_value=mock_bridge), \
+             patch("src.sop_safety.get_safety_layer", return_value=mock_safety), \
+             patch.object(orchestrator, "_persist_incident"), \
+             patch.object(orchestrator, "_auto_feedback"):
+
+            incident = await orchestrator.handle_incident(
+                trigger_type="alarm",
+                auto_execute=False,  # Not auto-executing → falls through to approval check
+            )
+
+        assert incident.status == IncidentStatus.WAITING_APPROVAL
+        assert incident.execution_result["action"] == "approval_requested"
+        assert "appr-001" in incident.execution_result["approval_id"]
+
+    @pytest.mark.asyncio
+    async def test_dry_run_skips_execution(self, orchestrator):
+        """dry_run=True prevents actual SOP execution."""
+        sops = [{"sop_id": "sop-test", "name": "Test SOP", "match_confidence": 0.9, "severity": "low"}]
+        mock_correlator, mock_engine, mock_bridge, mock_safety = \
+            self._setup_full_pipeline_mocks(matched_sops=sops, safety_passed=True)
+
+        with patch("src.event_correlator.get_correlator", return_value=mock_correlator), \
+             patch("src.rca_inference.get_rca_inference_engine", return_value=mock_engine), \
+             patch("src.rca_sop_bridge.get_bridge", return_value=mock_bridge), \
+             patch("src.sop_safety.get_safety_layer", return_value=mock_safety), \
+             patch.object(orchestrator, "_execute_sop") as mock_exec, \
+             patch.object(orchestrator, "_persist_incident"), \
+             patch.object(orchestrator, "_auto_feedback"):
+
+            incident = await orchestrator.handle_incident(
+                trigger_type="alarm",
+                auto_execute=True,
+                dry_run=True,
+            )
+
+        mock_exec.assert_not_called()
+        assert incident.status == IncidentStatus.COMPLETED
+
+    @pytest.mark.asyncio
+    async def test_no_sop_match_skips_stage4_5(self, orchestrator):
+        """No SOP match → skip safety check and execution stages."""
+        mock_correlator, mock_engine, mock_bridge, mock_safety = \
+            self._setup_full_pipeline_mocks(matched_sops=[])
+
+        with patch("src.event_correlator.get_correlator", return_value=mock_correlator), \
+             patch("src.rca_inference.get_rca_inference_engine", return_value=mock_engine), \
+             patch("src.rca_sop_bridge.get_bridge", return_value=mock_bridge), \
+             patch("src.sop_safety.get_safety_layer", return_value=mock_safety), \
+             patch.object(orchestrator, "_persist_incident"), \
+             patch.object(orchestrator, "_auto_feedback"):
+
+            incident = await orchestrator.handle_incident(trigger_type="alarm")
+
+        assert incident.safety_check is None
+        assert incident.execution_result is None
+        assert "safety_check" not in incident.stage_timings
+        assert incident.status == IncidentStatus.COMPLETED
+
+
+# =============================================================================
+# Auto-Feedback: Low Confidence Skip
+# =============================================================================
+
+class TestAutoFeedbackLowConfidence:
+
+    def test_low_confidence_no_execution_no_feedback(self):
+        """Low confidence + no execution → no feedback submitted."""
+        orchestrator = IncidentOrchestrator()
+        rca_result = _make_rca_result(confidence=0.5)  # Below 0.85 threshold
+
+        incident = IncidentRecord(
+            incident_id="inc-fb-low",
+            trigger_type=TriggerType.ALARM,
+            trigger_data={},
+            region="ap-southeast-1",
+            execution_result=None,
+        )
+
+        mock_bridge = MagicMock()
+
+        with patch("src.rca_sop_bridge.get_bridge", return_value=mock_bridge), \
+             patch.object(orchestrator, "_learn_from_incident"):
+            orchestrator._auto_feedback(
+                incident, rca_result, [{"sop_id": "sop-test"}]
+            )
+
+        mock_bridge.submit_feedback.assert_not_called()
+
+
+# =============================================================================
+# _learn_from_incident
+# =============================================================================
+
+class TestLearnFromIncident:
+
+    def test_learn_high_confidence(self):
+        """High-confidence RCA result → index to knowledge base."""
+        orchestrator = IncidentOrchestrator()
+        rca_result = _make_rca_result(confidence=0.9, pattern_id="pat-cpu")
+
+        incident = IncidentRecord(
+            incident_id="inc-learn-001",
+            trigger_type=TriggerType.ALARM,
+            trigger_data={},
+            region="ap-southeast-1",
+        )
+
+        mock_ks = MagicMock()
+        mock_ks.index = AsyncMock()
+
+        with patch("src.s3_knowledge_base.AnomalyPattern") as MockPattern, \
+             patch("src.knowledge_search.get_knowledge_search", return_value=mock_ks):
+            MockPattern.return_value = MagicMock()
+            orchestrator._learn_from_incident(incident, rca_result)
+
+    def test_learn_skips_low_confidence(self):
+        """Low confidence → don't learn."""
+        orchestrator = IncidentOrchestrator()
+        rca_result = _make_rca_result(confidence=0.5)
+
+        incident = IncidentRecord(
+            incident_id="inc-learn-low",
+            trigger_type=TriggerType.ALARM,
+            trigger_data={},
+            region="ap-southeast-1",
+        )
+
+        with patch("src.s3_knowledge_base.AnomalyPattern") as MockPattern:
+            orchestrator._learn_from_incident(incident, rca_result)
+            MockPattern.assert_not_called()
+
+    def test_learn_skips_healthy_pattern(self):
+        """Healthy pattern → don't learn."""
+        orchestrator = IncidentOrchestrator()
+        rca_result = _make_rca_result(confidence=0.95, pattern_id="healthy")
+
+        incident = IncidentRecord(
+            incident_id="inc-learn-healthy",
+            trigger_type=TriggerType.ALARM,
+            trigger_data={},
+            region="ap-southeast-1",
+        )
+
+        with patch("src.s3_knowledge_base.AnomalyPattern") as MockPattern:
+            orchestrator._learn_from_incident(incident, rca_result)
+            MockPattern.assert_not_called()
+
+    def test_learn_exception_is_swallowed(self):
+        """Exception in learn → logged, not raised."""
+        orchestrator = IncidentOrchestrator()
+        rca_result = _make_rca_result(confidence=0.9)
+
+        incident = IncidentRecord(
+            incident_id="inc-learn-err",
+            trigger_type=TriggerType.ALARM,
+            trigger_data={},
+            region="ap-southeast-1",
+        )
+
+        with patch("src.s3_knowledge_base.AnomalyPattern", side_effect=Exception("import fail")):
+            # Should not raise
+            orchestrator._learn_from_incident(incident, rca_result)
