@@ -191,6 +191,48 @@ class DetectAgent:
                     "region": self.region,
                 }
 
+                # ── Pattern Match ──
+                pattern_matches = []
+                if event:
+                    try:
+                        from src.rca.pattern_matcher import PatternMatcher
+                        matcher = PatternMatcher()
+                        telemetry = event.to_rca_telemetry()
+                        match_result = matcher.match(telemetry)
+                        if match_result:
+                            pattern_matches.append({
+                                "pattern_id": match_result.pattern_id,
+                                "pattern_name": match_result.pattern_name,
+                                "root_cause": match_result.root_cause,
+                                "severity": match_result.severity.value if hasattr(match_result.severity, 'value') else str(match_result.severity),
+                                "confidence": match_result.confidence,
+                            })
+                            logger.info(f"[{detect_id}] Pattern matched: {match_result.pattern_id} ({match_result.confidence})")
+                    except Exception as e:
+                        logger.warning(f"[{detect_id}] Pattern matching failed (non-fatal): {e}")
+
+                # ── Vectorize + Store ──
+                if pattern_matches:
+                    try:
+                        from src.s3_knowledge_base import get_knowledge_base, AnomalyPattern
+                        kb = await get_knowledge_base()
+                        for pm in pattern_matches:
+                            anomaly_pattern = AnomalyPattern(
+                                pattern_id=pm["pattern_id"],
+                                title=pm["pattern_name"],
+                                description=pm["root_cause"],
+                                resource_type="aws",
+                                severity=pm["severity"],
+                                symptoms=[],
+                                root_cause=pm["root_cause"],
+                                confidence=pm["confidence"],
+                                source="detect_agent",
+                            )
+                            await kb.add_pattern(anomaly_pattern, quality_score=pm["confidence"])
+                        logger.info(f"[{detect_id}] Stored {len(pattern_matches)} patterns to knowledge base")
+                    except Exception as e:
+                        logger.warning(f"[{detect_id}] Knowledge base store failed (non-fatal): {e}")
+
                 result = DetectResult(
                     detect_id=detect_id,
                     timestamp=now.isoformat(),
@@ -199,6 +241,7 @@ class DetectAgent:
                     ttl_seconds=ttl_seconds,
                     correlated_event=event,
                     anomalies_detected=event.anomalies if event else [],
+                    pattern_matches=pattern_matches,
                     collection_duration_ms=event.duration_ms,
                     collection_config=collection_cfg,
                     error=None,
@@ -207,6 +250,7 @@ class DetectAgent:
                 logger.info(
                     f"[{detect_id}] Detection complete: "
                     f"{len(result.anomalies_detected)} anomalies, "
+                    f"{len(pattern_matches)} patterns, "
                     f"{event.duration_ms}ms collection"
                 )
             except Exception as e:
