@@ -92,7 +92,7 @@ class TestQuickScanDelegation:
         mock_agent = MagicMock()
         mock_agent.run_detection = AsyncMock(return_value=mock_result)
 
-        with patch("src.detect_agent.get_detect_agent", new_callable=AsyncMock, return_value=mock_agent):
+        with patch("src.detect_agent.get_detect_agent_async", new=AsyncMock(return_value=mock_agent)):
             task = system.tasks["heartbeat"]
             result = await system._action_quick_scan(task)
 
@@ -110,7 +110,7 @@ class TestQuickScanDelegation:
         mock_agent = MagicMock()
         mock_agent.run_detection = AsyncMock(return_value=mock_result)
 
-        with patch("src.detect_agent.get_detect_agent", new_callable=AsyncMock, return_value=mock_agent), \
+        with patch("src.detect_agent.get_detect_agent_async", new=AsyncMock(return_value=mock_agent)), \
              patch("src.event_correlator.get_correlator") as mock_correlator:
             task = system.tasks["heartbeat"]
             await system._action_quick_scan(task)
@@ -129,7 +129,7 @@ class TestQuickScanDelegation:
         mock_agent = MagicMock()
         mock_agent.run_detection = AsyncMock(return_value=mock_result)
 
-        with patch("src.detect_agent.get_detect_agent", new_callable=AsyncMock, return_value=mock_agent):
+        with patch("src.detect_agent.get_detect_agent_async", new=AsyncMock(return_value=mock_agent)):
             result = await system._action_quick_scan(system.tasks["heartbeat"])
 
         assert result.status == "alert"
@@ -143,7 +143,7 @@ class TestQuickScanDelegation:
         mock_agent = MagicMock()
         mock_agent.run_detection = AsyncMock(return_value=mock_result)
 
-        with patch("src.detect_agent.get_detect_agent", new_callable=AsyncMock, return_value=mock_agent):
+        with patch("src.detect_agent.get_detect_agent_async", new=AsyncMock(return_value=mock_agent)):
             result = await system._action_quick_scan(system.tasks["heartbeat"])
 
         assert result.status == "alert"
@@ -158,7 +158,7 @@ class TestQuickScanDelegation:
         mock_agent = MagicMock()
         mock_agent.run_detection = AsyncMock(return_value=mock_result)
 
-        with patch("src.detect_agent.get_detect_agent", new_callable=AsyncMock, return_value=mock_agent):
+        with patch("src.detect_agent.get_detect_agent_async", new=AsyncMock(return_value=mock_agent)):
             result = await system._action_quick_scan(system.tasks["heartbeat"])
 
         assert result.status == "ok"
@@ -171,7 +171,7 @@ class TestQuickScanDelegation:
         mock_agent = MagicMock()
         mock_agent.run_detection = AsyncMock(return_value=mock_result)
 
-        with patch("src.detect_agent.get_detect_agent", new_callable=AsyncMock, return_value=mock_agent):
+        with patch("src.detect_agent.get_detect_agent_async", new=AsyncMock(return_value=mock_agent)):
             await system._action_quick_scan(system.tasks["heartbeat"])
 
         assert system._last_detect_result is mock_result
@@ -183,7 +183,7 @@ class TestQuickScanDelegation:
         mock_agent = MagicMock()
         mock_agent.run_detection = AsyncMock(return_value=mock_result)
 
-        with patch("src.detect_agent.get_detect_agent", new_callable=AsyncMock, return_value=mock_agent):
+        with patch("src.detect_agent.get_detect_agent_async", new=AsyncMock(return_value=mock_agent)):
             result = await system._action_quick_scan(system.tasks["heartbeat"])
 
         assert result.status == "ok"  # no findings = ok
@@ -196,7 +196,7 @@ class TestQuickScanDelegation:
         mock_agent = MagicMock()
         mock_agent.run_detection = AsyncMock(return_value=mock_result)
 
-        with patch("src.detect_agent.get_detect_agent", new_callable=AsyncMock, return_value=mock_agent):
+        with patch("src.detect_agent.get_detect_agent_async", new=AsyncMock(return_value=mock_agent)):
             result = await system._action_quick_scan(system.tasks["heartbeat"])
 
         assert result.details["detect_id"] == "det-proactive-test"

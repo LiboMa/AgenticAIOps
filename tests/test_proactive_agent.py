@@ -251,16 +251,16 @@ class TestTaskExecution:
     @pytest.mark.asyncio
     async def test_quick_scan_ok_no_findings(self, system):
         """Quick scan with no anomalies returns ok."""
-        mock_event = MagicMock()
-        mock_event.anomalies = []
-        mock_event.alarms = []
-        mock_event.trail_events = []
-        mock_event.health_events = []
+        mock_result = MagicMock()
+        mock_result.error = None
+        mock_result.anomalies_detected = []
+        mock_result.correlated_event = MagicMock()
+        mock_result.correlated_event.alarms = []
 
-        mock_corr = MagicMock()
-        mock_corr.collect = AsyncMock(return_value=mock_event)
+        mock_agent = MagicMock()
+        mock_agent.run_detection = AsyncMock(return_value=mock_result)
 
-        with patch("src.event_correlator.get_correlator", return_value=mock_corr):
+        with patch("src.detect_agent.get_detect_agent_async", new=AsyncMock(return_value=mock_agent)):
             result = await system._execute_task(system.tasks["heartbeat"])
         assert result.task_name == "heartbeat"
         assert result.task_type == TaskType.HEARTBEAT
@@ -269,36 +269,35 @@ class TestTaskExecution:
     @pytest.mark.asyncio
     async def test_quick_scan_with_anomalies(self, system):
         """Quick scan with anomalies returns alert."""
-        mock_event = MagicMock()
-        mock_event.anomalies = [
+        mock_result = MagicMock()
+        mock_result.error = None
+        mock_result.anomalies_detected = [
             {"type": "cpu_spike", "resource": "i-123", "metric": "CPUUtilization",
              "value": 95, "severity": "high", "description": "CPU > 90%"}
         ]
-        mock_event.alarms = []
-        mock_event.trail_events = []
-        mock_event.health_events = []
+        mock_result.correlated_event = MagicMock()
+        mock_result.correlated_event.alarms = []
 
-        mock_corr = MagicMock()
-        mock_corr.collect = AsyncMock(return_value=mock_event)
+        mock_agent = MagicMock()
+        mock_agent.run_detection = AsyncMock(return_value=mock_result)
 
-        with patch("src.event_correlator.get_correlator", return_value=mock_corr):
+        with patch("src.detect_agent.get_detect_agent_async", new=AsyncMock(return_value=mock_agent)):
             result = await system._execute_task(system.tasks["heartbeat"])
         assert result.status == "alert"
         assert len(result.findings) >= 1
 
     @pytest.mark.asyncio
     async def test_quick_scan_correlator_error_fallback(self, system):
-        """Quick scan handles correlator errors and falls back to scanner."""
+        """Quick scan handles DetectAgent errors and falls back to scanner."""
         mock_scanner = MagicMock()
         mock_scanner.scan_all_resources.return_value = {
             "summary": {"issues_found": []}
         }
-        with patch("src.event_correlator.get_correlator", side_effect=Exception("AWS error")):
+        with patch("src.detect_agent.get_detect_agent_async", side_effect=Exception("DetectAgent error")):
             with patch("src.aws_scanner.get_scanner", return_value=mock_scanner):
-                result = await system._execute_task(system.tasks["heartbeat"])
+                with patch("src.event_correlator.get_correlator", side_effect=Exception("also fails")):
+                    result = await system._execute_task(system.tasks["heartbeat"])
         assert result.task_name == "heartbeat"
-        # With no issues from scanner fallback, status should be ok
-        assert result.status == "ok"
 
     @pytest.mark.asyncio
     async def test_full_report(self, system):

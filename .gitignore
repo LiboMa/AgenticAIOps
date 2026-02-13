@@ -28,3 +28,6 @@ lambda-package/
 # AWS credentials (never commit)
 .aws/
 credentials
+
+data/detect_cache/
+data/incidents/
