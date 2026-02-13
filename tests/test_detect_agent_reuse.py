@@ -28,7 +28,11 @@ from src.incident_orchestrator import (
 # ── Helper: run async in sync test ─────────────────────────────────
 def run(coro):
     """Run an async coroutine in a new event loop (for sync pytest)."""
-    return asyncio.get_event_loop().run_until_complete(coro)
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
 
 
 # ── Helper: Build a mock CorrelatedEvent ───────────────────────────
