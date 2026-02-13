@@ -73,7 +73,7 @@ Guidelines:
 """
 
 
-def _build_analysis_prompt(correlated_event) -> str:
+def _build_analysis_prompt(correlated_event, knowledge_context=None) -> str:
     """Build the analysis prompt from correlated event data."""
     sections = []
     
@@ -124,6 +124,22 @@ def _build_analysis_prompt(correlated_event) -> str:
     
     if not firing and not correlated_event.anomalies and not correlated_event.recent_changes:
         sections.append("\n## Note: No active issues detected. All systems appear healthy.")
+    
+    # NEW: Inject historical knowledge from KnowledgeSearchService
+    if knowledge_context and knowledge_context.hits:
+        sections.append("\n## Historical Patterns (from Knowledge Base)")
+        for i, hit in enumerate(knowledge_context.hits[:3], 1):
+            sections.append(f"\n### Reference Pattern {i} (score: {hit.score:.2f}, source: {hit.search_level})")
+            sections.append(f"- Title: {hit.title}")
+            sections.append(f"- Description: {hit.description}")
+            if hit.content:
+                sections.append(f"- Details: {hit.content[:500]}")
+            if hit.metadata.get("remediation"):
+                sections.append(f"- Known Remediation: {hit.metadata['remediation'][:300]}")
+        sections.append(
+            "\nUse these historical patterns as reference. "
+            "If the current issue matches a known pattern, cite it and adjust confidence accordingly."
+        )
     
     return "\n".join(sections)
 
@@ -181,8 +197,37 @@ class RCAInferenceEngine:
                 logger.info(f"High-confidence pattern match: {pattern_result.pattern_id}")
                 return pattern_result
         
-        # Step 2: Claude Sonnet analysis
-        prompt = _build_analysis_prompt(correlated_event)
+        # Step 1.5 (NEW): Search historical knowledge via KnowledgeSearchService
+        knowledge_context = None
+        try:
+            from src.knowledge_search import get_knowledge_search
+            ks = get_knowledge_search()
+            
+            # Build search query from anomalies and alarms
+            search_parts = []
+            for anomaly in correlated_event.anomalies[:3]:
+                search_parts.append(f"{anomaly.get('resource', '')} {anomaly.get('metric', '')} {anomaly.get('description', '')}")
+            for alarm in correlated_event.alarms[:3]:
+                if alarm.state == "ALARM":
+                    search_parts.append(f"{alarm.metric_name} {alarm.name}")
+            
+            search_query = " ".join(search_parts).strip() or "AWS infrastructure issue"
+            knowledge_context = await ks.search(
+                query=search_query,
+                strategy="semantic",
+                limit=3,
+            )
+            
+            if knowledge_context.hits:
+                logger.info(
+                    f"Knowledge search returned {len(knowledge_context.hits)} hits "
+                    f"(best: {knowledge_context.best_hit.score:.2f} from {knowledge_context.best_hit.search_level})"
+                )
+        except Exception as e:
+            logger.warning(f"Knowledge search failed (non-fatal): {e}")
+        
+        # Step 2: Claude Sonnet analysis (with historical knowledge context)
+        prompt = _build_analysis_prompt(correlated_event, knowledge_context=knowledge_context)
         
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
