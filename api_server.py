@@ -758,13 +758,7 @@ async def handle_aws_chat_intent(message: str) -> Optional[str]:
                     break
             
             # Run async collection
-            loop = asyncio.new_event_loop()
-            try:
-                event = loop.run_until_complete(
-                    correlator.collect(services=services, lookback_minutes=15)
-                )
-            finally:
-                loop.close()
+            event = await correlator.collect(services=services, lookback_minutes=15)
             
             return event.summary()
         except Exception as e:
@@ -1744,20 +1738,14 @@ POST /api/knowledge/learn
             
             orchestrator = get_orchestrator(_current_region)
             
-            loop = asyncio.new_event_loop()
-            try:
-                incident = loop.run_until_complete(
-                    orchestrator.handle_incident(
-                        trigger_type="manual",
-                        trigger_data={"source": "chat", "message": message},
-                        services=service_filter,
-                        auto_execute=auto_exec,
-                        dry_run=dry_run,
-                        lookback_minutes=lookback,
-                    )
+            incident = await orchestrator.handle_incident(
+                    trigger_type="manual",
+                    trigger_data={"source": "chat", "message": message},
+                    services=service_filter,
+                    auto_execute=auto_exec,
+                    dry_run=dry_run,
+                    lookback_minutes=lookback,
                 )
-            finally:
-                loop.close()
             
             return incident.to_markdown()
         except Exception as e:
@@ -1836,17 +1824,11 @@ POST /api/knowledge/learn
             
             # Step 1: Collect data
             correlator = get_correlator(_current_region)
-            loop = asyncio.new_event_loop()
-            try:
-                event = loop.run_until_complete(
-                    correlator.collect(services=service_filter, lookback_minutes=15)
-                )
-                
-                # Step 2: Claude inference
-                engine = get_rca_inference_engine()
-                rca_result = loop.run_until_complete(engine.analyze(event))
-            finally:
-                loop.close()
+            event = await correlator.collect(services=service_filter, lookback_minutes=15)
+            
+            # Step 2: Claude inference
+            engine = get_rca_inference_engine()
+            rca_result = await engine.analyze(event)
             
             # Step 3: SOP suggestion
             bridge = get_bridge()
