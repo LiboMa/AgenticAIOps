@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import { 
   Table, Tag, Button, Space, Modal, Descriptions, Card, Typography, Input, Select,
-  message, Badge, Tabs, Timeline, Avatar, Row, Col, Statistic, Divider
+  message, Badge, Tabs, Timeline, Avatar, Row, Col, Statistic, Divider, Steps, Checkbox,
+  Alert, Progress, Spin
 } from 'antd'
 import {
   CheckCircleOutlined,
@@ -14,6 +15,10 @@ import {
   EyeOutlined,
   UserOutlined,
   ClockCircleOutlined,
+  ToolOutlined,
+  FileSearchOutlined,
+  SafetyOutlined,
+  ExperimentOutlined,
 } from '@ant-design/icons'
 
 const { Title, Text } = Typography
@@ -43,6 +48,15 @@ function IssueCenter({ apiUrl }) {
   const [detailVisible, setDetailVisible] = useState(false)
   const [fixLoading, setFixLoading] = useState({})
   const [activeTab, setActiveTab] = useState('triggered')
+  
+  // RCA & Manual Fix state
+  const [rcaLoading, setRcaLoading] = useState(false)
+  const [rcaResult, setRcaResult] = useState(null)
+  const [sopList, setSopList] = useState([])
+  const [manualFixVisible, setManualFixVisible] = useState(false)
+  const [currentExecution, setCurrentExecution] = useState(null)
+  const [stepLoading, setStepLoading] = useState(false)
+  const [detailTab, setDetailTab] = useState('info')
 
   const fetchIssues = useCallback(async () => {
     setLoading(true)
@@ -113,6 +127,119 @@ function IssueCenter({ apiUrl }) {
     }
   }
 
+  // ── RCA Analysis ──
+  const handleRunRCA = async (issue) => {
+    setRcaLoading(true)
+    setRcaResult(null)
+    try {
+      const res = await fetch(`${apiUrl}/api/rca/analyze`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          description: `${issue.title}: ${issue.description || ''} Resource: ${issue.resource_type}/${issue.resource_name}`,
+          severity: issue.severity,
+        }),
+      })
+      const result = await res.json()
+      if (result.success !== false) {
+        setRcaResult(result)
+        message.success('RCA analysis complete')
+        // Fetch suggested SOPs
+        fetchSopSuggestions(issue)
+      } else {
+        message.error(result.error || 'RCA analysis failed')
+      }
+    } catch (err) {
+      message.error('RCA request failed')
+    } finally {
+      setRcaLoading(false)
+    }
+  }
+
+  const fetchSopSuggestions = async (issue) => {
+    try {
+      const res = await fetch(`${apiUrl}/api/sop/suggest`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ keyword: issue.title || issue.type }),
+      })
+      const result = await res.json()
+      setSopList(result.suggestions || result.sops || [])
+    } catch (err) {
+      console.warn('Failed to fetch SOP suggestions')
+    }
+  }
+
+  // ── Manual Fix Flow ──
+  const handleStartManualFix = async (sopId) => {
+    setStepLoading(true)
+    try {
+      const res = await fetch(`${apiUrl}/api/sop/execute/${sopId}/manual`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ incident_id: selectedIssue?.id }),
+      })
+      const result = await res.json()
+      if (result.success) {
+        setCurrentExecution(result)
+        setManualFixVisible(true)
+        message.success(`SOP execution started: ${result.sop_name}`)
+      } else {
+        message.error(result.error || 'Failed to start SOP execution')
+      }
+    } catch (err) {
+      message.error('Failed to start manual fix')
+    } finally {
+      setStepLoading(false)
+    }
+  }
+
+  const handleCompleteStep = async (stepIndex) => {
+    if (!currentExecution) return
+    setStepLoading(true)
+    try {
+      const res = await fetch(`${apiUrl}/api/sop/execute/${currentExecution.execution_id}/step`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ step_index: stepIndex, result: 'success' }),
+      })
+      const result = await res.json()
+      if (result.success) {
+        setCurrentExecution(prev => ({
+          ...prev,
+          steps: prev.steps.map((s, i) => i === stepIndex ? { ...s, status: 'completed' } : s),
+        }))
+        if (result.completed) {
+          message.success('All steps completed!')
+        }
+      }
+    } catch (err) {
+      message.error('Failed to complete step')
+    } finally {
+      setStepLoading(false)
+    }
+  }
+
+  const handleCompleteExecution = async (result = 'resolved') => {
+    if (!currentExecution) return
+    try {
+      const res = await fetch(`${apiUrl}/api/sop/execute/${currentExecution.execution_id}/complete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ overall_result: result }),
+      })
+      const data = await res.json()
+      if (data.success) {
+        message.success(`Fix ${result}! ${data.feedback_recorded ? 'Feedback recorded.' : ''}`)
+        setManualFixVisible(false)
+        setCurrentExecution(null)
+        if (selectedIssue) handleResolve(selectedIssue.id)
+      }
+    } catch (err) {
+      message.error('Failed to complete execution')
+    }
+  }
+
   const columns = [
     {
       title: 'Status',
@@ -154,7 +281,13 @@ function IssueCenter({ apiUrl }) {
       render: (title, record) => (
         <div>
           <a 
-            onClick={() => { setSelectedIssue(record); setDetailVisible(true); }}
+            onClick={() => { 
+              setSelectedIssue(record)
+              setDetailVisible(true)
+              setDetailTab('info')
+              setRcaResult(null)
+              setSopList([])
+            }}
             style={{ fontWeight: 500 }}
           >
             {title}
@@ -180,7 +313,7 @@ function IssueCenter({ apiUrl }) {
     },
     {
       title: 'Actions',
-      width: 200,
+      width: 280,
       render: (_, record) => (
         <Space>
           {record.status === 'detected' && (
@@ -188,26 +321,32 @@ function IssueCenter({ apiUrl }) {
               Acknowledge
             </Button>
           )}
+          {(record.status === 'detected' || record.status === 'in_progress') && (
+            <Button 
+              size="small" 
+              type="primary"
+              icon={<ToolOutlined />}
+              onClick={() => {
+                setSelectedIssue(record)
+                setDetailVisible(true)
+                setDetailTab('rca')
+                setRcaResult(null)
+                setSopList([])
+                handleRunRCA(record)
+              }}
+            >
+              Diagnose & Fix
+            </Button>
+          )}
           {record.status === 'detected' && record.auto_fixable && (
             <Button 
               size="small" 
-              type="primary"
               icon={<ThunderboltOutlined />}
               loading={fixLoading[record.id]}
               onClick={() => handleAutoFix(record)}
-              style={{ background: '#06AC38', borderColor: '#06AC38' }}
+              style={{ background: '#06AC38', borderColor: '#06AC38', color: '#fff' }}
             >
               Auto Fix
-            </Button>
-          )}
-          {record.status === 'in_progress' && (
-            <Button 
-              size="small" 
-              type="primary"
-              onClick={() => handleResolve(record.id)}
-              style={{ background: '#06AC38', borderColor: '#06AC38' }}
-            >
-              Resolve
             </Button>
           )}
         </Space>
@@ -223,16 +362,113 @@ function IssueCenter({ apiUrl }) {
     return true
   })
 
-  // Get stats from dashboard
   const stats = dashboardData.stats || {}
   const statusCounts = stats.by_status || {}
+
+  // ── RCA Report Panel ──
+  const RCAPanel = () => (
+    <div>
+      {rcaLoading ? (
+        <div style={{ textAlign: 'center', padding: 40 }}>
+          <Spin size="large" />
+          <div style={{ marginTop: 16 }}>
+            <Text type="secondary">Running RCA analysis with AI...</Text>
+          </div>
+        </div>
+      ) : rcaResult ? (
+        <div>
+          <Alert
+            message="Root Cause Analysis Complete"
+            description={
+              <div>
+                <p><strong>Root Cause:</strong> {rcaResult.root_cause || rcaResult.analysis || 'Analysis complete'}</p>
+                {rcaResult.confidence && (
+                  <p><strong>Confidence:</strong> <Progress percent={Math.round(rcaResult.confidence * 100)} size="small" style={{ width: 200 }} /></p>
+                )}
+                {rcaResult.severity && <p><strong>Severity:</strong> <Tag color={severityConfig[rcaResult.severity]?.color}>{rcaResult.severity}</Tag></p>}
+              </div>
+            }
+            type="info"
+            showIcon
+            icon={<FileSearchOutlined />}
+            style={{ marginBottom: 16 }}
+          />
+
+          {rcaResult.recommendations && (
+            <Card title="Recommendations" size="small" style={{ marginBottom: 16 }}>
+              {(Array.isArray(rcaResult.recommendations) ? rcaResult.recommendations : [rcaResult.recommendations]).map((rec, i) => (
+                <p key={i}>• {rec}</p>
+              ))}
+            </Card>
+          )}
+
+          {/* SOP Suggestions */}
+          <Card title="Recommended SOPs — Manual Fix" size="small" style={{ marginBottom: 16 }}>
+            {sopList.length > 0 ? (
+              sopList.map((sop) => (
+                <Card.Grid key={sop.sop_id || sop.id} style={{ width: '100%', padding: 12 }}>
+                  <Row justify="space-between" align="middle">
+                    <Col>
+                      <Text strong>{sop.name || sop.sop_id}</Text>
+                      <br />
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        {sop.description || `Confidence: ${sop.confidence || '-'}`}
+                      </Text>
+                    </Col>
+                    <Col>
+                      <Button 
+                        type="primary"
+                        icon={<ToolOutlined />}
+                        loading={stepLoading}
+                        onClick={() => handleStartManualFix(sop.sop_id || sop.id)}
+                      >
+                        Apply Fix
+                      </Button>
+                    </Col>
+                  </Row>
+                </Card.Grid>
+              ))
+            ) : (
+              <Text type="secondary">No SOP suggestions available. Use Chat to run: <code>sop suggest {selectedIssue?.title}</code></Text>
+            )}
+          </Card>
+
+          <Button 
+            icon={<ExperimentOutlined />}
+            onClick={() => handleRunRCA(selectedIssue)}
+            loading={rcaLoading}
+          >
+            Re-analyze
+          </Button>
+        </div>
+      ) : (
+        <div style={{ textAlign: 'center', padding: 40 }}>
+          <FileSearchOutlined style={{ fontSize: 48, color: '#999' }} />
+          <div style={{ marginTop: 16 }}>
+            <Button 
+              type="primary" 
+              icon={<SearchOutlined />}
+              onClick={() => handleRunRCA(selectedIssue)}
+              loading={rcaLoading}
+              size="large"
+            >
+              Run RCA Analysis
+            </Button>
+          </div>
+          <div style={{ marginTop: 8 }}>
+            <Text type="secondary">Analyze root cause and get fix recommendations</Text>
+          </div>
+        </div>
+      )}
+    </div>
+  )
 
   return (
     <div>
       {/* Page Header */}
       <div style={{ marginBottom: 24 }}>
         <Title level={3} style={{ margin: 0 }}>Incidents</Title>
-        <Text type="secondary">Manage and respond to operational incidents</Text>
+        <Text type="secondary">Manage and respond to operational incidents — Diagnose & Fix</Text>
       </div>
 
       {/* Stats Bar */}
@@ -314,7 +550,7 @@ function IssueCenter({ apiUrl }) {
         />
       </Card>
 
-      {/* Detail Modal */}
+      {/* Detail Modal with RCA Tab */}
       <Modal
         title={
           <Space>
@@ -325,74 +561,150 @@ function IssueCenter({ apiUrl }) {
           </Space>
         }
         open={detailVisible}
-        onCancel={() => setDetailVisible(false)}
-        width={700}
+        onCancel={() => { setDetailVisible(false); setRcaResult(null); setSopList([]); }}
+        width={800}
         footer={[
           selectedIssue?.status === 'open' && (
             <Button key="ack" onClick={() => handleAcknowledge(selectedIssue?.id)}>
               Acknowledge
             </Button>
           ),
-          selectedIssue?.status === 'open' && selectedIssue?.auto_fixable && (
-            <Button 
-              key="fix" 
-              type="primary"
-              icon={<ThunderboltOutlined />}
-              onClick={() => handleAutoFix(selectedIssue)}
-              loading={fixLoading[selectedIssue?.id]}
-              style={{ background: '#06AC38', borderColor: '#06AC38' }}
-            >
-              Auto Fix
-            </Button>
-          ),
-          selectedIssue?.status !== 'resolved' && (
+          selectedIssue?.status !== 'resolved' && selectedIssue?.status !== 'fixed' && (
             <Button 
               key="resolve" 
               type="primary"
               onClick={() => handleResolve(selectedIssue?.id)}
+              style={{ background: '#06AC38', borderColor: '#06AC38' }}
             >
-              Resolve
+              Mark Resolved
             </Button>
           ),
           <Button key="close" onClick={() => setDetailVisible(false)}>Close</Button>,
         ]}
       >
         {selectedIssue && (
-          <Descriptions column={2} bordered size="small">
-            <Descriptions.Item label="ID">{selectedIssue.id}</Descriptions.Item>
-            <Descriptions.Item label="Priority">
-              <Tag color={severityConfig[selectedIssue.severity]?.color}>
-                {severityConfig[selectedIssue.severity]?.priority}
-              </Tag>
-            </Descriptions.Item>
-            <Descriptions.Item label="Namespace">{selectedIssue.namespace}</Descriptions.Item>
-            <Descriptions.Item label="Resource">
-              {selectedIssue.resource_type}/{selectedIssue.resource_name}
-            </Descriptions.Item>
-            <Descriptions.Item label="Description" span={2}>
-              {selectedIssue.description || 'No description'}
-            </Descriptions.Item>
-            {selectedIssue.root_cause && (
-              <Descriptions.Item label="Root Cause" span={2}>
-                <pre style={{ margin: 0, whiteSpace: 'pre-wrap', background: '#f5f5f5', padding: 8, borderRadius: 4 }}>
-                  {selectedIssue.root_cause}
-                </pre>
-              </Descriptions.Item>
+          <Tabs activeKey={detailTab} onChange={setDetailTab}>
+            <TabPane tab={<span><EyeOutlined /> Info</span>} key="info">
+              <Descriptions column={2} bordered size="small">
+                <Descriptions.Item label="ID">{selectedIssue.id}</Descriptions.Item>
+                <Descriptions.Item label="Priority">
+                  <Tag color={severityConfig[selectedIssue.severity]?.color}>
+                    {severityConfig[selectedIssue.severity]?.priority} — {selectedIssue.severity}
+                  </Tag>
+                </Descriptions.Item>
+                <Descriptions.Item label="Namespace">{selectedIssue.namespace}</Descriptions.Item>
+                <Descriptions.Item label="Resource">
+                  {selectedIssue.resource_type}/{selectedIssue.resource_name}
+                </Descriptions.Item>
+                <Descriptions.Item label="Description" span={2}>
+                  {selectedIssue.description || 'No description'}
+                </Descriptions.Item>
+                {selectedIssue.root_cause && (
+                  <Descriptions.Item label="Root Cause" span={2}>
+                    <pre style={{ margin: 0, whiteSpace: 'pre-wrap', background: '#f5f5f5', padding: 8, borderRadius: 4 }}>
+                      {selectedIssue.root_cause}
+                    </pre>
+                  </Descriptions.Item>
+                )}
+                <Descriptions.Item label="Created">
+                  {selectedIssue.created_at ? new Date(selectedIssue.created_at).toLocaleString() : '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="Updated">
+                  {selectedIssue.updated_at ? new Date(selectedIssue.updated_at).toLocaleString() : '-'}
+                </Descriptions.Item>
+              </Descriptions>
+            </TabPane>
+            
+            <TabPane tab={<span><FileSearchOutlined /> RCA & Fix</span>} key="rca">
+              <RCAPanel />
+            </TabPane>
+          </Tabs>
+        )}
+      </Modal>
+
+      {/* Manual Fix Execution Modal */}
+      <Modal
+        title={
+          <Space>
+            <ToolOutlined />
+            <span>Manual Fix — {currentExecution?.sop_name}</span>
+          </Space>
+        }
+        open={manualFixVisible}
+        onCancel={() => { setManualFixVisible(false); setCurrentExecution(null); }}
+        width={600}
+        footer={[
+          <Button 
+            key="fail" 
+            danger
+            onClick={() => handleCompleteExecution('failed')}
+          >
+            Mark Failed
+          </Button>,
+          <Button 
+            key="complete" 
+            type="primary"
+            onClick={() => handleCompleteExecution('resolved')}
+            style={{ background: '#06AC38', borderColor: '#06AC38' }}
+            disabled={currentExecution?.steps?.some(s => s.status === 'pending')}
+          >
+            Complete Fix ✓
+          </Button>,
+        ]}
+      >
+        {currentExecution && (
+          <div>
+            {currentExecution.safety && (
+              <Alert
+                message={`Safety: ${currentExecution.safety.risk_level || 'Unknown'} — ${currentExecution.safety.execution_mode || 'dry_run'}`}
+                type={currentExecution.safety.risk_level === 'L1' ? 'success' : 'warning'}
+                icon={<SafetyOutlined />}
+                showIcon
+                style={{ marginBottom: 16 }}
+              />
             )}
-            {selectedIssue.remediation && (
-              <Descriptions.Item label="Remediation" span={2}>
-                <pre style={{ margin: 0, whiteSpace: 'pre-wrap', background: '#f5f5f5', padding: 8, borderRadius: 4 }}>
-                  {selectedIssue.remediation}
-                </pre>
-              </Descriptions.Item>
-            )}
-            <Descriptions.Item label="Created">
-              {selectedIssue.created_at ? new Date(selectedIssue.created_at).toLocaleString() : '-'}
-            </Descriptions.Item>
-            <Descriptions.Item label="Updated">
-              {selectedIssue.updated_at ? new Date(selectedIssue.updated_at).toLocaleString() : '-'}
-            </Descriptions.Item>
-          </Descriptions>
+            
+            <Steps 
+              direction="vertical" 
+              current={currentExecution.steps?.filter(s => s.status === 'completed').length || 0}
+              size="small"
+            >
+              {currentExecution.steps?.map((step, i) => (
+                <Steps.Step
+                  key={i}
+                  title={
+                    <Row justify="space-between" align="middle">
+                      <Col flex="auto">
+                        <Text>{step.description}</Text>
+                      </Col>
+                      <Col>
+                        {step.status === 'pending' ? (
+                          <Button 
+                            size="small" 
+                            type="primary"
+                            onClick={() => handleCompleteStep(i)}
+                            loading={stepLoading}
+                          >
+                            Done ✓
+                          </Button>
+                        ) : (
+                          <Tag color="green">Completed</Tag>
+                        )}
+                      </Col>
+                    </Row>
+                  }
+                  status={step.status === 'completed' ? 'finish' : step.status === 'pending' ? 'wait' : 'process'}
+                />
+              ))}
+            </Steps>
+
+            <div style={{ marginTop: 16, textAlign: 'center' }}>
+              <Progress 
+                percent={Math.round((currentExecution.steps?.filter(s => s.status === 'completed').length || 0) / (currentExecution.total_steps || 1) * 100)}
+                status="active"
+              />
+            </div>
+          </div>
         )}
       </Modal>
     </div>
