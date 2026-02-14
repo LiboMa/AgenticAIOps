@@ -3027,6 +3027,222 @@ async def incident_stats():
         return {"success": False, "error": str(e)}
 
 
+@app.get("/api/incident/{incident_id}")
+async def get_incident_detail(incident_id: str):
+    """Get full incident detail including RCA, SOP, and safety results."""
+    try:
+        from src.incident_orchestrator import get_orchestrator
+        orchestrator = get_orchestrator(_current_region)
+        incident = orchestrator.get_incident(incident_id)
+        if not incident:
+            raise HTTPException(status_code=404, detail="Incident not found")
+        return {"success": True, "incident": incident.to_dict()}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/incident/{incident_id}/rca")
+async def trigger_incident_rca(incident_id: str):
+    """Trigger RCA analysis for a specific incident."""
+    try:
+        from src.incident_orchestrator import get_orchestrator
+        from src.rca_inference import get_rca_engine
+        orchestrator = get_orchestrator(_current_region)
+        incident = orchestrator.get_incident(incident_id)
+        if not incident:
+            raise HTTPException(status_code=404, detail="Incident not found")
+
+        if incident.rca_result:
+            return {"success": True, "rca": incident.rca_result, "cached": True}
+
+        # Run RCA on existing collection data
+        rca_engine = get_rca_engine()
+        telemetry = incident.collection_summary or {}
+        rca_result = await rca_engine.analyze(telemetry)
+        incident.rca_result = rca_result.to_dict() if hasattr(rca_result, 'to_dict') else rca_result
+        return {"success": True, "rca": incident.rca_result, "cached": False}
+    except HTTPException:
+        raise
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/safety/approve/{approval_id}")
+async def approve_execution(approval_id: str, approved_by: str = "webui_user"):
+    """Approve a pending SOP execution (REST API for WebUI)."""
+    try:
+        from src.sop_safety import get_safety_layer
+        safety = get_safety_layer()
+        result = safety.approve(approval_id, approved_by)
+        if not result:
+            raise HTTPException(status_code=404, detail="Approval not found or already processed")
+        return {
+            "success": True,
+            "approval_id": approval_id,
+            "status": "approved",
+            "sop_id": result.sop_id,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/safety/reject/{approval_id}")
+async def reject_execution(approval_id: str, rejected_by: str = "webui_user"):
+    """Reject a pending SOP execution."""
+    try:
+        from src.sop_safety import get_safety_layer
+        safety = get_safety_layer()
+        result = safety.reject(approval_id, rejected_by)
+        if not result:
+            raise HTTPException(status_code=404, detail="Approval not found or already processed")
+        return {
+            "success": True,
+            "approval_id": approval_id,
+            "status": "rejected",
+            "sop_id": result.sop_id,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/sop/execute/{sop_id}/manual")
+async def manual_execute_sop(sop_id: str, incident_id: str = None, dry_run: bool = False):
+    """Start manual SOP execution from WebUI (for Low/Medium issues).
+
+    Flow: User reviews RCA report → clicks "手动修复" → this endpoint.
+    Returns execution_id + step checklist for the user to work through.
+    """
+    try:
+        from src.sop_system import get_sop_executor, get_sop_store
+        from src.sop_safety import get_safety_layer
+
+        store = get_sop_store()
+        executor = get_sop_executor()
+        safety = get_safety_layer()
+
+        sop = store.get_sop(sop_id)
+        if not sop:
+            raise HTTPException(status_code=404, detail=f"SOP {sop_id} not found")
+
+        # Safety check
+        safety_result = safety.check(sop_id=sop_id, dry_run=dry_run)
+
+        # Start execution
+        execution = executor.start_execution(
+            sop_id=sop_id,
+            triggered_by="manual_fix",
+            context={"incident_id": incident_id, "dry_run": dry_run},
+        )
+        if not execution:
+            raise HTTPException(status_code=500, detail="Failed to start execution")
+
+        return {
+            "success": True,
+            "execution_id": execution.execution_id,
+            "sop_id": sop_id,
+            "sop_name": sop.name,
+            "safety": safety_result.to_dict() if hasattr(safety_result, 'to_dict') else {},
+            "steps": [{"index": i, "description": s.description if hasattr(s, 'description') else str(s), "status": "pending"} for i, s in enumerate(sop.steps)],
+            "total_steps": len(sop.steps),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/sop/execute/{execution_id}/step")
+async def complete_sop_step(execution_id: str, step_index: int = 0, result: str = "success", notes: str = ""):
+    """Mark a SOP step as complete (called by WebUI checklist)."""
+    try:
+        from src.sop_system import get_sop_executor
+        executor = get_sop_executor()
+
+        execution = executor.get_execution(execution_id)
+        if not execution:
+            raise HTTPException(status_code=404, detail="Execution not found")
+
+        step_result = {
+            "step_index": step_index,
+            "result": result,
+            "notes": notes,
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+        }
+        success = executor.complete_step(execution_id, step_result)
+        if not success:
+            return {"success": False, "error": "Failed to complete step"}
+
+        # Refresh execution state
+        execution = executor.get_execution(execution_id)
+        return {
+            "success": True,
+            "execution_id": execution_id,
+            "current_step": execution.current_step,
+            "status": execution.status,
+            "completed": execution.status == "completed",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.post("/api/sop/execute/{execution_id}/complete")
+async def complete_sop_execution(execution_id: str, overall_result: str = "resolved", notes: str = ""):
+    """Mark entire SOP execution as complete and trigger feedback loop."""
+    try:
+        from src.sop_system import get_sop_executor
+        from src.incident_orchestrator import get_orchestrator
+        executor = get_sop_executor()
+
+        execution = executor.get_execution(execution_id)
+        if not execution:
+            raise HTTPException(status_code=404, detail="Execution not found")
+
+        execution.status = "completed" if overall_result == "resolved" else "failed"
+        execution.success = overall_result == "resolved"
+        execution.notes = notes
+        execution.completed_at = datetime.now(timezone.utc).isoformat()
+
+        # Feedback loop: record result for learning
+        incident_id = execution.trigger_context.get("incident_id")
+        if incident_id:
+            try:
+                orchestrator = get_orchestrator(_current_region)
+                incident = orchestrator.get_incident(incident_id)
+                if incident:
+                    incident.execution_result = {
+                        "execution_id": execution_id,
+                        "sop_id": execution.sop_id,
+                        "result": overall_result,
+                        "notes": notes,
+                        "completed_at": execution.completed_at,
+                    }
+                    from src.incident_orchestrator import IncidentStatus
+                    incident.status = IncidentStatus.COMPLETED
+                    incident.completed_at = execution.completed_at
+            except Exception as e:
+                logger.warning(f"Failed to update incident feedback: {e}")
+
+        return {
+            "success": True,
+            "execution_id": execution_id,
+            "status": execution.status,
+            "result": overall_result,
+            "feedback_recorded": incident_id is not None,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 # =============================================================================
 # Webhook: CloudWatch Alarm → Auto Incident Pipeline (L4)
 # =============================================================================
