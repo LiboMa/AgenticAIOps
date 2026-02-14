@@ -366,6 +366,59 @@ class DetectAgent:
         """Get a cached result by detect_id."""
         return self._cache.get(detect_id)
 
+    async def trigger_incident(
+        self,
+        trigger_type: str = "manual",
+        services: List[str] = None,
+        auto_execute: bool = False,
+        dry_run: bool = False,
+        lookback_minutes: int = 15,
+    ):
+        """
+        High-level API: detect + dispatch to orchestrator in one call.
+
+        Called by api_server.py for 'incident run' chat command and REST API.
+        Returns the IncidentRecord from the orchestrator.
+        """
+        # Step 1: Collect data
+        result = await self.run_detection(
+            services=services,
+            lookback_minutes=lookback_minutes,
+            source=f"{trigger_type}_scan",
+        )
+
+        # Step 2: Dispatch to orchestrator
+        from src.incident_orchestrator import get_orchestrator
+        orchestrator = get_orchestrator(self.region)
+        incident = await orchestrator.handle_incident(
+            trigger_type=trigger_type,
+            detect_result=result,
+            auto_execute=auto_execute,
+            dry_run=dry_run,
+        )
+        return incident
+
+    def status(self) -> Dict[str, Any]:
+        """Status for API: cache state + data freshness."""
+        latest_dict = None
+        if self._latest:
+            latest_dict = {
+                "detect_id": self._latest.detect_id,
+                "timestamp": self._latest.timestamp,
+                "age_seconds": round(self._latest.age_seconds, 1),
+                "freshness": self._latest.freshness_label,
+                "is_stale": self._latest.is_stale,
+                "anomalies_count": len(self._latest.anomalies_detected),
+                "pattern_matches_count": len(self._latest.pattern_matches),
+            }
+        return {
+            "agent_status": "collecting" if self._collecting.locked() else "idle",
+            "cache_size": len(self._cache),
+            "latest": latest_dict,
+            "dispatch_successes": self._dispatch_successes,
+            "dispatch_failures": self._dispatch_failures,
+        }
+
     def health(self) -> Dict[str, Any]:
         """Health check for monitoring / other agents. (R5)"""
         return {
