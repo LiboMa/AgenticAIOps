@@ -1,24 +1,24 @@
 # Runbook: Increase CPU Limit
-# Triggered by: cpu-001 (CPU Throttling)
+# Triggered by: cpu_throttling pattern
 
 id: "increase-cpu-limit"
-name: "Increase Pod CPU Limit"
-description: "Automatically increase CPU limit when throttling detected"
+name: "Increase CPU Limit"
+description: "Increase container CPU limit when CPU throttling detected"
 
 triggers:
   - pattern_id: "cpu-001"
-  - severity: ["low"]
+  - pattern_id: "cpu_throttling"
 
 preconditions:
   - check: "resource_exists"
     resource_type: "deployment"
 
 steps:
-  - id: "get-current-limit"
+  - id: "get-current-limits"
     action: "get_resource_limits"
     description: "获取当前 CPU 限制"
     params:
-      resource_type: "{{ resource_type }}"
+      resource_type: "deployment"
       resource_name: "{{ resource_name }}"
       namespace: "{{ namespace }}"
     output: "current_limits"
@@ -47,25 +47,28 @@ steps:
                   resources:
                     limits:
                       cpu: "{{ new_cpu_limit }}"
-    requires_approval: false
 
   - id: "wait-rollout"
     action: "wait_rollout"
     description: "等待 Rollout 完成"
     params:
+      resource_type: "deployment"
+      resource_name: "{{ resource_name }}"
+      namespace: "{{ namespace }}"
       timeout_seconds: 300
 
-  - id: "monitor-throttling"
-    action: "check_metrics"
-    description: "监控 CPU Throttling 指标"
+  - id: "verify-health"
+    action: "verify_health"
+    description: "验证 Pod 状态正常"
     params:
-      metric: "container_cpu_cfs_throttled_seconds_total"
-      duration_seconds: 60
-      expected: "decreasing"
+      namespace: "{{ namespace }}"
+      label_selector: "app={{ resource_name }}"
+      timeout_seconds: 120
 
 rollback:
-  - id: "restore-limit"
+  - id: "rollback-cpu"
     action: "patch_resource"
+    description: "回滚 CPU 限制"
     params:
       resource_type: "deployment"
       resource_name: "{{ resource_name }}"
@@ -81,5 +84,6 @@ rollback:
                       cpu: "{{ current_limits.cpu }}"
 
 notifications:
+  on_start: true
   on_complete: true
   on_failure: true

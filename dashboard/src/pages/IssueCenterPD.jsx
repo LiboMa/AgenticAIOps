@@ -86,9 +86,14 @@ function IssueCenter({ apiUrl }) {
       const res = await fetch(`${apiUrl}/api/issues/${issue.id}/fix`, { method: 'POST' })
       const result = await res.json()
       if (result.status === 'initiated') {
-        message.success(`Auto-remediation started: ${result.runbook_id}`)
+        message.success(`✅ Auto-fix started: ${result.runbook_name || result.runbook_id} (${result.execution_id})`)
+        if (result.result === 'success') {
+          message.info('Runbook executed successfully')
+        }
+      } else if (result.status === 'no_runbook') {
+        message.warning(`No runbook found — use "Diagnose & Fix" for manual remediation`)
       } else {
-        message.warning(result.message || 'No runbook available')
+        message.warning(result.message || 'Fix not available')
       }
       setTimeout(fetchIssues, 2000)
     } catch (err) {

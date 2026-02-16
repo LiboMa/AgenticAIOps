@@ -182,21 +182,71 @@ Select a model above, or use **Auto Router** for smart selection! 🚀`,
   }
 
   const handleSend = async () => {
-    if (!input.trim() || loading) return
+    if ((!input.trim() && stagedFiles.length === 0) || loading) return
     const userMessage = input.trim()
+    const filesToSend = [...stagedFiles]
     setInput('')
     setStagedFiles([])
+    if (FileDropZone.clearFiles) FileDropZone.clearFiles()
+
+    // Build display message showing attached files
+    let displayMsg = userMessage
+    if (filesToSend.length > 0) {
+      const fileList = filesToSend.map(f => `📎 ${f.name}`).join('\n')
+      displayMsg = displayMsg ? `${displayMsg}\n\n${fileList}` : fileList
+    }
 
     setMessages(prev => [...prev, { 
       type: MESSAGE_TYPES.USER, 
-      content: userMessage,
+      content: displayMsg,
       timestamp: new Date().toISOString(),
     }])
     setLoading(true)
 
     try {
-      if (compareMode) {
-        const results = await Promise.all(compareModels.map(m => sendToModel(userMessage, m)))
+      if (filesToSend.length > 0 && !compareMode) {
+        // Use multipart upload endpoint when files are present
+        const formData = new FormData()
+        formData.append('message', userMessage || 'Please analyze the following uploaded file(s).')
+        const actualModel = selectedModel === 'auto' ? autoRouteModel(userMessage || 'analyze') : selectedModel
+        formData.append('model', actualModel)
+        filesToSend.forEach(f => {
+          if (f.raw) {
+            formData.append('files', f.raw)
+          }
+        })
+
+        const response = await fetch(`${apiUrl}/api/chat/upload`, {
+          method: 'POST',
+          body: formData,
+        })
+        const data = await response.json()
+
+        if (data.tokens) {
+          setTokenStats(prev => ({
+            total: prev.total + (data.tokens || 0),
+            cost: prev.cost + (data.cost || 0),
+          }))
+        }
+
+        setMessages(prev => [...prev, {
+          type: MESSAGE_TYPES.ASSISTANT,
+          content: data.response || data.error || 'No response',
+          timestamp: new Date().toISOString(),
+          model: data.model_used || actualModel,
+          routedFrom: selectedModel === 'auto' ? 'auto' : null,
+          files: data.files_processed,
+        }])
+      } else if (compareMode) {
+        // Append file content inline for compare mode
+        let msgForModel = userMessage
+        if (filesToSend.length > 0) {
+          msgForModel += '\n\n--- Attached Files ---\n'
+          filesToSend.forEach(f => {
+            msgForModel += `\n### File: ${f.name}\n\`\`\`\n${(f.content || '').substring(0, 10000)}\n\`\`\`\n`
+          })
+        }
+        const results = await Promise.all(compareModels.map(m => sendToModel(msgForModel, m)))
         setMessages(prev => [...prev, {
           type: MESSAGE_TYPES.COMPARE,
           results: results.map((r, i) => ({ model: compareModels[i], ...r })),
@@ -505,15 +555,31 @@ Select a model above, or use **Auto Router** for smart selection! 🚀`,
           borderTop: darkMode ? '1px solid #303030' : '1px solid #e8e8e8',
           background: darkMode ? '#1f1f1f' : '#fff',
         }}>
-          <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end' }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+            <Tooltip title="Attach files (logs, configs, YAML)">
+              <Button
+                icon={<PaperClipOutlined />}
+                onClick={() => {
+                  // Trigger hidden file input in FileDropZone
+                  const input = document.querySelector('input[type="file"][accept]')
+                  if (input) input.click()
+                }}
+                style={{
+                  borderColor: stagedFiles.length > 0 ? '#06AC38' : '#d9d9d9',
+                  color: stagedFiles.length > 0 ? '#06AC38' : undefined,
+                }}
+              />
+            </Tooltip>
             <TextArea
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyPress={handleKeyPress}
               placeholder={
-                compareMode 
-                  ? `Compare ${compareModels.length} models — type your question...`
-                  : `Ask with ${getModelInfo(selectedModel).name}... (drag files here)`
+                stagedFiles.length > 0
+                  ? `${stagedFiles.length} file(s) attached — add a message or press Send...`
+                  : compareMode 
+                    ? `Compare ${compareModels.length} models — type your question...`
+                    : `Ask with ${getModelInfo(selectedModel).name}... (drop files or click 📎)`
               }
               disabled={loading}
               autoSize={{ minRows: 1, maxRows: 4 }}
@@ -527,7 +593,7 @@ Select a model above, or use **Auto Router** for smart selection! 🚀`,
               type="primary"
               icon={<SendOutlined />}
               onClick={handleSend}
-              disabled={loading || !input.trim()}
+              disabled={loading || (!input.trim() && stagedFiles.length === 0)}
               style={{ 
                 background: '#06AC38', 
                 borderColor: '#06AC38', 
@@ -540,7 +606,12 @@ Select a model above, or use **Auto Router** for smart selection! 🚀`,
             </Button>
           </div>
           <div style={{ marginTop: 6, fontSize: 11, color: darkMode ? '#555' : '#bbb', display: 'flex', alignItems: 'center', gap: 4 }}>
-            <PaperClipOutlined /> Drag & drop files to attach • Enter to send, Shift+Enter for new line
+            <PaperClipOutlined /> Click 📎 or drag & drop files to attach • Enter to send, Shift+Enter for new line
+            {stagedFiles.length > 0 && (
+              <span style={{ color: '#06AC38', marginLeft: 8 }}>
+                ({stagedFiles.length} file{stagedFiles.length > 1 ? 's' : ''} ready)
+              </span>
+            )}
           </div>
         </div>
       </FileDropZone>

@@ -12,7 +12,7 @@ import signal
 import atexit
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
@@ -477,6 +477,61 @@ def _auto_route_model(query: str) -> str:
     
     # Default → Sonnet
     return 'claude-sonnet'
+
+
+@app.post("/api/chat/upload")
+async def chat_with_files(
+    message: str = Form(""),
+    model: str = Form("auto"),
+    files: list[UploadFile] = File(default=[]),
+):
+    """Chat with file attachments. Reads file content and appends to the message for AI analysis."""
+    try:
+        MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB per file
+        MAX_CONTENT_PER_FILE = 50000  # chars
+
+        file_sections = []
+        file_names = []
+
+        for f in files:
+            content_bytes = await f.read()
+            if len(content_bytes) > MAX_FILE_SIZE:
+                file_sections.append(f"### File: {f.filename}\n⚠️ File too large ({len(content_bytes)//1024}KB > {MAX_FILE_SIZE//1024}KB limit). Skipped.\n")
+                continue
+
+            # Try text decode
+            try:
+                text = content_bytes.decode("utf-8", errors="replace")
+            except Exception:
+                text = content_bytes.decode("latin-1", errors="replace")
+
+            truncated = text[:MAX_CONTENT_PER_FILE]
+            if len(text) > MAX_CONTENT_PER_FILE:
+                truncated += f"\n... (truncated, {len(text)} total chars)"
+
+            file_sections.append(f"### File: {f.filename} ({len(content_bytes)} bytes)\n```\n{truncated}\n```")
+            file_names.append(f.filename)
+
+        # Build combined prompt
+        user_msg = message.strip() or "Please analyze the following uploaded file(s)."
+        if file_sections:
+            combined = f"{user_msg}\n\n--- Attached Files ---\n" + "\n\n".join(file_sections)
+        else:
+            combined = user_msg
+
+        # Route to the normal chat handler
+        result = await chat(ChatRequest(message=combined, model=model))
+
+        return {
+            "response": result.response,
+            "intent": result.intent,
+            "confidence": result.confidence,
+            "model_used": result.model_used,
+            "files_processed": file_names,
+        }
+    except Exception as e:
+        import traceback
+        return {"response": f"Error processing files: {str(e)}\n{traceback.format_exc()}", "model_used": model}
 
 
 async def handle_aws_chat_intent(message: str) -> Optional[str]:
@@ -3846,7 +3901,7 @@ async def update_issue(issue_id: str, request: IssueUpdateRequest):
 
 @app.post("/api/issues/{issue_id}/fix")
 async def fix_issue(issue_id: str):
-    """Trigger auto-fix for an issue."""
+    """Trigger auto-fix for an issue. Matches issue type to runbook and executes."""
     manager = get_issue_manager()
     executor = get_runbook_executor()
     
@@ -3863,17 +3918,21 @@ async def fix_issue(issue_id: str):
     # Find and execute runbook
     if executor:
         try:
-            # Try to find runbook for this issue's type
-            pattern_id = issue.metadata.get("pattern_id") or issue.type.value if hasattr(issue.type, 'value') else str(issue.type)
+            # Try multiple pattern IDs for matching
+            pattern_id = issue.metadata.get("pattern_id") or (issue.type.value if hasattr(issue.type, 'value') else str(issue.type))
             
             context = {
                 "namespace": issue.namespace,
                 "resource_type": issue.metadata.get("resource_type", "Pod"),
                 "resource_name": issue.resource,
-                "container_name": "main",
+                "container_name": issue.metadata.get("container_name", "main"),
             }
             
             execution = executor.execute_for_pattern(pattern_id, context, issue_id=issue_id)
+            
+            # Fallback: try issue type value directly if pattern didn't match
+            if not execution and hasattr(issue.type, 'value'):
+                execution = executor.execute_for_pattern(issue.type.value, context, issue_id=issue_id)
             
             if execution:
                 # Record fix attempt
@@ -3888,9 +3947,38 @@ async def fix_issue(issue_id: str):
                     "status": "initiated",
                     "execution_id": execution.execution_id,
                     "runbook_id": execution.runbook_id,
+                    "runbook_name": execution.runbook_id.replace("-", " ").title(),
+                    "steps_total": len(execution.step_results),
+                    "result": execution.status.value,
                 }
             else:
-                return {"status": "no_runbook", "message": "No runbook found for this issue"}
+                # No runbook found — try SOP-based fix as fallback
+                try:
+                    from src.sop_system import get_sop_executor, get_sop_store
+                    sop_store = get_sop_store()
+                    # Search SOPs by issue type keyword
+                    keyword = issue.type.value.replace("_", " ") if hasattr(issue.type, 'value') else str(issue.type)
+                    matching_sops = sop_store.search_sops(keyword)
+                    if matching_sops:
+                        sop = matching_sops[0]
+                        sop_executor = get_sop_executor()
+                        sop_exec = sop_executor.start_execution(
+                            sop_id=sop.sop_id,
+                            triggered_by="auto_fix",
+                            context={"issue_id": issue_id, **context},
+                        )
+                        if sop_exec:
+                            return {
+                                "status": "initiated",
+                                "execution_id": sop_exec.execution_id,
+                                "runbook_id": sop.sop_id,
+                                "runbook_name": sop.name,
+                                "fix_type": "sop",
+                            }
+                except Exception as sop_err:
+                    logger.debug(f"SOP fallback failed: {sop_err}")
+                
+                return {"status": "no_runbook", "message": f"No runbook found for pattern: {pattern_id}"}
                 
         except Exception as e:
             return {"status": "error", "message": str(e)}

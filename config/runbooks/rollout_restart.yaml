@@ -7,6 +7,7 @@ description: "Restart deployment when CrashLoopBackOff detected"
 
 triggers:
   - pattern_id: "crash-001"
+  - pattern_id: "crash_loop"
   - severity: ["medium"]
 
 preconditions:

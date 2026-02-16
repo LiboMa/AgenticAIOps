@@ -133,7 +133,7 @@ class TestRunbookLoader:
         runbook = loader.get("increase-memory-limit")
         
         assert runbook is not None
-        assert runbook.name == "Increase Pod Memory Limit"
+        assert runbook.name == "Increase Memory Limit"
     
     def test_get_runbook_for_pattern(self, loader):
         """Test getting runbook for pattern."""

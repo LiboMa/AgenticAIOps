@@ -1,27 +1,24 @@
 # Runbook: Increase Memory Limit
-# Triggered by: oom_killed (OOMKilled)
+# Triggered by: oom-001 (OOMKilled), oom_killed pattern
 
 id: "increase-memory-limit"
-name: "Increase Pod Memory Limit"
-description: "Automatically increase memory limit when OOMKilled detected"
+name: "Increase Memory Limit"
+description: "Increase container memory limit when OOMKilled detected"
 
 triggers:
-  - pattern_id: "oom_killed"
   - pattern_id: "oom-001"
-  - severity: ["medium", "high"]
+  - pattern_id: "oom_killed"
 
 preconditions:
   - check: "resource_exists"
     resource_type: "deployment"
-  - check: "not_recently_modified"
-    duration_minutes: 30
 
 steps:
-  - id: "get-current-limit"
+  - id: "get-current-limits"
     action: "get_resource_limits"
-    description: "获取当前内存限制"
+    description: "获取当前资源限制"
     params:
-      resource_type: "{{ resource_type }}"
+      resource_type: "deployment"
       resource_name: "{{ resource_name }}"
       namespace: "{{ namespace }}"
     output: "current_limits"
@@ -31,7 +28,7 @@ steps:
     description: "计算新的内存限制 (增加 50%)"
     params:
       expression: "{{ current_limits.memory }} * 1.5"
-      max_value: "2Gi"
+      max_value: "1024Mi"
     output: "new_memory_limit"
 
   - id: "patch-deployment"
@@ -63,16 +60,17 @@ steps:
 
   - id: "verify-health"
     action: "verify_health"
-    description: "验证 Pod 健康状态"
+    description: "验证 Pod 状态正常"
     params:
       namespace: "{{ namespace }}"
       label_selector: "app={{ resource_name }}"
-      timeout_seconds: 60
+      timeout_seconds: 120
+      expected_ready: true
 
 rollback:
-  - id: "restore-limit"
+  - id: "rollback-memory"
     action: "patch_resource"
-    description: "恢复原内存限制"
+    description: "回滚内存限制"
     params:
       resource_type: "deployment"
       resource_name: "{{ resource_name }}"
@@ -91,4 +89,3 @@ notifications:
   on_start: true
   on_complete: true
   on_failure: true
-  channels: ["slack"]
