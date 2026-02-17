@@ -1,0 +1,38 @@
+# Runbook: Lambda Update Config
+# Triggered by: lambda_error, lambda-timeout patterns
+
+id: "lambda-update-config"
+name: "Lambda — Increase Memory & Timeout"
+description: "Increase Lambda memory/timeout when OOM or timeout errors detected"
+
+triggers:
+  - pattern_id: "lambda-timeout"
+  - pattern_id: "lambda_error"
+
+steps:
+  - id: "update-config"
+    action: "lambda_update_config"
+    description: "增加 Lambda 内存和超时时间"
+    params:
+      function_name: "{{ function_name }}"
+      memory_size: "{{ new_memory_size }}"
+      timeout: "{{ new_timeout }}"
+
+  - id: "verify"
+    action: "check_metrics"
+    description: "验证错误率下降"
+    params:
+      metric: "Errors"
+
+rollback:
+  - id: "rollback-config"
+    action: "lambda_update_config"
+    description: "回滚 Lambda 配置"
+    params:
+      function_name: "{{ function_name }}"
+      memory_size: "{{ original_memory }}"
+      timeout: "{{ original_timeout }}"
+
+notifications:
+  on_complete: true
+  on_failure: true

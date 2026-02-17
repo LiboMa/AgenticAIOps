@@ -175,6 +175,9 @@ class RCASOPBridge:
         self._execution_history: Dict[str, RCASOPResult] = {}
         # Track which RCA patterns lead to successful SOP resolutions
         self._success_map: Dict[str, Dict[str, int]] = {}  # pattern_id → {sop_id: success_count}
+        self._failure_map: Dict[str, Dict[str, int]] = {}  # pattern_id → {sop_id: failure_count}
+        # Load persisted learning data
+        self._load_learning_data()
     
     def analyze_and_suggest(
         self,
@@ -298,11 +301,19 @@ class RCASOPBridge:
                 key=lambda x: x[1], reverse=True
             ):
                 if not any(s['sop_id'] == sop_id for s in matched_sops):
-                    sop = store.get_sop(sop_id)
-                    if sop:
-                        # Higher confidence for historically successful SOPs
-                        conf = min(0.95, 0.6 + count * 0.1)
-                        matched_sops.append(self._sop_to_suggestion(sop, "learned", conf))
+                    # Use learned confidence score (accounts for both success & failure)
+                    learned_conf = self.get_learned_confidence(pattern_id, sop_id)
+                    if learned_conf > 0.3:  # Only suggest if net positive
+                        sop = store.get_sop(sop_id)
+                        if sop:
+                            matched_sops.append(self._sop_to_suggestion(sop, "learned", learned_conf))
+                else:
+                    # Boost existing match confidence if historically successful
+                    for s in matched_sops:
+                        if s['sop_id'] == sop_id:
+                            boost = min(0.1, count * 0.02)
+                            s['match_confidence'] = min(0.98, s['match_confidence'] + boost)
+                            break
         
         # Sort by match confidence
         matched_sops.sort(key=lambda x: x['match_confidence'], reverse=True)
@@ -438,7 +449,7 @@ class RCASOPBridge:
         
         self._feedbacks.append(feedback)
         
-        # Update success map for learning
+        # Update success/failure maps for learning
         if success:
             if rca_pattern_id not in self._success_map:
                 self._success_map[rca_pattern_id] = {}
@@ -449,10 +460,27 @@ class RCASOPBridge:
                 f"Positive feedback: pattern={rca_pattern_id} → sop={sop_id} "
                 f"(total successes: {self._success_map[rca_pattern_id][sop_id]})"
             )
+            # Strengthen the pattern confidence
+            self._strengthen_pattern(rca_pattern_id)
+        else:
+            # Track failures — reduce confidence for this pattern→SOP pair
+            if rca_pattern_id not in self._failure_map:
+                self._failure_map[rca_pattern_id] = {}
+            self._failure_map[rca_pattern_id][sop_id] = (
+                self._failure_map[rca_pattern_id].get(sop_id, 0) + 1
+            )
+            logger.info(
+                f"Negative feedback: pattern={rca_pattern_id} → sop={sop_id} "
+                f"(total failures: {self._failure_map[rca_pattern_id][sop_id]})"
+            )
+            self._weaken_pattern(rca_pattern_id)
         
-        # If root cause confirmed, strengthen the pattern
+        # If root cause confirmed, extra strengthen
         if root_cause_confirmed:
             self._strengthen_pattern(rca_pattern_id)
+        
+        # Persist learning data
+        self._save_learning_data()
         
         return feedback
     
@@ -468,6 +496,74 @@ class RCASOPBridge:
                 logger.info(f"Strengthened pattern {pattern_id} → confidence={pattern.confidence}")
         except Exception as e:
             logger.warning(f"Failed to strengthen pattern: {e}")
+    
+    def _weaken_pattern(self, pattern_id: str):
+        """Weaken an RCA pattern when SOP execution fails — avoids recommending bad fixes."""
+        try:
+            from src.rca.engine import RCAEngine
+            engine = RCAEngine()
+            pattern = engine.matcher.get_pattern(pattern_id)
+            if pattern:
+                # Decrease confidence, but never below 0.3
+                pattern.confidence = max(0.3, pattern.confidence - 0.03)
+                logger.info(f"Weakened pattern {pattern_id} → confidence={pattern.confidence}")
+        except Exception as e:
+            logger.warning(f"Failed to weaken pattern: {e}")
+    
+    def get_learned_confidence(self, pattern_id: str, sop_id: str) -> float:
+        """Get the learned confidence for a pattern→SOP pair based on historical feedback."""
+        successes = self._success_map.get(pattern_id, {}).get(sop_id, 0)
+        failures = self._failure_map.get(pattern_id, {}).get(sop_id, 0)
+        total = successes + failures
+        if total == 0:
+            return 0.0
+        # Wilson score lower bound for ranking
+        z = 1.96  # 95% CI
+        phat = successes / total
+        return (phat + z*z/(2*total) - z * ((phat*(1-phat) + z*z/(4*total))/total)**0.5) / (1 + z*z/total)
+    
+    # =========================================================================
+    # Learning Data Persistence (JSON file-based)
+    # =========================================================================
+    
+    LEARNING_FILE = "data/rca_sop_learning.json"
+    
+    def _save_learning_data(self):
+        """Persist learning maps to disk."""
+        import json
+        from pathlib import Path
+        try:
+            data = {
+                "success_map": self._success_map,
+                "failure_map": self._failure_map,
+                "total_feedbacks": len(self._feedbacks),
+                "last_updated": datetime.now(timezone.utc).isoformat(),
+            }
+            path = Path(__file__).parent.parent / self.LEARNING_FILE
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "w") as f:
+                json.dump(data, f, indent=2)
+            logger.debug(f"Saved learning data: {len(self._success_map)} patterns")
+        except Exception as e:
+            logger.warning(f"Failed to save learning data: {e}")
+    
+    def _load_learning_data(self):
+        """Load persisted learning maps from disk."""
+        import json
+        from pathlib import Path
+        try:
+            path = Path(__file__).parent.parent / self.LEARNING_FILE
+            if path.exists():
+                with open(path) as f:
+                    data = json.load(f)
+                self._success_map = data.get("success_map", {})
+                self._failure_map = data.get("failure_map", {})
+                logger.info(
+                    f"Loaded learning data: {len(self._success_map)} success patterns, "
+                    f"{len(self._failure_map)} failure patterns"
+                )
+        except Exception as e:
+            logger.warning(f"Failed to load learning data: {e}")
     
     def get_feedback_stats(self) -> Dict[str, Any]:
         """Get feedback statistics."""
@@ -490,6 +586,9 @@ class RCASOPBridge:
             "avg_resolution_seconds": avg_resolution,
             "learned_mappings": {
                 pid: dict(sops) for pid, sops in self._success_map.items()
+            },
+            "failure_mappings": {
+                pid: dict(sops) for pid, sops in self._failure_map.items()
             },
         }
     

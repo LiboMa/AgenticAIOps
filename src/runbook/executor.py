@@ -86,6 +86,7 @@ class RunbookExecutor:
     def _register_builtin_handlers(self) -> None:
         """Register built-in action handlers."""
         self._action_handlers = {
+            # K8s actions
             "get_resource": self._action_get_resource,
             "get_resource_limits": self._action_get_resource_limits,
             "patch_resource": self._action_patch_resource,
@@ -95,6 +96,17 @@ class RunbookExecutor:
             "verify_health": self._action_verify_health,
             "calculate": self._action_calculate,
             "check_metrics": self._action_check_metrics,
+            # AWS actions (L4: real boto3 execution)
+            "ec2_reboot": self._action_ec2_reboot,
+            "ec2_stop": self._action_ec2_stop,
+            "ec2_start": self._action_ec2_start,
+            "ec2_describe": self._action_ec2_describe,
+            "asg_scale": self._action_asg_scale,
+            "rds_reboot": self._action_rds_reboot,
+            "rds_failover": self._action_rds_failover,
+            "lambda_update_config": self._action_lambda_update_config,
+            "cloudwatch_describe_alarms": self._action_cw_describe_alarms,
+            "sns_notify": self._action_sns_notify,
         }
     
     def register_action(self, name: str, handler: Callable) -> None:
@@ -422,6 +434,190 @@ class RunbookExecutor:
         metric = params.get('metric')
         logger.info(f"Checking metric: {metric}")
         return {"metric": metric, "status": "ok"}
+    
+    # =========================================================================
+    # AWS Actions (L4: real boto3 execution)
+    # =========================================================================
+    
+    def _get_boto3_client(self, service: str, region: str = None):
+        """Get a boto3 client for the given AWS service."""
+        import boto3
+        from src.config import AWS_REGION
+        return boto3.client(service, region_name=region or AWS_REGION)
+    
+    def _action_ec2_describe(self, params: Dict, context: Dict) -> Dict:
+        """Describe EC2 instance."""
+        instance_id = params.get("instance_id") or context.get("instance_id")
+        if not instance_id:
+            raise ValueError("instance_id required")
+        
+        ec2 = self._get_boto3_client("ec2", params.get("region"))
+        resp = ec2.describe_instances(InstanceIds=[instance_id])
+        inst = resp["Reservations"][0]["Instances"][0]
+        return {
+            "instance_id": instance_id,
+            "state": inst["State"]["Name"],
+            "instance_type": inst["InstanceType"],
+            "launch_time": str(inst.get("LaunchTime")),
+        }
+    
+    def _action_ec2_reboot(self, params: Dict, context: Dict) -> Dict:
+        """Reboot an EC2 instance."""
+        instance_id = params.get("instance_id") or context.get("instance_id")
+        if not instance_id:
+            raise ValueError("instance_id required")
+        
+        logger.info(f"Rebooting EC2 instance: {instance_id}")
+        ec2 = self._get_boto3_client("ec2", params.get("region"))
+        ec2.reboot_instances(InstanceIds=[instance_id])
+        return {"instance_id": instance_id, "action": "reboot", "success": True}
+    
+    def _action_ec2_stop(self, params: Dict, context: Dict) -> Dict:
+        """Stop an EC2 instance."""
+        instance_id = params.get("instance_id") or context.get("instance_id")
+        if not instance_id:
+            raise ValueError("instance_id required")
+        
+        logger.info(f"Stopping EC2 instance: {instance_id}")
+        ec2 = self._get_boto3_client("ec2", params.get("region"))
+        resp = ec2.stop_instances(InstanceIds=[instance_id])
+        state = resp["StoppingInstances"][0]["CurrentState"]["Name"]
+        return {"instance_id": instance_id, "action": "stop", "state": state}
+    
+    def _action_ec2_start(self, params: Dict, context: Dict) -> Dict:
+        """Start an EC2 instance."""
+        instance_id = params.get("instance_id") or context.get("instance_id")
+        if not instance_id:
+            raise ValueError("instance_id required")
+        
+        logger.info(f"Starting EC2 instance: {instance_id}")
+        ec2 = self._get_boto3_client("ec2", params.get("region"))
+        resp = ec2.start_instances(InstanceIds=[instance_id])
+        state = resp["StartingInstances"][0]["CurrentState"]["Name"]
+        return {"instance_id": instance_id, "action": "start", "state": state}
+    
+    def _action_asg_scale(self, params: Dict, context: Dict) -> Dict:
+        """Scale an Auto Scaling Group."""
+        asg_name = params.get("asg_name") or context.get("asg_name")
+        desired = params.get("desired_capacity")
+        min_size = params.get("min_size")
+        max_size = params.get("max_size")
+        
+        if not asg_name:
+            raise ValueError("asg_name required")
+        
+        logger.info(f"Scaling ASG {asg_name}: desired={desired}")
+        asg = self._get_boto3_client("autoscaling", params.get("region"))
+        
+        update_params = {"AutoScalingGroupName": asg_name}
+        if desired is not None:
+            update_params["DesiredCapacity"] = int(desired)
+        if min_size is not None:
+            update_params["MinSize"] = int(min_size)
+        if max_size is not None:
+            update_params["MaxSize"] = int(max_size)
+        
+        asg.update_auto_scaling_group(**update_params)
+        return {"asg_name": asg_name, "action": "scale", "desired": desired, "success": True}
+    
+    def _action_rds_reboot(self, params: Dict, context: Dict) -> Dict:
+        """Reboot an RDS instance."""
+        db_id = params.get("db_instance_id") or context.get("db_instance_id")
+        if not db_id:
+            raise ValueError("db_instance_id required")
+        
+        logger.info(f"Rebooting RDS instance: {db_id}")
+        rds = self._get_boto3_client("rds", params.get("region"))
+        resp = rds.reboot_db_instance(
+            DBInstanceIdentifier=db_id,
+            ForceFailover=params.get("force_failover", False),
+        )
+        return {
+            "db_instance_id": db_id,
+            "action": "reboot",
+            "status": resp["DBInstance"]["DBInstanceStatus"],
+        }
+    
+    def _action_rds_failover(self, params: Dict, context: Dict) -> Dict:
+        """Trigger RDS Multi-AZ failover."""
+        db_id = params.get("db_instance_id") or context.get("db_instance_id")
+        if not db_id:
+            raise ValueError("db_instance_id required")
+        
+        logger.info(f"Triggering RDS failover: {db_id}")
+        rds = self._get_boto3_client("rds", params.get("region"))
+        resp = rds.reboot_db_instance(
+            DBInstanceIdentifier=db_id,
+            ForceFailover=True,
+        )
+        return {
+            "db_instance_id": db_id,
+            "action": "failover",
+            "status": resp["DBInstance"]["DBInstanceStatus"],
+        }
+    
+    def _action_lambda_update_config(self, params: Dict, context: Dict) -> Dict:
+        """Update Lambda function configuration (memory, timeout)."""
+        func_name = params.get("function_name") or context.get("function_name")
+        if not func_name:
+            raise ValueError("function_name required")
+        
+        logger.info(f"Updating Lambda config: {func_name}")
+        lam = self._get_boto3_client("lambda", params.get("region"))
+        
+        update_params = {"FunctionName": func_name}
+        if params.get("memory_size"):
+            update_params["MemorySize"] = int(params["memory_size"])
+        if params.get("timeout"):
+            update_params["Timeout"] = int(params["timeout"])
+        if params.get("environment"):
+            update_params["Environment"] = {"Variables": params["environment"]}
+        
+        resp = lam.update_function_configuration(**update_params)
+        return {
+            "function_name": func_name,
+            "action": "update_config",
+            "memory": resp.get("MemorySize"),
+            "timeout": resp.get("Timeout"),
+        }
+    
+    def _action_cw_describe_alarms(self, params: Dict, context: Dict) -> Dict:
+        """Describe CloudWatch alarms."""
+        alarm_names = params.get("alarm_names", [])
+        cw = self._get_boto3_client("cloudwatch", params.get("region"))
+        
+        if alarm_names:
+            resp = cw.describe_alarms(AlarmNames=alarm_names)
+        else:
+            resp = cw.describe_alarms(StateValue="ALARM", MaxRecords=10)
+        
+        alarms = [{
+            "name": a["AlarmName"],
+            "state": a["StateValue"],
+            "metric": a["MetricName"],
+            "reason": a.get("StateReason", "")[:200],
+        } for a in resp.get("MetricAlarms", [])]
+        
+        return {"alarms": alarms, "count": len(alarms)}
+    
+    def _action_sns_notify(self, params: Dict, context: Dict) -> Dict:
+        """Send SNS notification."""
+        topic_arn = params.get("topic_arn")
+        message = params.get("message", "")
+        subject = params.get("subject", "AgenticAIOps Notification")
+        
+        if not topic_arn:
+            logger.warning("No SNS topic_arn provided, skipping notification")
+            return {"sent": False, "reason": "no topic_arn"}
+        
+        sns = self._get_boto3_client("sns", params.get("region"))
+        resp = sns.publish(
+            TopicArn=topic_arn,
+            Subject=subject,
+            Message=message,
+        )
+        return {"sent": True, "message_id": resp.get("MessageId")}
+    
     
     def get_execution(self, execution_id: str) -> Optional[RunbookExecution]:
         """Get execution by ID."""

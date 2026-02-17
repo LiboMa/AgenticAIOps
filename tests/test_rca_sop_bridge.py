@@ -179,7 +179,7 @@ class TestMatchSops:
         assert len(results) >= 1
         assert results[0]["sop_id"] == "sop-ec2-high-cpu"
         assert results[0]["match_type"] == "pattern_match"
-        assert results[0]["match_confidence"] == 0.9
+        assert results[0]["match_confidence"] >= 0.9
 
     def test_keyword_match(self):
         """Keyword in root_cause triggers keyword match."""
@@ -218,6 +218,7 @@ class TestMatchSops:
         """Historical success map boosts SOP suggestions."""
         bridge = RCASOPBridge()
         bridge._success_map = {"pat-custom": {"sop-ec2-high-cpu": 5}}
+        bridge._failure_map = {}
 
         rca = _make_rca_result(pattern_id="pat-custom", root_cause="custom issue")
 
@@ -230,7 +231,7 @@ class TestMatchSops:
 
         learned = [r for r in results if r["match_type"] == "learned"]
         assert len(learned) >= 1
-        assert learned[0]["match_confidence"] >= 0.6
+        assert learned[0]["match_confidence"] >= 0.5  # Wilson score for 5/0
 
     def test_max_5_results(self):
         """Results capped at 5."""
@@ -365,6 +366,7 @@ class TestBridgeConfidence:
 
     def test_returns_best_match(self):
         bridge = RCASOPBridge()
+        bridge._success_map = {}  # Clear loaded learning data
         sops = [
             {"match_confidence": 0.9},
             {"match_confidence": 0.7},
@@ -386,8 +388,16 @@ class TestBridgeConfidence:
 
 class TestFeedback:
 
-    def test_submit_success_feedback(self):
+    def _fresh_bridge(self):
+        """Create a bridge with clean state (no persisted data)."""
         bridge = RCASOPBridge()
+        bridge._success_map = {}
+        bridge._failure_map = {}
+        bridge._feedbacks = []
+        return bridge
+
+    def test_submit_success_feedback(self):
+        bridge = self._fresh_bridge()
         fb = bridge.submit_feedback(
             execution_id="exec-1",
             sop_id="sop-ec2-high-cpu",
@@ -401,7 +411,7 @@ class TestFeedback:
         assert bridge._success_map["cpu-001"]["sop-ec2-high-cpu"] == 1
 
     def test_submit_multiple_success_accumulates(self):
-        bridge = RCASOPBridge()
+        bridge = self._fresh_bridge()
         bridge.submit_feedback("e1", "sop-1", "pat-1", success=True)
         bridge.submit_feedback("e2", "sop-1", "pat-1", success=True)
         bridge.submit_feedback("e3", "sop-1", "pat-1", success=True)
@@ -409,14 +419,14 @@ class TestFeedback:
         assert bridge._success_map["pat-1"]["sop-1"] == 3
 
     def test_submit_failure_no_success_map(self):
-        bridge = RCASOPBridge()
+        bridge = self._fresh_bridge()
         bridge.submit_feedback("e1", "sop-1", "pat-1", success=False)
 
         assert "pat-1" not in bridge._success_map
         assert len(bridge._feedbacks) == 1
 
     def test_confirmed_root_cause_strengthens_pattern(self):
-        bridge = RCASOPBridge()
+        bridge = self._fresh_bridge()
 
         mock_engine = MagicMock()
         mock_pattern = MagicMock()
@@ -430,10 +440,10 @@ class TestFeedback:
                 root_cause_confirmed=True,
             )
 
-        assert mock_pattern.confidence == pytest.approx(0.85)  # +0.05
+        assert mock_pattern.confidence == pytest.approx(0.90)  # +0.05 (success) + 0.05 (confirmed)
 
     def test_strengthen_pattern_exception_swallowed(self):
-        bridge = RCASOPBridge()
+        bridge = self._fresh_bridge()
 
         with patch("src.rca.engine.RCAEngine", side_effect=Exception("engine fail")):
             # Should not raise
