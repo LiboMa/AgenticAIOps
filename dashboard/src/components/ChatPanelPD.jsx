@@ -51,9 +51,9 @@ Try asking: *"What pods are having issues in stress-test namespace?"*
 
   // Handle file upload
   const handleFileUpload = useCallback(async (file) => {
-    const maxSize = 5 * 1024 * 1024 // 5MB
+    const maxSize = 10 * 1024 * 1024 // 10MB
     if (file.size > maxSize) {
-      antMessage.error(`File ${file.name} is too large (max 5MB)`)
+      antMessage.error(`File ${file.name} is too large (max 10MB)`)
       return false
     }
 
@@ -66,8 +66,9 @@ Try asking: *"What pods are having issues in stress-test namespace?"*
         size: file.size,
         type: file.type,
         content: content.substring(0, 50000), // Limit content size
+        raw: file, // Keep raw File for FormData upload
       }])
-      antMessage.success(`File "${file.name}" uploaded`)
+      antMessage.success(`File "${file.name}" attached`)
     }
     reader.readAsText(file)
     return false // Prevent default upload behavior
@@ -116,24 +117,37 @@ Try asking: *"What pods are having issues in stress-test namespace?"*
     setLoading(true)
 
     try {
-      // Build request with file content
-      let fullMessage = userMessage
-      if (files.length > 0) {
-        fullMessage += '\n\n--- Attached Files ---\n'
-        files.forEach(f => {
-          fullMessage += `\n### File: ${f.name}\n\`\`\`\n${f.content.substring(0, 10000)}\n\`\`\`\n`
-        })
-        if (!userMessage) {
-          fullMessage = `Please analyze the following uploaded file(s):\n${fullMessage}`
-        }
-      }
+      let data
 
-      const response = await fetch(`${apiUrl}/api/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: fullMessage })
-      })
-      const data = await response.json()
+      if (files.length > 0 && files.some(f => f.raw)) {
+        // Use multipart upload when files have raw File objects
+        const formData = new FormData()
+        formData.append('message', userMessage || 'Please analyze the following uploaded file(s).')
+        formData.append('model', 'auto')
+        files.forEach(f => {
+          if (f.raw) formData.append('files', f.raw)
+        })
+        const response = await fetch(`${apiUrl}/api/chat/upload`, { method: 'POST', body: formData })
+        data = await response.json()
+      } else {
+        // Fallback: inline file content in message
+        let fullMessage = userMessage
+        if (files.length > 0) {
+          fullMessage += '\n\n--- Attached Files ---\n'
+          files.forEach(f => {
+            fullMessage += `\n### File: ${f.name}\n\`\`\`\n${f.content.substring(0, 10000)}\n\`\`\`\n`
+          })
+          if (!userMessage) {
+            fullMessage = `Please analyze the following uploaded file(s):\n${fullMessage}`
+          }
+        }
+        const response = await fetch(`${apiUrl}/api/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: fullMessage })
+        })
+        data = await response.json()
+      }
       
       // Check for A2UI action
       let assistantMessage = data.response || data.error || 'No response'
