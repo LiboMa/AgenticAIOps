@@ -767,6 +767,106 @@ class TestE2EAPIFlow:
 
 
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# POST /api/health-issues/{id}/reopen endpoint (routers/health_issues.py)
+# ---------------------------------------------------------------------------
+
+class TestReopenEndpoint:
+    """Test the POST /{issue_id}/reopen HTTP endpoint (dedicated, not transition)."""
+
+    @pytest.fixture
+    def client(self, tmp_path):
+        app = FastAPI()
+        app.include_router(router)
+        from routers.health_issues import _store
+        _store._dir = str(tmp_path)
+        return TestClient(app)
+
+    def _create_resolved_issue(self, client) -> str:
+        resp = client.post("/api/health-issues", json={"title": "Will resolve"})
+        issue_id = resp.json()["id"]
+        client.patch(f"/api/health-issues/{issue_id}/status", json={"status": "resolved"})
+        return issue_id
+
+    def test_reopen_happy(self, client):
+        """Reopen a resolved issue with note."""
+        issue_id = self._create_resolved_issue(client)
+        resp = client.post(
+            f"/api/health-issues/{issue_id}/reopen",
+            json={"note": "Issue recurred after 30m"},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "open"
+        assert body["resolved_at"] is None
+
+    def test_reopen_with_actor(self, client):
+        """Reopen with actor recorded in timeline."""
+        issue_id = self._create_resolved_issue(client)
+        resp = client.post(
+            f"/api/health-issues/{issue_id}/reopen",
+            json={"note": "Recurrence", "actor": "oncall-sre"},
+        )
+        assert resp.status_code == 200
+        timeline = resp.json()["timeline"]
+        reopen_entry = [e for e in timeline if e.get("to") == "open"]
+        assert len(reopen_entry) >= 1
+        assert reopen_entry[-1]["actor"] == "oncall-sre"
+
+    def test_reopen_not_resolved_400(self, client):
+        """Reopen an OPEN issue → 400."""
+        resp = client.post("/api/health-issues", json={"title": "Still open"})
+        issue_id = resp.json()["id"]
+        resp = client.post(
+            f"/api/health-issues/{issue_id}/reopen",
+            json={"note": "Trying anyway"},
+        )
+        assert resp.status_code == 400
+
+    def test_reopen_empty_note_400(self, client):
+        """Reopen with empty note → 400."""
+        issue_id = self._create_resolved_issue(client)
+        resp = client.post(
+            f"/api/health-issues/{issue_id}/reopen",
+            json={"note": ""},
+        )
+        assert resp.status_code == 400
+
+    def test_reopen_whitespace_note_400(self, client):
+        """Reopen with whitespace-only note → 400."""
+        issue_id = self._create_resolved_issue(client)
+        resp = client.post(
+            f"/api/health-issues/{issue_id}/reopen",
+            json={"note": "   "},
+        )
+        assert resp.status_code == 400
+
+    def test_reopen_not_found_404(self, client):
+        """Reopen nonexistent issue → 404."""
+        resp = client.post(
+            "/api/health-issues/ghost-id/reopen",
+            json={"note": "Doesn't exist"},
+        )
+        assert resp.status_code == 404
+
+    def test_reopen_then_investigate(self, client):
+        """Full flow: resolve → reopen → investigating."""
+        issue_id = self._create_resolved_issue(client)
+        resp = client.post(
+            f"/api/health-issues/{issue_id}/reopen",
+            json={"note": "Alarm fired again"},
+        )
+        assert resp.status_code == 200
+        # Can now transition normally
+        resp = client.patch(
+            f"/api/health-issues/{issue_id}/status",
+            json={"status": "investigating"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "investigating"
+
+
+# ---------------------------------------------------------------------------
 # Force-close endpoint (routers/health_issues.py L298-313)
 # ---------------------------------------------------------------------------
 
