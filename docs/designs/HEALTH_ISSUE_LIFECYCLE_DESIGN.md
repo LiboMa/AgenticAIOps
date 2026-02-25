@@ -1,464 +1,317 @@
 # 设计方案: HealthIssue 7 状态生命周期
 
-> **Author**: Architect  
-> **Date**: 2026-02-25  
-> **Status**: Draft → Pending Review  
-> **Sprint**: agenticops-chat 整合 Day 2  
-> **Reference**: `agenticops-chat/src/agenticops/models.py` (HealthIssue)
+**作者:** Architect  
+**日期:** 2026-02-25  
+**状态:** Draft → Pending Review  
+**参考:** `agenticops-chat/src/agenticops/models.py` (HealthIssue + FixPlan)
 
 ---
 
 ## 背景
 
-### 当前状态 (`src/issues/models.py`)
+当前系统有 **两套独立的状态系统**，互不关联：
 
-我们现有的 `IssueStatus` 是 8 状态的扁平模型：
-
+### IssueStatus (src/issues/models.py) — K8s 导向
 ```
-DETECTED → ANALYZING → PENDING_FIX → FIXING → FIXED
-                                   ↘ ACKNOWLEDGED
-                              FAILED ← ↙
-                              CLOSED
+DETECTED → ANALYZING → PENDING_FIX → FIXING → FIXED → CLOSED
+                                              ↘ FAILED
+                              ↘ ACKNOWLEDGED
 ```
+8 个状态，面向 K8s pod 级问题 (OOM/CrashLoop/ImagePull)。
 
-**问题：**
+### IncidentStatus (src/incident_orchestrator.py) — Pipeline 导向
+```
+TRIGGERED → COLLECTING → ANALYZING → SOP_MATCHED → SAFETY_CHECK → EXECUTING → COMPLETED
+                                                                  ↘ WAITING_APPROVAL
+                                                                              ↘ FAILED
+```
+9 个状态，面向管道编排的执行阶段。
 
-1. **缺少 Fix Plan 阶段** — 当前从 `PENDING_FIX` 直接到 `FIXING`，没有计划→审批→执行的分离
-2. **与 IncidentOrchestrator 重叠** — `IncidentStatus` (9 状态) 和 `IssueStatus` (8 状态) 并行存在，语义重叠
-3. **Fix Plan 没有独立生命周期** — SRE Agent 的 fix plan (draft → approved → rejected) 在我们系统中没有对应结构
-4. **Issue 和 Incident 职责不清** — K8s pod 级 issue 和 AWS 级 incident 用不同模型，无法统一追踪
-
-### agenticops-chat 参考 (`HealthIssue`)
-
-agenticops-chat 的 7 状态生命周期设计精准：
-
+### agenticops-chat HealthIssueStatus — 业务导向
 ```
 open → investigating → root_cause_identified → fix_planned → fix_approved → fix_executed → resolved
 ```
+7 个状态，面向问题的生命周期（从发现到解决）。
 
-**优势：**
-- 每个状态有明确的 agent 职责归属（Detect → RCA → SRE）
-- Fix Plan 独立实体，有自己的 draft/approved/rejected 生命周期
-- RCAResult 和 FixPlan 通过 FK 关联 HealthIssue
-- 与 agents-as-tools 模式天然匹配
-
-### 整合目标
-
-统一 `IssueStatus` + `IncidentStatus` 为 7 状态 `HealthIssueStatus`，支持：
-- K8s pod 级问题（原 issues 模块）
-- AWS 基础设施异常（原 incident_orchestrator）
-- 多 agent 协同处理（Detect → RCA → SRE → Execute）
+### 问题
+1. **Issue 和 Incident 分离** — 同一个问题在两个系统里各有一个生命周期
+2. **没有审批门控** — IncidentStatus 的 `WAITING_APPROVAL` 只是暂停，没有结构化审批
+3. **没有 FixPlan** — SOP 匹配后直接执行，缺少"修复计划"中间态
+4. **Issue 无 RCA 关联** — IssueStatus 不知道 RCA 结果
+5. **Incident 无持久化** — IncidentRecord 只在内存和 JSON 中
 
 ---
 
 ## 目标
 
-1. **统一状态模型** — 合并 Issue + Incident 为 HealthIssue，一个实体跟踪完整生命周期
-2. **计划与执行分离** — 引入 FixPlan 实体，支持 L0-L3 风险分级和审批门控
-3. **Agent 职责明确** — 每个状态转换绑定特定 agent 或人工操作
-4. **向后兼容** — 现有 `/api/issues/*` 端点保持兼容，渐进迁移
-5. **RCA 关联** — RCAResult 独立存储，1:N 关联 HealthIssue（同一问题可多次分析）
-6. **拓扑上下文** — 利用 Day 1 的 Topology 模块注入网络上下文到 RCA
+1. 统一为 **HealthIssueStatus (7 状态)**，替代 IssueStatus + IncidentStatus
+2. 引入 **FixPlan** 独立实体，含 L0-L3 风险分级 + 审批门控
+3. 引入 **RCAResult** 独立关联 (1:N，一个 Issue 可有多次 RCA)
+4. 保持与现有管道兼容，渐进替换
+5. 未来迁移到 SQLAlchemy 时保持 schema 稳定
 
 ---
 
 ## 方案
 
-### 方案 A: 渐进替换（推荐 ✅）
+### 方案 A: 渐进替换 (推荐)
 
-在 `src/issues/` 内部演进，保留现有 SQLite 后端，新增 FixPlan 实体。
+在现有 dataclass 架构上引入 HealthIssue 统一模型，**不引入 SQLAlchemy**。
 
-#### 新状态枚举
+**新增文件:**
+```
+src/health_issue/
+├── __init__.py
+├── models.py          # HealthIssue + FixPlan + RCAResult (~180 行)
+├── lifecycle.py       # 状态转换规则 + 审批门控 (~120 行)
+├── store.py           # JSON 持久化 (SQLAlchemy ready 接口) (~100 行)
+└── migration.py       # IssueStatus/IncidentStatus → HealthIssueStatus (~60 行)
+```
+
+**修改文件:**
+```
+src/incident_orchestrator.py  — IncidentRecord 关联 HealthIssue
+src/issues/models.py          — Issue 关联 HealthIssue (deprecate IssueStatus)
+src/rca_inference.py           — RCAResult 回写 HealthIssue
+```
+
+**预估:** ~640 行新代码，~80 行修改，1.5 天
+
+### 方案 B: SQLAlchemy 全量迁移
+
+引入 SQLAlchemy + SQLite，全面对齐 agenticops-chat 的数据层。
+
+**预估:** ~2,000 行新代码，~500 行修改，5 天
+
+**缺点:** 风险大，改动多，与现有 JSON 持久化/S3 存储的衔接复杂
+
+---
+
+## 推荐: 方案 A (渐进替换)
+
+理由：
+- 最小侵入，保持现有管道稳定
+- dataclass → SQLAlchemy 迁移后续可做（store.py 接口已准备）
+- 3 天 Sprint 内可完成
+
+---
+
+## 详细设计
+
+### 1. HealthIssueStatus (7 状态)
 
 ```python
 class HealthIssueStatus(str, Enum):
-    """7-state lifecycle aligned with agenticops-chat."""
-    OPEN = "open"                               # 检测到问题
-    INVESTIGATING = "investigating"             # RCA Agent 正在分析
+    """统一的 Issue 生命周期状态。"""
+    OPEN = "open"                               # 刚检测到
+    INVESTIGATING = "investigating"             # RCA 分析中
     ROOT_CAUSE_IDENTIFIED = "root_cause_identified"  # RCA 完成
-    FIX_PLANNED = "fix_planned"                 # SRE Agent 生成 Fix Plan
-    FIX_APPROVED = "fix_approved"               # Fix Plan 审批通过
-    FIX_EXECUTED = "fix_executed"               # 已执行修复
-    RESOLVED = "resolved"                       # 问题解决 (含验证)
+    FIX_PLANNED = "fix_planned"                 # FixPlan 已生成
+    FIX_APPROVED = "fix_approved"               # FixPlan 已审批
+    FIX_EXECUTED = "fix_executed"               # 修复已执行
+    RESOLVED = "resolved"                       # 确认解决
 ```
 
-#### 状态转换规则
+### 2. 状态转换规则
 
 ```
-                                    ┌──────────┐
-           ┌────────────────────────┤ RESOLVED │◄─── (force close from any state)
-           │                        └──────────┘
-           │                             ▲
-           │                             │ post_check passed
-           │                             │
-   ┌───────┴──┐    ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
-   │   OPEN   │───►│ INVESTIGATING│─►│  ROOT_CAUSE  │─►│ FIX_PLANNED  │─►│ FIX_APPROVED │─►│ FIX_EXECUTED │
-   └──────────┘    └──────────────┘  │  IDENTIFIED   │  └──────┬───────┘  └──────────────┘  └──────────────┘
-        │               │            └───────┬────────┘         │
-        │               │                    │                  │ rejected
-        │               │                    │                  ▼
-        │               │                    │          ┌──────────────┐
-        │               │                    └─────────►│ FIX_PLANNED  │ (re-plan)
-        │               │                               └──────────────┘
-        │               ▼
-        │         (timeout/error)
-        │               │
-        └───────────────┘  (auto self-heal detected → RESOLVED)
+open ──────→ investigating ──────→ root_cause_identified ──────→ fix_planned
+  │              │                       │                          │
+  └─→ resolved   └─→ open (retry)       └─→ resolved (self-heal)  │
+                                                                     ▼
+                                          fix_approved ←── (审批通过)
+                                              │
+                                              ▼
+                                         fix_executed ──────→ resolved
+                                              │
+                                              └─→ fix_planned (rollback + 重新计划)
 ```
 
-#### 触发者映射
+**审批门控规则:**
 
-| 转换 | 触发者 | 条件 |
-|------|--------|------|
-| → OPEN | DetectAgent / ProactiveAgent / K8s Event | 检测到异常 |
-| OPEN → INVESTIGATING | RCA Agent (auto) | RCA 开始 |
-| INVESTIGATING → ROOT_CAUSE_IDENTIFIED | RCA Agent | save_rca_result() |
-| ROOT_CAUSE_IDENTIFIED → FIX_PLANNED | SRE Agent | save_fix_plan() |
-| FIX_PLANNED → FIX_APPROVED | 自动 (L0/L1) / 人工 (L2/L3) | approve_fix_plan() |
-| FIX_APPROVED → FIX_EXECUTED | Executor | 执行完成 |
-| FIX_EXECUTED → RESOLVED | Post-check 通过 / 人工确认 | verify_fix() |
-| * → RESOLVED | 人工 / 自愈检测 | force_resolve() |
+| FixPlan Risk Level | 审批要求 |
+|--------------------|----------|
+| L0 (Read-only) | 自动通过 |
+| L1 (Low-risk config) | 自动通过 |
+| L2 (Service-affecting) | 需人工确认 |
+| L3 (High-risk) | 需 senior 确认 + 二次确认 |
 
-#### FixPlan 实体
+### 3. FixPlan 实体
 
 ```python
-@dataclass
-class FixPlan:
-    """Structured fix plan generated by SRE Agent."""
-    plan_id: str                    # fp-xxxxxxxxxxxx
-    issue_id: str                   # 关联 HealthIssue.id
-    rca_result_id: Optional[str]    # 关联 RCAResult
-    risk_level: RiskLevel           # L0/L1/L2/L3
-    title: str
-    summary: str
-    steps: List[Dict[str, Any]]     # 有序修复步骤
-    rollback_plan: Dict[str, Any]   # 回滚计划
-    pre_checks: List[str]           # 前置验证
-    post_checks: List[str]          # 后置验证
-    estimated_impact: str           # 预估影响
-    status: FixPlanStatus           # draft/pending_approval/approved/rejected
-    approved_by: Optional[str]
-    approved_at: Optional[datetime]
-    created_at: datetime
-    
 class FixPlanStatus(str, Enum):
     DRAFT = "draft"
     PENDING_APPROVAL = "pending_approval"
-    APPROVED = "approved"  
+    APPROVED = "approved"
     REJECTED = "rejected"
 
-class RiskLevel(str, Enum):
-    L0 = "L0"  # 只读验证
-    L1 = "L1"  # 低风险配置变更
-    L2 = "L2"  # 影响服务的变更 (需人工审批)
-    L3 = "L3"  # 高风险变更 (需 senior 审批)
+class FixPlanRiskLevel(str, Enum):
+    L0 = "L0"  # Read-only verification
+    L1 = "L1"  # Low-risk config change
+    L2 = "L2"  # Service-affecting
+    L3 = "L3"  # High-risk (restart/failover/migration)
+
+@dataclass
+class FixPlan:
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    health_issue_id: str = ""
+    rca_result_id: str = ""
+    title: str = ""
+    description: str = ""
+    risk_level: FixPlanRiskLevel = FixPlanRiskLevel.L2
+    status: FixPlanStatus = FixPlanStatus.DRAFT
+    
+    # Structured plan
+    steps: List[Dict[str, Any]] = field(default_factory=list)
+    pre_checks: List[str] = field(default_factory=list)
+    post_checks: List[str] = field(default_factory=list)
+    rollback_plan: List[str] = field(default_factory=list)
+    estimated_impact: str = ""
+    
+    # SOP reference
+    sop_id: Optional[str] = None
+    sop_name: Optional[str] = None
+    
+    # Approval
+    approved_by: Optional[str] = None
+    approved_at: Optional[str] = None
+    rejected_reason: Optional[str] = None
+    
+    # Timing
+    created_at: str = field(default_factory=...)
+    executed_at: Optional[str] = None
 ```
 
-#### RCAResult 独立实体
+### 4. RCAResult 关联
 
 ```python
 @dataclass
 class RCAResult:
-    """Root cause analysis result linked to a HealthIssue."""
-    rca_id: str                     # rca-xxxxxxxxxxxx
-    issue_id: str                   # 关联 HealthIssue.id
+    id: str
+    health_issue_id: str
     root_cause: str
-    confidence: float               # 0.0-1.0
-    severity: str                   # low/medium/high/critical
-    contributing_factors: List[str]
-    recommendations: List[str]
-    fix_plan_hint: Dict[str, Any]   # SRE Agent 参考
-    fix_risk_level: str             # 预估风险等级
-    sop_used: Optional[str]         # 使用的 SOP
-    similar_cases: List[str]        # KB 相似案例
-    topology_context: Optional[Dict[str, Any]]  # Day 1 Topology 注入
-    model_id: str                   # LLM model ID
-    created_at: datetime
+    confidence: float = 0.0
+    contributing_factors: List[str] = field(default_factory=list)
+    recommendations: List[str] = field(default_factory=list)
+    model_id: str = ""
+    network_context: Optional[Dict] = None  # 利用 Day 1 的 topology 上下文
+    created_at: str = field(default_factory=...)
 ```
 
-#### 数据库迁移
-
-```sql
--- 新增 FixPlan 表
-CREATE TABLE IF NOT EXISTS fix_plans (
-    plan_id TEXT PRIMARY KEY,
-    issue_id TEXT NOT NULL REFERENCES issues(id),
-    rca_result_id TEXT,
-    risk_level TEXT NOT NULL,       -- L0/L1/L2/L3
-    title TEXT NOT NULL,
-    summary TEXT,
-    steps TEXT,                     -- JSON array
-    rollback_plan TEXT,             -- JSON object
-    pre_checks TEXT,                -- JSON array
-    post_checks TEXT,               -- JSON array
-    estimated_impact TEXT,
-    status TEXT NOT NULL DEFAULT 'draft',
-    approved_by TEXT,
-    approved_at TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
-
--- 新增 RCA Results 表
-CREATE TABLE IF NOT EXISTS rca_results (
-    rca_id TEXT PRIMARY KEY,
-    issue_id TEXT NOT NULL REFERENCES issues(id),
-    root_cause TEXT NOT NULL,
-    confidence REAL DEFAULT 0.0,
-    severity TEXT DEFAULT 'medium',
-    contributing_factors TEXT,       -- JSON array
-    recommendations TEXT,           -- JSON array
-    fix_plan_hint TEXT,             -- JSON object
-    fix_risk_level TEXT DEFAULT 'unknown',
-    sop_used TEXT,
-    similar_cases TEXT,             -- JSON array
-    topology_context TEXT,          -- JSON object
-    model_id TEXT DEFAULT '',
-    created_at TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_fix_plans_issue ON fix_plans(issue_id);
-CREATE INDEX IF NOT EXISTS idx_fix_plans_status ON fix_plans(status);
-CREATE INDEX IF NOT EXISTS idx_rca_results_issue ON rca_results(issue_id);
-
--- 状态值迁移 (兼容旧数据)
--- detected → open
--- analyzing → investigating  
--- pending_fix → root_cause_identified
--- fixing → fix_executed
--- fixed → resolved
--- acknowledged → open (re-triage)
--- closed → resolved
--- failed → open (re-open for retry)
-```
-
-#### API 变更
-
-**新增端点：**
-
-| 方法 | 路径 | 描述 |
-|------|------|------|
-| POST | `/api/issues/{id}/investigate` | RCA Agent 开始调查 → INVESTIGATING |
-| POST | `/api/issues/{id}/rca` | 保存 RCA 结果 → ROOT_CAUSE_IDENTIFIED |
-| GET | `/api/issues/{id}/rca` | 获取 RCA 结果 |
-| POST | `/api/issues/{id}/fix-plan` | SRE Agent 创建 Fix Plan → FIX_PLANNED |
-| GET | `/api/issues/{id}/fix-plan` | 获取 Fix Plan |
-| POST | `/api/issues/{id}/fix-plan/approve` | 审批 Fix Plan → FIX_APPROVED |
-| POST | `/api/issues/{id}/fix-plan/reject` | 拒绝 Fix Plan → FIX_PLANNED (re-plan) |
-| POST | `/api/issues/{id}/execute` | 执行修复 → FIX_EXECUTED |
-| POST | `/api/issues/{id}/verify` | 验证修复 → RESOLVED |
-| POST | `/api/issues/{id}/resolve` | 强制关闭 → RESOLVED |
-| GET | `/api/issues/{id}/timeline` | 完整生命周期时间线 |
-
-**保持兼容：**
-- `GET /api/issues` — 支持新旧状态值查询
-- `GET /api/issues/{id}` — 返回扩展字段 (rca_results, fix_plans)
-- `PATCH /api/issues/{id}` — 保持现有行为 + 新状态值
-- `POST /api/issues/{id}/fix` — 内部转换为 fix-plan + auto-approve + execute
-
-#### IssueManager 演进
+### 5. HealthIssue 统一实体
 
 ```python
-class IssueManager:
-    """Enhanced with 7-state lifecycle."""
+@dataclass
+class HealthIssue:
+    id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    resource_id: str = ""
+    resource_type: str = ""
+    region: str = ""
     
-    # --- Status Transition Guards ---
-    VALID_TRANSITIONS = {
-        HealthIssueStatus.OPEN: {HealthIssueStatus.INVESTIGATING, HealthIssueStatus.RESOLVED},
-        HealthIssueStatus.INVESTIGATING: {HealthIssueStatus.ROOT_CAUSE_IDENTIFIED, HealthIssueStatus.OPEN, HealthIssueStatus.RESOLVED},
-        HealthIssueStatus.ROOT_CAUSE_IDENTIFIED: {HealthIssueStatus.FIX_PLANNED, HealthIssueStatus.RESOLVED},
-        HealthIssueStatus.FIX_PLANNED: {HealthIssueStatus.FIX_APPROVED, HealthIssueStatus.ROOT_CAUSE_IDENTIFIED, HealthIssueStatus.RESOLVED},
-        HealthIssueStatus.FIX_APPROVED: {HealthIssueStatus.FIX_EXECUTED, HealthIssueStatus.FIX_PLANNED, HealthIssueStatus.RESOLVED},
-        HealthIssueStatus.FIX_EXECUTED: {HealthIssueStatus.RESOLVED, HealthIssueStatus.FIX_PLANNED},  # re-plan on post_check fail
-        HealthIssueStatus.RESOLVED: set(),  # terminal (reopen via separate API)
-    }
+    severity: str = "medium"   # critical/high/medium/low
+    source: str = ""           # cloudwatch_alarm/metric_anomaly/detect_agent/manual
+    title: str = ""
+    description: str = ""
     
-    def transition(self, issue_id: str, new_status: HealthIssueStatus, *, 
-                   actor: str = "system", note: str = "") -> Issue:
-        """Guarded status transition with audit trail."""
-        issue = self.store.get(issue_id)
-        current = issue.status
-        
-        if new_status not in self.VALID_TRANSITIONS.get(current, set()) \
-           and new_status != HealthIssueStatus.RESOLVED:  # force close always allowed
-            raise InvalidTransition(f"{current.value} → {new_status.value}")
-        
-        issue.update_status(new_status)
-        self._record_timeline(issue_id, current, new_status, actor, note)
-        self.store.save(issue)
-        return issue
+    status: HealthIssueStatus = HealthIssueStatus.OPEN
+    
+    # Related data
+    alarm_name: Optional[str] = None
+    metric_data: Dict[str, Any] = field(default_factory=dict)
+    related_changes: List[Dict] = field(default_factory=list)
+    
+    # Linked entities (by ID)
+    rca_result_ids: List[str] = field(default_factory=list)
+    fix_plan_ids: List[str] = field(default_factory=list)
+    incident_id: Optional[str] = None  # 关联 IncidentRecord
+    issue_id: Optional[str] = None     # 关联旧 Issue (兼容)
+    
+    # Timing
+    detected_at: str = field(default_factory=...)
+    resolved_at: Optional[str] = None
+    
+    # Feedback
+    user_feedback: Optional[str] = None  # 👍/👎
 ```
 
-#### IncidentOrchestrator 简化
+### 6. 与 Topology 上下文的集成
+
+HealthIssue 创建时，如果涉及网络资源，自动调用 `NetworkContextEnricher`：
 
 ```python
-# 现有 handle_incident() 映射到 HealthIssue lifecycle:
-#
-# Stage 1 (collect)  → issue created at OPEN
-# Stage 2 (analyze)  → INVESTIGATING → ROOT_CAUSE_IDENTIFIED (save RCA)
-# Stage 3 (sop)      → FIX_PLANNED (create FixPlan)
-# Stage 4 (safety)   → FIX_APPROVED (L0/L1 auto) or wait (L2/L3)
-# Stage 5 (execute)  → FIX_EXECUTED
-# Complete           → RESOLVED (if post-check passes)
-#
-# IncidentRecord 退化为 HealthIssue 的 "pipeline run" 视图
-# incident_id 成为 HealthIssue.metadata["pipeline_run_id"]
+# In lifecycle.py
+def on_investigating(health_issue: HealthIssue) -> None:
+    """进入 INVESTIGATING 状态时触发 RCA + 网络上下文。"""
+    if health_issue.resource_type in ("vpc", "subnet", "ec2", "rds", "elb"):
+        enricher = NetworkContextEnricher(region=health_issue.region)
+        context = enricher.enrich(vpc_id=..., resource_id=health_issue.resource_id)
+        # 注入到 RCA 请求中
 ```
 
-#### Topology 上下文注入
+### 7. 旧状态迁移映射
 
 ```python
-# RCA Agent 在分析前注入拓扑上下文:
-async def _inject_topology_context(self, issue: HealthIssue) -> Dict:
-    """利用 Day 1 Topology 模块注入网络关联。"""
-    from src.aci.topology import TopologyEngine, TopologyCollector
-    
-    collector = TopologyCollector(region=self.region)
-    engine = TopologyEngine()
-    
-    # 1. 收集受影响资源的 VPC 拓扑
-    topology = await collector.collect()
-    engine.load(topology)
-    
-    # 2. 影响半径分析
-    impact = engine.impact_radius(
-        resource_id=issue.resource_id,
-        max_depth=3
-    )
-    
-    # 3. 可达性验证
-    reachability = engine.check_reachability(
-        source=issue.resource_id
-    )
-    
-    return {
-        "impact_radius": impact,
-        "reachability": reachability,
-        "related_resources": engine.get_neighbors(issue.resource_id),
-        "topology_snapshot": topology.to_react_flow(),  # for WebUI
-    }
+# IssueStatus → HealthIssueStatus
+ISSUE_STATUS_MIGRATION = {
+    "detected": "open",
+    "analyzing": "investigating",
+    "pending_fix": "fix_planned",
+    "fixing": "fix_executed",
+    "fixed": "resolved",
+    "failed": "open",  # 重新开放
+    "acknowledged": "investigating",
+    "closed": "resolved",
+}
+
+# IncidentStatus → HealthIssueStatus
+INCIDENT_STATUS_MIGRATION = {
+    "triggered": "open",
+    "collecting": "investigating",
+    "analyzing": "investigating",
+    "sop_matched": "root_cause_identified",
+    "safety_check": "fix_planned",
+    "executing": "fix_executed",
+    "waiting_approval": "fix_planned",
+    "completed": "resolved",
+    "failed": "open",
+}
 ```
 
 ---
 
-### 方案 B: 全量 SQLAlchemy 迁移
+## API 端点
 
-从 SQLite + dataclass 迁移到 SQLAlchemy ORM，完全对齐 agenticops-chat 的模型层。
-
-| 维度 | 描述 |
-|------|------|
-| 变更范围 | 替换 `src/issues/store.py` → SQLAlchemy session，`models.py` → ORM mapped class |
-| HealthIssue | 完全复制 agenticops-chat 的 `HealthIssue` ORM 模型 |
-| 优势 | 与 agenticops-chat 模型一致，未来代码可互用 |
-| 风险 | 大量文件变更 (~15 文件)，回归风险高，与现有 SQLite store 不兼容 |
-| 预估 | 3-4 天，需 Developer + Tester 全程参与 |
-
----
-
-## 对比
-
-| 维度 | 方案 A (渐进替换) | 方案 B (SQLAlchemy 迁移) |
-|------|:------------------:|:------------------------:|
-| 变更量 | ~600 行新代码 + ~200 行修改 | ~1500+ 行重写 |
-| 回归风险 | 低 (保留 SQLite, 新增表) | 高 (ORM 层替换) |
-| 向后兼容 | ✅ 旧状态值自动映射 | ⚠️ 需数据迁移脚本 |
-| 实施时间 | 1.5 天 | 3-4 天 |
-| 与 agenticops-chat 一致性 | 90% (状态+逻辑对齐, 存储层不同) | 100% |
-| IncidentOrchestrator 影响 | 最小 (增加 issue_id 传递) | 需要重写 |
-| 测试影响 | ~50 个新测试 + 现有测试保持 | ~150+ 个测试需修改 |
-| 未来扩展 | 后续可叠加 SQLAlchemy | 一步到位 |
-
----
-
-## 推荐
-
-**方案 A (渐进替换)**。理由：
-
-1. **Sprint 节奏** — Day 2-3 必须交付，1.5 天可完成，方案 B 需要 3-4 天
-2. **回归安全** — 937 个测试的回归基线不能破坏，方案 A 是增量变更
-3. **核心价值已获取** — 7 状态 + FixPlan + RCAResult 独立实体 = agenticops-chat 的 90% 设计优势
-4. **IncidentOrchestrator 平滑过渡** — 不需要重写，只需映射 stage → status transition
-5. **SQLAlchemy 可以后续叠加** — 方案 A 的数据模型设计已兼容 ORM 化
+| Method | Path | 描述 |
+|--------|------|------|
+| GET | `/api/health-issues` | 列表 (支持 status/severity 过滤) |
+| GET | `/api/health-issues/{id}` | 详情 (含 RCA + FixPlan) |
+| PATCH | `/api/health-issues/{id}/status` | 状态转换 |
+| POST | `/api/health-issues/{id}/fix-plan` | 创建 FixPlan |
+| PATCH | `/api/health-issues/{id}/fix-plan/{plan_id}/approve` | 审批 |
+| PATCH | `/api/health-issues/{id}/fix-plan/{plan_id}/reject` | 拒绝 |
+| POST | `/api/health-issues/{id}/feedback` | 用户反馈 |
 
 ---
 
 ## 实施计划
 
-### Day 2 (今天)
-
-| 时间 | 任务 | 负责人 | 产出 |
+| 阶段 | 任务 | 负责人 | 预估 |
 |------|------|--------|------|
-| T+0h | Reviewer 评审本方案 | Reviewer | 评审意见 |
-| T+1h | Architect 根据反馈修订 | Architect | 最终方案 |
-| T+1.5h | Developer 开始实现: models + store | Developer | 新模型 + 迁移 |
-| T+3h | Developer: IssueManager 演进 + API | Developer | 新端点 |
-| T+4h | Tester: 状态转换测试 | Tester | ~30 个新测试 |
-
-### Day 3
-
-| 时间 | 任务 | 负责人 | 产出 |
-|------|------|--------|------|
-| T+0h | Developer: IncidentOrchestrator 映射 | Developer | 管道对接 |
-| T+1h | Developer: RCA 拓扑上下文注入 | Developer | Topology 集成 |
-| T+2h | Tester: 全量回归 + E2E | Tester | 验证报告 |
-| T+3h | Architect: 最终 review | Architect | Approved/修改 |
-
-### 预估代码量
-
-| 文件 | 变更类型 | 行数 |
-|------|----------|------|
-| `src/issues/models.py` | 修改 + 新增 | +180 |
-| `src/issues/store.py` | 修改 (新表 + 迁移) | +120 |
-| `src/issues/manager.py` | 修改 (transition guards) | +100 |
-| `routers/issues.py` | 新增端点 | +150 |
-| `routers/schemas.py` | 新增 request/response | +50 |
-| `src/incident_orchestrator.py` | 修改 (status mapping) | +40 |
-| **Total** | | **~640** |
-| `tests/test_issue_lifecycle.py` | 新建 | +300 |
-| `tests/test_fix_plan.py` | 新建 | +200 |
+| Day 2 | models.py + lifecycle.py | Developer | 0.5 天 |
+| Day 2 | store.py + migration.py | Developer | 0.5 天 |
+| Day 2 | 单测 (状态转换 + 审批) | Tester | 0.5 天 |
+| Day 3 | orchestrator 集成 | Developer | 0.5 天 |
+| Day 3 | API 端点 | Developer | 0.5 天 |
+| Day 3 | 集成测试 + 回归 | Tester | 0.5 天 |
 
 ---
 
-## 附录: 状态迁移映射
+## 验收标准
 
-### 旧 IssueStatus → 新 HealthIssueStatus
-
-| 旧值 | 新值 | 说明 |
-|------|------|------|
-| `detected` | `open` | 语义相同 |
-| `analyzing` | `investigating` | 语义相同 |
-| `pending_fix` | `root_cause_identified` | RCA 完成等待修复 |
-| `fixing` | `fix_executed` | 正在执行 |
-| `fixed` | `resolved` | 已修复 |
-| `failed` | `open` | 重新打开待处理 |
-| `acknowledged` | `investigating` | 人工确认 = 开始调查 |
-| `closed` | `resolved` | 已关闭 |
-
-### 旧 IncidentStatus → HealthIssueStatus 映射
-
-| IncidentStatus | HealthIssueStatus | 说明 |
-|----------------|-------------------|------|
-| `triggered` | `open` | 触发 = 打开 |
-| `collecting` | `open` | 数据采集阶段 (issue 视角不区分) |
-| `analyzing` | `investigating` | RCA 中 |
-| `sop_matched` | `root_cause_identified` | SOP 匹配 = RCA 完成 |
-| `safety_check` | `fix_planned` | 安全检查 = 计划阶段 |
-| `executing` | `fix_executed` | 执行中 |
-| `waiting_approval` | `fix_planned` | 等审批 = 计划阶段 (FixPlan status=pending_approval) |
-| `completed` | `resolved` | 完成 |
-| `failed` | `open` | 失败 → 重新打开 |
-
----
-
-## 附录: 审批门控矩阵
-
-| 风险等级 | 自动审批条件 | 需人工审批 |
-|----------|-------------|-----------|
-| L0 (只读) | 总是自动通过 | 不需要 |
-| L1 (低风险) | confidence ≥ 0.8 且非生产 | 生产环境 |
-| L2 (影响服务) | 不自动通过 | 总是需要 |
-| L3 (高风险) | 不自动通过 | 需 senior + 二次确认 |
-
----
-
-*📐 Architect — 等待 Reviewer 评审*
+- [ ] `src/health_issue/` 4 个文件 + `__init__.py`
+- [ ] 7 个状态转换规则覆盖
+- [ ] FixPlan L0-L3 审批门控
+- [ ] IncidentOrchestrator 关联 HealthIssue
+- [ ] 旧状态值迁移映射测试
+- [ ] API 端点 7 个可用
+- [ ] 回归 1,062+ passed, 0 failed
