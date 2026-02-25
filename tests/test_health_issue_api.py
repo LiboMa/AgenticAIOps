@@ -18,8 +18,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-# Import from sub-modules directly
-from src.health_issue.api import router, get_store
+# Import router from canonical location (routers/)
+from routers.health_issues import router
 from src.health_issue.models import (
     FixPlan,
     FixPlanRiskLevel,
@@ -42,9 +42,9 @@ from src.health_issue.store import HealthIssueStore
 
 @pytest.fixture(autouse=True)
 def _patch_store(tmp_path, monkeypatch):
-    """Patch the API module's get_store() to use a temp directory."""
+    """Patch the router module's _store to use a temp directory."""
     store = HealthIssueStore(data_dir=str(tmp_path))
-    monkeypatch.setattr("src.health_issue.api._store", store)
+    monkeypatch.setattr("routers.health_issues._store", store)
     return store
 
 

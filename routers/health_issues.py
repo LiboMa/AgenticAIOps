@@ -1,21 +1,24 @@
 """
-HealthIssue API Router
+HealthIssue API Router — 8 endpoints for health issue lifecycle management.
 
-7 endpoints:
   GET    /api/health-issues                              — list (status/severity filter)
+  POST   /api/health-issues                              — create new issue
   GET    /api/health-issues/{id}                         — detail (incl. RCA + FixPlan)
   PATCH  /api/health-issues/{id}/status                  — transition status
   POST   /api/health-issues/{id}/fix-plan                — create FixPlan
   PATCH  /api/health-issues/{id}/fix-plan/{plan_id}/approve — approve
   PATCH  /api/health-issues/{id}/fix-plan/{plan_id}/reject  — reject
   POST   /api/health-issues/{id}/feedback                — user feedback
+  POST   /api/health-issues/{id}/force-close             — force close (requires permission)
 """
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from src.health_issue.lifecycle import (
@@ -36,6 +39,8 @@ from src.health_issue.models import (
 )
 from src.health_issue.store import HealthIssueStore
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/health-issues", tags=["health-issues"])
 
 # Shared store instance (JSON-file backed)
@@ -45,6 +50,18 @@ _store = HealthIssueStore()
 # ---------------------------------------------------------------------------
 # Request / Response schemas
 # ---------------------------------------------------------------------------
+
+class CreateIssueRequest(BaseModel):
+    resource_id: str = ""
+    resource_type: str = ""
+    region: str = ""
+    severity: str = "medium"
+    source: str = ""
+    title: str = ""
+    description: str = ""
+    alarm_name: Optional[str] = None
+    metric_data: Dict[str, Any] = Field(default_factory=dict)
+
 
 class StatusTransitionRequest(BaseModel):
     status: str
@@ -96,12 +113,34 @@ def list_health_issues(
     status: Optional[str] = Query(None, description="Filter by status"),
     severity: Optional[str] = Query(None, description="Filter by severity"),
     resource_type: Optional[str] = Query(None, description="Filter by resource_type"),
-) -> List[Dict[str, Any]]:
+) -> Dict[str, Any]:
     """List all health issues with optional filters."""
     issues = _store.list_issues(
         status=status, severity=severity, resource_type=resource_type
     )
-    return [i.to_dict() for i in issues]
+    return {
+        "count": len(issues),
+        "items": [i.to_dict() for i in issues],
+    }
+
+
+@router.post("", status_code=201)
+def create_health_issue(req: CreateIssueRequest) -> Dict[str, Any]:
+    """Create a new health issue (status=OPEN)."""
+    issue = HealthIssue(
+        resource_id=req.resource_id,
+        resource_type=req.resource_type,
+        region=req.region,
+        severity=req.severity,
+        source=req.source,
+        title=req.title,
+        description=req.description,
+        alarm_name=req.alarm_name,
+        metric_data=req.metric_data,
+    )
+    _store.create_issue(issue)
+    logger.info("Created HealthIssue %s: %s", issue.id, issue.title)
+    return issue.to_dict()
 
 
 @router.get("/{issue_id}")
@@ -139,6 +178,13 @@ def transition_status(issue_id: str, body: StatusTransitionRequest) -> Dict[str,
             detail=f"Invalid status '{body.status}'. Valid: {[s.value for s in HealthIssueStatus]}",
         )
 
+    if not can_transition(issue.status, new_status):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot transition from '{issue.status.value}' to '{new_status.value}'. "
+            f"Allowed: {[s.value for s in ALLOWED_TRANSITIONS.get(issue.status, [])]}",
+        )
+
     try:
         transition(issue, new_status, note=body.note, actor=body.actor)
     except ValueError as exc:
@@ -148,7 +194,7 @@ def transition_status(issue_id: str, body: StatusTransitionRequest) -> Dict[str,
     return issue.to_dict()
 
 
-@router.post("/{issue_id}/fix-plan")
+@router.post("/{issue_id}/fix-plan", status_code=201)
 def create_fix_plan_endpoint(issue_id: str, body: FixPlanCreateRequest) -> Dict[str, Any]:
     """Create a new fix plan for a health issue."""
     issue = _store.get_issue(issue_id)
@@ -189,6 +235,10 @@ def approve_fix_plan_endpoint(
     issue_id: str, plan_id: str, body: FixPlanApproveRequest
 ) -> Dict[str, Any]:
     """Approve a fix plan."""
+    issue = _store.get_issue(issue_id)
+    if issue is None:
+        raise HTTPException(status_code=404, detail=f"HealthIssue {issue_id} not found")
+
     plan = _store.get_fix_plan(plan_id)
     if plan is None or plan.health_issue_id != issue_id:
         raise HTTPException(status_code=404, detail=f"FixPlan {plan_id} not found")
@@ -201,7 +251,7 @@ def approve_fix_plan_endpoint(
             double_confirmed=body.double_confirmed,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=409, detail=str(exc))
 
     _store.update_fix_plan(plan)
     return plan.to_dict()
@@ -212,6 +262,10 @@ def reject_fix_plan_endpoint(
     issue_id: str, plan_id: str, body: FixPlanRejectRequest
 ) -> Dict[str, Any]:
     """Reject a fix plan."""
+    issue = _store.get_issue(issue_id)
+    if issue is None:
+        raise HTTPException(status_code=404, detail=f"HealthIssue {issue_id} not found")
+
     plan = _store.get_fix_plan(plan_id)
     if plan is None or plan.health_issue_id != issue_id:
         raise HTTPException(status_code=404, detail=f"FixPlan {plan_id} not found")
@@ -219,7 +273,7 @@ def reject_fix_plan_endpoint(
     try:
         reject_fix_plan(plan, body.reason)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=409, detail=str(exc))
 
     _store.update_fix_plan(plan)
     return plan.to_dict()
@@ -234,7 +288,8 @@ def submit_feedback(issue_id: str, body: FeedbackRequest) -> Dict[str, Any]:
 
     issue.user_feedback = body.feedback
     _store.update_issue(issue)
-    return {"status": "ok", "issue_id": issue_id, "feedback": body.feedback}
+    logger.info("Feedback for HealthIssue %s: %s", issue_id, body.feedback)
+    return {"id": issue_id, "feedback": body.feedback}
 
 
 @router.post("/{issue_id}/force-close")
