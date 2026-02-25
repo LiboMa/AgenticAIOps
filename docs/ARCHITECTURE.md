@@ -1,7 +1,7 @@
 # AgenticAIOps — 系统架构文档
 
 **版本:** v3.0  
-**更新日期:** 2026-02-13  
+**更新日期:** 2026-02-25  
 **维护者:** AgenticAIOps Team  
 
 ---
@@ -90,11 +90,11 @@ ProactiveAgent (定时巡检)          CloudWatch Alarm (事件触发)
 | 模块 | 文件 | 行数 | 功能 |
 |------|------|------|------|
 | **ProactiveAgent** | `src/proactive_agent.py` | 471 | 定时巡检，调度 DetectAgent |
-| **DetectAgent** | `src/detect_agent.py` | 418 | 采集 + 缓存 + Pattern Match + 异常分发 |
+| **DetectAgent** | `src/detect_agent.py` | 485 | 采集 + 缓存 + Pattern Match + 异常分发 |
 | **EventCorrelator** | `src/event_correlator.py` | 729 | AWS 数据采集 (CloudWatch/Trail/Health) |
 | **IncidentOrchestrator** | `src/incident_orchestrator.py` | 660 | 闭环管道编排 |
 | **RCA Inference** | `src/rca_inference.py` | 368 | Bedrock Claude 根因分析 |
-| **RCA-SOP Bridge** | `src/rca_sop_bridge.py` | 515 | RCA→SOP 映射 |
+| **RCA-SOP Bridge** | `src/rca_sop_bridge.py` | 614 | RCA→SOP 映射 |
 | **SOP System** | `src/sop_system.py` | 757 | SOP 定义、推荐、执行 |
 | **SOP Safety** | `src/sop_safety.py` | 612 | 安全分级 (L1-L4) + dry_run |
 | **Alarm Webhook** | `src/alarm_webhook.py` | 172 | CloudWatch Alarm 入口 |
@@ -119,7 +119,7 @@ ProactiveAgent (定时巡检)          CloudWatch Alarm (事件触发)
 
 | 模块 | 文件 | 行数 | 功能 |
 |------|------|------|------|
-| **API Server** | `api_server.py` | ~4,700 | FastAPI 主服务 |
+| **API Server** | `api_server.py` | ~5,007 | FastAPI 主服务 |
 | **AWS Scanner** | `src/aws_scanner.py` | 737 | 13 服务资源扫描 |
 | **AWS Ops** | `src/aws_ops.py` | 1,793 | EC2/RDS/Lambda CRUD (Chat 用) |
 | **Config** | `src/config.py` | 81 | 环境配置 |
@@ -133,9 +133,9 @@ ProactiveAgent (定时巡检)          CloudWatch Alarm (事件触发)
 |------|------|------|------|
 | **ACI Interface** | `src/aci/interface.py` | 383 | Agent-Cloud 统一接口 |
 | **MCP Bridge** | `src/aci/mcp_bridge.py` | 177 | MCP 协议桥接 |
-| **Telemetry** | `src/aci/telemetry/` | ~872 | 指标/日志/事件/Prometheus |
-| **Operations** | `src/aci/operations/` | ~249 | kubectl/shell 操作 |
-| **Security** | `src/aci/security/` | ~314 | 审计 + 过滤 |
+| **Telemetry** | `src/aci/telemetry/` | ~880 | 指标/日志/事件/Prometheus |
+| **Operations** | `src/aci/operations/` | ~255 | kubectl/shell 操作 |
+| **Security** | `src/aci/security/` | ~320 | 审计 + 过滤 |
 
 ### 3.6 其他
 
@@ -188,7 +188,7 @@ ProactiveAgent (定时巡检)          CloudWatch Alarm (事件触发)
 
 ```
 agentic-aiops-mvp/
-├── api_server.py              # FastAPI 主服务 (~4,700 行)
+├── api_server.py              # FastAPI 主服务 (~5,007 行)
 ├── src/
 │   ├── proactive_agent.py     # 主动巡检 Agent
 │   ├── detect_agent.py        # 检测 Agent (采集+缓存+分发)
@@ -221,7 +221,7 @@ agentic-aiops-mvp/
 │   └── rca_patterns.yaml      # Pattern 规则 YAML
 ├── agents/                    # Agent manifests (5 roles)
 ├── dashboard/                 # React 前端
-├── tests/                     # 测试 (455+ cases)
+├── tests/                     # 测试 (874+ cases)
 └── docs/                      # 文档
     ├── ARCHITECTURE.md        # 本文件 (唯一架构文档)
     └── designs/               # 设计文档
@@ -249,7 +249,7 @@ EC2: mbot-sg-1 (m6i.xlarge, ap-southeast-1)
 |------|------|--------|
 | 单账户 | 仅支持一个 AWS 账户 | P1 |
 | PatternMatcher 规则 | YAML 规则面向 K8s，需扩充 CloudWatch 场景 | P1 |
-| api_server.py 过大 | ~4,700 行，待拆分 Router | P2 |
+| api_server.py 过大 | ~5,007 行，待拆分 Router | P2 |
 | Bedrock KB | PatternRAG 未接入 (需 KB ID 配置) | P2 |
 | 无 RBAC | 所有用户同权限 | P3 |
 | 单点部署 | 无 HA/灾备 | P3 |
