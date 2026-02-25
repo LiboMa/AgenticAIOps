@@ -10,9 +10,7 @@ from fastapi import APIRouter, File, UploadFile, Form
 from routers.schemas import ChatRequest, ChatResponse
 from routers.deps import (
     analyze_query,
-    get_scanner,
     get_current_region,
-    set_current_region,
     logger,
 )
 from routers.chat_intents import dispatch as intent_dispatch
@@ -174,11 +172,11 @@ async def chat(request: ChatRequest):
         else:
             model_used = model_key
         
-        # Check for AWS operation intents via dispatcher
-        aws_response = await intent_dispatch(request.message, message_lower)
-        if aws_response:
+        # Check for AWS operation intents via chat_intents dispatcher
+        intent_response = await intent_dispatch(request.message, message_lower)
+        if intent_response:
             return ChatResponse(
-                response=aws_response,
+                response=intent_response,
                 intent="aws_operation",
                 confidence=0.9,
                 model_used=model_used,
