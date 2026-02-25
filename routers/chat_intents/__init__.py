@@ -8,15 +8,20 @@ from routers.chat_intents import (
     metrics,
     operations,
     ui_actions,
+    rca,
+    knowledge,
 )
 from routers.deps import logger
 
 # Registry dict — add new domains here, no if/elif chain needed.
+# Order matters: first match wins. More-specific handlers go first.
 INTENT_HANDLERS = {
     "health": health.handle,
-    "resources": resources.handle,
     "metrics": metrics.handle,
     "operations": operations.handle,
+    "rca": rca.handle,
+    "knowledge": knowledge.handle,
+    "resources": resources.handle,
     "ui_actions": ui_actions.handle,
 }
 

@@ -15,6 +15,8 @@ from routers.deps import (
     set_current_region,
     logger,
 )
+from routers.chat_intents import dispatch as intent_dispatch
+from routers.chat_intents.ui_actions import detect_ui_action as _detect_ui_action
 
 router = APIRouter(tags=["chat"])
 
@@ -172,11 +174,11 @@ async def chat(request: ChatRequest):
         else:
             model_used = model_key
         
-        # Check for AWS operation intents
-        aws_response = await handle_aws_chat_intent(request.message)
-        if aws_response:
+        # Check for AWS operation intents (via chat_intents dispatcher)
+        intent_response = await intent_dispatch(request.message, message_lower)
+        if intent_response:
             return ChatResponse(
-                response=aws_response,
+                response=intent_response,
                 intent="aws_operation",
                 confidence=0.9,
                 model_used=model_used,
@@ -201,7 +203,7 @@ Recommended tools: {', '.join(analysis['recommended_tools'][:3])}
 [Agent not available for model '{model_used}' - showing intent analysis only]"""
         
         # Check for A2UI intent (add/create widget requests)
-        ui_action = detect_ui_action(request.message)
+        ui_action = _detect_ui_action(request.message)
         
         return ChatResponse(
             response=response_text,
