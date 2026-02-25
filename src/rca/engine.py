@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Optional, Dict, Any, List
 
 from .models import RCAResult, Severity, Remediation
+from .network_context import NetworkContext, NetworkContextEnricher
 from .pattern_matcher import PatternMatcher
 
 logger = logging.getLogger(__name__)
@@ -40,6 +41,7 @@ class RCAEngine:
         aci=None,
         voting=None,
         pattern_config: Optional[str] = None,
+        network_enricher: Optional[NetworkContextEnricher] = None,
     ):
         """
         Initialize the RCA engine.
@@ -48,9 +50,11 @@ class RCAEngine:
             aci: AgentCloudInterface instance (lazy-loaded if None)
             voting: MultiAgentVoting instance (lazy-loaded if None)
             pattern_config: Path to pattern YAML config
+            network_enricher: NetworkContextEnricher instance (lazy-loaded if None)
         """
         self._aci = aci
         self._voting = voting
+        self._network_enricher = network_enricher
         self.matcher = PatternMatcher(pattern_config)
     
     @property
@@ -74,6 +78,13 @@ class RCAEngine:
             except ImportError:
                 logger.warning("Voting not available")
         return self._voting
+    
+    @property
+    def network_enricher(self):
+        """Lazy-load NetworkContextEnricher."""
+        if self._network_enricher is None:
+            self._network_enricher = NetworkContextEnricher()
+        return self._network_enricher
     
     def analyze(
         self,
@@ -161,6 +172,130 @@ class RCAEngine:
         }
         
         return self.analyze(namespace="analysis", telemetry=telemetry)
+    
+    def analyze_with_network_context(
+        self,
+        namespace: str,
+        region: str,
+        vpc_id: str,
+        *,
+        pod: Optional[str] = None,
+        telemetry: Optional[Dict[str, Any]] = None,
+        failed_resource_id: Optional[str] = None,
+        subnet_ids: Optional[List[str]] = None,
+    ) -> RCAResult:
+        """
+        Perform RCA with network topology context injection.
+        
+        Extends analyze() by first collecting topology data for the VPC,
+        detecting structural anomalies, checking subnet reachability,
+        and injecting the network context into the telemetry before
+        pattern matching and voting.
+        
+        Args:
+            namespace: K8s namespace to analyze
+            region: AWS region (e.g., 'us-east-1')
+            vpc_id: VPC ID to analyze topology for
+            pod: Specific pod name (optional)
+            telemetry: Pre-collected telemetry (skips ACI if provided)
+            failed_resource_id: Resource to run impact analysis on
+            subnet_ids: Subnets to check reachability for
+            
+        Returns:
+            RCAResult enriched with network topology evidence
+        """
+        logger.info(
+            "Starting network-aware RCA for namespace=%s, vpc=%s, region=%s",
+            namespace, vpc_id, region,
+        )
+        
+        # Step 1: Collect or use provided telemetry
+        if telemetry is None:
+            telemetry = self._collect_telemetry(namespace, pod)
+        
+        # Step 2: Enrich telemetry with network context
+        net_ctx = self.network_enricher.enrich(
+            region=region,
+            vpc_id=vpc_id,
+            failed_resource_id=failed_resource_id,
+            subnet_ids=subnet_ids,
+        )
+        telemetry["network_context"] = net_ctx.to_dict()
+        
+        logger.info(
+            "Network context: %d anomalies, %d reachability checks, has_issues=%s",
+            len(net_ctx.anomalies),
+            len(net_ctx.reachability),
+            net_ctx.has_network_issues,
+        )
+        
+        # Step 3: Run standard analysis with enriched telemetry
+        result = self.analyze(namespace=namespace, pod=pod, telemetry=telemetry)
+        
+        # Step 4: Enrich the result with network evidence
+        result = self._enrich_result_with_network(result, net_ctx)
+        
+        return result
+    
+    def _enrich_result_with_network(
+        self,
+        result: RCAResult,
+        net_ctx: NetworkContext,
+    ) -> RCAResult:
+        """Enrich an RCA result with network topology evidence.
+        
+        If network anomalies are detected, they are added as evidence.
+        If the network context reveals infrastructure issues, the severity
+        and root cause may be upgraded.
+        """
+        if not net_ctx.has_network_issues:
+            result.evidence.append("Network topology: no anomalies detected")
+            return result
+        
+        # Add network anomalies as evidence
+        for anomaly in net_ctx.critical_anomalies:
+            result.evidence.append(
+                f"Network anomaly [{anomaly['severity']}]: {anomaly['description']}"
+            )
+        
+        # Add reachability failures as evidence
+        unreachable = [
+            r for r in net_ctx.reachability
+            if not r.get("can_reach_internet", True)
+        ]
+        for r in unreachable:
+            result.evidence.append(
+                f"Subnet {r['subnet_id']} unreachable: {r.get('blocking_reason', 'unknown')}"
+            )
+        
+        # Add impact analysis if available
+        if net_ctx.impact:
+            impact = net_ctx.impact
+            isolated = impact.get("isolated_subnets", [])
+            if isolated:
+                result.evidence.append(
+                    f"Impact analysis: {len(isolated)} subnets isolated "
+                    f"if {impact['failed_node_id']} fails"
+                )
+        
+        # If there are critical network anomalies AND the current diagnosis
+        # is low-confidence, upgrade to consider network as root cause
+        if net_ctx.critical_anomalies and result.confidence < 0.7:
+            anomaly_desc = "; ".join(
+                a["description"] for a in net_ctx.critical_anomalies[:3]
+            )
+            result.root_cause = (
+                f"{result.root_cause} "
+                f"[Network context: {anomaly_desc}]"
+            )
+            # Bump severity if network issues are critical
+            if any(a["severity"] == "critical" for a in net_ctx.anomalies):
+                result.severity = Severity.HIGH
+        
+        # Add summary
+        result.evidence.append(f"Network summary: {net_ctx.summary}")
+        
+        return result
     
     def _collect_telemetry(self, namespace: str, pod: Optional[str]) -> Dict[str, Any]:
         """Collect telemetry data via ACI."""
