@@ -14,7 +14,6 @@ Approval gates by FixPlan risk level:
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
 from typing import Optional
 
 from .models import (
@@ -23,6 +22,7 @@ from .models import (
     FixPlanStatus,
     HealthIssue,
     HealthIssueStatus,
+    _now_iso,
 )
 
 logger = logging.getLogger(__name__)
@@ -62,9 +62,6 @@ ALLOWED_TRANSITIONS = {
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def _append_timeline(

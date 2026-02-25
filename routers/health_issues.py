@@ -1,5 +1,5 @@
 """
-HealthIssue API Router — 9 endpoints for health issue lifecycle management.
+HealthIssue API Router — 10 endpoints for health issue lifecycle management.
 
   GET    /api/health-issues                              — list (status/severity filter)
   POST   /api/health-issues                              — create new issue
@@ -106,7 +106,12 @@ class ReopenRequest(BaseModel):
 class ForceCloseRequest(BaseModel):
     actor: str
     note: str = ""
-    has_permission: bool = False
+
+
+# Actors allowed to force-close (MVP allowlist; production should use auth middleware)
+FORCE_CLOSE_ACTORS = {
+    "admin", "senior-ops", "senior-dba", "sre-lead", "platform-admin",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -316,17 +321,24 @@ def reopen_endpoint(issue_id: str, body: ReopenRequest) -> Dict[str, Any]:
 
 @router.post("/{issue_id}/force-close")
 def force_close_endpoint(issue_id: str, body: ForceCloseRequest) -> Dict[str, Any]:
-    """Force-close a health issue from any state (requires permission)."""
+    """Force-close a health issue from any state (requires permission).
+
+    Permission is checked server-side via FORCE_CLOSE_ACTORS allowlist.
+    Production should replace this with auth middleware / JWT claims.
+    """
     issue = _store.get_issue(issue_id)
     if issue is None:
         raise HTTPException(status_code=404, detail=f"HealthIssue {issue_id} not found")
+
+    # Server-side permission check (P1 fix — never trust client-side has_permission)
+    has_permission = body.actor in FORCE_CLOSE_ACTORS
 
     try:
         force_close(
             issue,
             actor=body.actor,
             note=body.note,
-            has_permission=body.has_permission,
+            has_permission=has_permission,
         )
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail=str(exc))
