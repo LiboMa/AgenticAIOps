@@ -322,35 +322,226 @@ class AgentCloudInterface:
     
     def get_topology(self, namespace: str = "all") -> ContextResult:
         """
-        Get cluster topology information.
-        
+        Get cluster topology as a graph structure.
+
+        Uses the ACI topology engine (NetworkX) to build a K8s graph
+        from kubectl output and return serialized nodes/edges.
+
         Args:
-            namespace: Namespace to query
-        
+            namespace: Namespace to query (or "all")
+
         Returns:
-            ContextResult with topology data
+            ContextResult with topology graph data
         """
-        # TODO: Implement topology discovery
-        return ContextResult(
-            status=ResultStatus.SUCCESS,
-            data={"message": "Topology discovery not yet implemented"},
-        )
-    
+        start_time = time.time()
+
+        try:
+            from .topology.engine import InfraGraph
+            from .topology.serializers import to_agent_summary
+
+            # Get K8s topology via kubectl
+            topo = self._collect_k8s_topology(namespace)
+            graph = InfraGraph().build_from_k8s_topology(topo)
+            summary = to_agent_summary(graph)
+
+            self._log_audit("get_topology", f"ns={namespace}", "SUCCESS")
+
+            return ContextResult(
+                status=ResultStatus.SUCCESS,
+                data={
+                    "graph_summary": summary,
+                    "node_count": graph.node_count,
+                    "edge_count": graph.edge_count,
+                    "cluster": self.cluster_name,
+                    "namespace": namespace,
+                },
+            )
+        except Exception as e:
+            logger.error(f"get_topology error: {e}")
+            return ContextResult(
+                status=ResultStatus.ERROR,
+                data={},
+                error=str(e),
+            )
+
     def get_dependencies(self, service_name: str) -> ContextResult:
         """
-        Get service dependencies.
-        
+        Get service dependencies by tracing Service → Deployment → Pod edges
+        in the topology graph.
+
         Args:
-            service_name: Service name
-        
+            service_name: Service name to analyze
+
         Returns:
-            ContextResult with dependency data
+            ContextResult with dependency data (neighbors, paths)
         """
-        # TODO: Implement dependency analysis
-        return ContextResult(
-            status=ResultStatus.SUCCESS,
-            data={"message": "Dependency analysis not yet implemented"},
-        )
+        start_time = time.time()
+
+        try:
+            from .topology.engine import InfraGraph
+            from .topology.types import EdgeType
+
+            topo = self._collect_k8s_topology("all")
+            graph = InfraGraph().build_from_k8s_topology(topo)
+
+            # Find the service node
+            service_nodes = [
+                n for n, d in graph.graph.nodes(data=True)
+                if d.get("label") == service_name
+                and "svc" in n
+            ]
+
+            if not service_nodes:
+                return ContextResult(
+                    status=ResultStatus.SUCCESS,
+                    data={
+                        "service": service_name,
+                        "found": False,
+                        "message": f"Service '{service_name}' not found in topology",
+                    },
+                )
+
+            svc_id = service_nodes[0]
+            neighbors = graph.get_neighbors(svc_id)
+            neighbor_details = []
+            for n in neighbors:
+                nd = graph.get_node(n) or {}
+                neighbor_details.append({
+                    "id": n,
+                    "type": nd.get("node_type", ""),
+                    "label": nd.get("label", ""),
+                    "status": nd.get("status", ""),
+                })
+
+            self._log_audit("get_dependencies", service_name, "SUCCESS")
+
+            return ContextResult(
+                status=ResultStatus.SUCCESS,
+                data={
+                    "service": service_name,
+                    "found": True,
+                    "node_id": svc_id,
+                    "dependencies": neighbor_details,
+                },
+            )
+        except Exception as e:
+            logger.error(f"get_dependencies error: {e}")
+            return ContextResult(
+                status=ResultStatus.ERROR,
+                data={},
+                error=str(e),
+            )
+
+    def _collect_k8s_topology(self, namespace: str) -> dict:
+        """Collect K8s topology via kubectl for graph building."""
+        import json as _json
+
+        topo: dict = {
+            "cluster_name": self.cluster_name,
+            "nodes": [],
+            "namespaces": [],
+        }
+
+        # Worker nodes
+        result = self._kubectl.execute(["get", "nodes"], output_format="json")
+        if result.status == ResultStatus.SUCCESS and result.stdout:
+            try:
+                data = _json.loads(result.stdout)
+                for item in data.get("items", []):
+                    name = item.get("metadata", {}).get("name", "")
+                    conditions = item.get("status", {}).get("conditions", [])
+                    status = "NotReady"
+                    for c in conditions:
+                        if c.get("type") == "Ready" and c.get("status") == "True":
+                            status = "Ready"
+                    topo["nodes"].append({"name": name, "status": status})
+            except _json.JSONDecodeError:
+                pass
+
+        # Determine namespaces to query
+        ns_list = []
+        if namespace == "all":
+            result = self._kubectl.execute(["get", "namespaces"], output_format="json")
+            if result.status == ResultStatus.SUCCESS and result.stdout:
+                try:
+                    data = _json.loads(result.stdout)
+                    ns_list = [
+                        item["metadata"]["name"]
+                        for item in data.get("items", [])
+                    ]
+                except _json.JSONDecodeError:
+                    pass
+        else:
+            ns_list = [namespace]
+
+        for ns in ns_list:
+            ns_data: dict = {
+                "name": ns,
+                "deployments": [],
+                "services": [],
+                "pods": [],
+            }
+
+            # Deployments
+            result = self._kubectl.execute(
+                ["get", "deployments", "-n", ns], output_format="json"
+            )
+            if result.status == ResultStatus.SUCCESS and result.stdout:
+                try:
+                    data = _json.loads(result.stdout)
+                    for item in data.get("items", []):
+                        meta = item.get("metadata", {})
+                        spec = item.get("spec", {})
+                        status = item.get("status", {})
+                        ns_data["deployments"].append({
+                            "name": meta.get("name", ""),
+                            "labels": spec.get("selector", {}).get("matchLabels", {}),
+                            "replicas": spec.get("replicas", 1),
+                            "ready_replicas": status.get("readyReplicas", 0),
+                        })
+                except _json.JSONDecodeError:
+                    pass
+
+            # Services
+            result = self._kubectl.execute(
+                ["get", "services", "-n", ns], output_format="json"
+            )
+            if result.status == ResultStatus.SUCCESS and result.stdout:
+                try:
+                    data = _json.loads(result.stdout)
+                    for item in data.get("items", []):
+                        meta = item.get("metadata", {})
+                        spec = item.get("spec", {})
+                        ns_data["services"].append({
+                            "name": meta.get("name", ""),
+                            "type": spec.get("type", "ClusterIP"),
+                            "selector": spec.get("selector", {}),
+                        })
+                except _json.JSONDecodeError:
+                    pass
+
+            # Pods
+            result = self._kubectl.execute(
+                ["get", "pods", "-n", ns], output_format="json"
+            )
+            if result.status == ResultStatus.SUCCESS and result.stdout:
+                try:
+                    data = _json.loads(result.stdout)
+                    for item in data.get("items", []):
+                        meta = item.get("metadata", {})
+                        spec = item.get("spec", {})
+                        status = item.get("status", {})
+                        ns_data["pods"].append({
+                            "name": meta.get("name", ""),
+                            "node": spec.get("nodeName", ""),
+                            "status": status.get("phase", "Unknown"),
+                        })
+                except _json.JSONDecodeError:
+                    pass
+
+            topo["namespaces"].append(ns_data)
+
+        return topo
     
     # ============ Internal Methods ============
     
