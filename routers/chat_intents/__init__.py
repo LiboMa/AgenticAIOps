@@ -7,20 +7,21 @@ from routers.chat_intents import (
     resources,
     metrics,
     operations,
-    ui_actions,
-    rca,
     knowledge,
+    rca,
+    ui_actions,
 )
 from routers.deps import logger
 
 # Registry dict — add new domains here, no if/elif chain needed.
-# Order matters: first match wins. More-specific handlers go first.
+# Order matters: more-specific handlers first so patterns like 'rca deep'
+# match before generic operations patterns.
 INTENT_HANDLERS = {
     "health": health.handle,
     "metrics": metrics.handle,
-    "operations": operations.handle,
     "rca": rca.handle,
     "knowledge": knowledge.handle,
+    "operations": operations.handle,
     "resources": resources.handle,
     "ui_actions": ui_actions.handle,
 }

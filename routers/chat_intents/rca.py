@@ -1,22 +1,18 @@
-"""RCA / SOP / Safety / Incident intents."""
+"""RCA, SOP, incident, and safety intents."""
 
 import re
+import json
 import traceback
 from typing import Optional
 
-from routers.deps import get_current_region, logger
+from routers.deps import get_scanner, get_current_region, logger
 
 
 async def handle(message: str, message_lower: str) -> Optional[str]:
-    """Route RCA, SOP, safety, incident, and approval intents.
+    """Route RCA / SOP / incident / safety intents. Returns None if not matched."""
 
-    Returns None if not matched.
-    """
-
-    # --- Incident: closed-loop pipeline (must come before generic 'diagnose') ---
-    if any(kw in message_lower for kw in [
-        'incident run', '事件处理', 'incident handle', 'closed loop', '闭环',
-    ]):
+    # --- Incident Run (closed loop) ---
+    if any(kw in message_lower for kw in ['incident run', '事件处理', 'incident handle', 'closed loop', '闭环']):
         return await _incident_run(message, message_lower)
 
     # --- Incident List ---
@@ -31,17 +27,17 @@ async def handle(message: str, message_lower: str) -> Optional[str]:
     if any(kw in message_lower for kw in ['rca deep', 'rca 深度', 'deep analyze', '深度分析']):
         return await _rca_deep(message, message_lower)
 
+    # --- RCA Analyze ---
+    if any(kw in message_lower for kw in ['rca analyze', 'rca 分析', 'diagnose', '诊断问题', 'root cause']):
+        return _rca_analyze(message)
+
     # --- RCA Autofix ---
     if any(kw in message_lower for kw in ['rca autofix', 'rca 自动修复', 'auto diagnose']):
         return _rca_autofix(message)
 
-    # --- RCA Analyze (symptom-based) ---
-    if any(kw in message_lower for kw in ['rca analyze', 'rca 分析', 'diagnose', '诊断问题', 'root cause']):
-        return _rca_analyze(message)
-
     # --- RCA Feedback ---
     if any(kw in message_lower for kw in ['rca feedback', 'rca 反馈']):
-        return _rca_feedback(message, message_lower)
+        return _rca_feedback(message_lower)
 
     # --- RCA Stats ---
     if any(kw in message_lower for kw in ['rca stats', 'rca 统计', 'rca status']):
@@ -55,7 +51,7 @@ async def handle(message: str, message_lower: str) -> Optional[str]:
     if any(kw in message_lower for kw in ['safety stats', '安全统计', 'safety status']):
         return _safety_stats()
 
-    # --- Pending Approvals ---
+    # --- Approvals ---
     if any(kw in message_lower for kw in ['approvals', '审批列表', 'pending approvals']):
         return _pending_approvals()
 
@@ -69,7 +65,7 @@ async def handle(message: str, message_lower: str) -> Optional[str]:
 
     # --- SOP Show ---
     if any(kw in message_lower for kw in ['sop show', 'sop 详情', 'show sop']):
-        return _sop_show(message, message_lower)
+        return _sop_show(message_lower)
 
     # --- SOP Suggest ---
     if any(kw in message_lower for kw in ['sop suggest', 'sop 推荐', 'suggest sop']):
@@ -77,33 +73,32 @@ async def handle(message: str, message_lower: str) -> Optional[str]:
 
     # --- SOP Run ---
     if any(kw in message_lower for kw in ['sop run', 'sop 执行', 'run sop', 'execute sop']):
-        return _sop_run(message, message_lower)
+        return _sop_run(message_lower)
 
     return None
 
 
 # =========================================================================
-# Incident helpers
+# Private helpers — Incident
 # =========================================================================
 
 async def _incident_run(message: str, message_lower: str) -> str:
     try:
         from src.detect_agent import get_detect_agent
 
+        # Parse options
         dry_run = 'dry' in message_lower or '预览' in message_lower
         auto_exec = 'auto' in message_lower or '自动' in message_lower
-        # force_refresh is parsed but not used currently
-        # force_refresh = 'refresh' in message_lower or '刷新' in message_lower
+        force_refresh = 'refresh' in message_lower or '刷新' in message_lower
 
+        # Parse lookback (e.g., "incident run 30min")
         lb_match = re.search(r'(\d+)\s*min', message, re.IGNORECASE)
         lookback = int(lb_match.group(1)) if lb_match else 15
 
-        match = re.search(
-            r'(?:incident|事件|闭环)\s+(?:run|handle|处理)?\s*(ec2|rds|lambda)?',
-            message, re.IGNORECASE,
-        )
+        match = re.search(r'(?:incident|事件|闭环)\s+(?:run|handle|处理)?\s*(ec2|rds|lambda)?', message, re.IGNORECASE)
         service_filter = [match.group(1).lower()] if match and match.group(1) else None
 
+        # Use DetectAgent: collect once, reuse cached data
         detect = get_detect_agent(get_current_region())
         incident = await detect.trigger_incident(
             trigger_type="manual",
@@ -112,6 +107,7 @@ async def _incident_run(message: str, message_lower: str) -> str:
             dry_run=dry_run,
             lookback_minutes=lookback,
         )
+
         return incident.to_markdown()
     except Exception as e:
         return f"❌ 事件处理失败: {str(e)}\n```\n{traceback.format_exc()[:500]}\n```"
@@ -130,16 +126,8 @@ def _incident_list() -> str:
         response = f"📋 **事件列表** ({len(incidents)})\n\n"
         response += "| ID | 触发 | 状态 | 耗时 | 时间 |\n|-----|------|------|------|------|\n"
         for inc in incidents:
-            status_icon = (
-                '✅' if inc['status'] == 'completed'
-                else '❌' if inc['status'] == 'failed'
-                else '⏳'
-            )
-            response += (
-                f"| `{inc['incident_id'][:12]}` | {inc['trigger_type']} "
-                f"| {status_icon} {inc['status']} | {inc['duration_ms']}ms "
-                f"| {inc['created_at'][:19]} |\n"
-            )
+            status_icon = '✅' if inc['status'] == 'completed' else '❌' if inc['status'] == 'failed' else '⏳'
+            response += f"| `{inc['incident_id'][:12]}` | {inc['trigger_type']} | {status_icon} {inc['status']} | {inc['duration_ms']}ms | {inc['created_at'][:19]} |\n"
         return response
     except Exception as e:
         return f"❌ 获取事件列表失败: {str(e)}"
@@ -179,7 +167,7 @@ def _incident_stats() -> str:
 
 
 # =========================================================================
-# RCA helpers
+# Private helpers — RCA
 # =========================================================================
 
 async def _rca_deep(message: str, message_lower: str) -> str:
@@ -188,9 +176,8 @@ async def _rca_deep(message: str, message_lower: str) -> str:
         from src.rca_inference import get_rca_inference_engine
         from src.rca_sop_bridge import get_bridge
 
-        match = re.search(
-            r'(?:rca deep|deep analyze|深度分析)\s*(.*)', message, re.IGNORECASE,
-        )
+        # Parse optional service filter
+        match = re.search(r'(?:rca deep|deep analyze|深度分析)\s*(.*)', message, re.IGNORECASE)
         service_filter = None
         if match and match.group(1).strip():
             svc = match.group(1).strip().lower()
@@ -211,12 +198,9 @@ async def _rca_deep(message: str, message_lower: str) -> str:
 
         # Build response
         from src.rca.models import Severity
-        severity_icon = (
-            '🔴' if rca_result.severity == Severity.HIGH
-            else '🟡' if rca_result.severity == Severity.MEDIUM
-            else '🟢'
-        )
+        severity_icon = '🔴' if rca_result.severity == Severity.HIGH else '🟡' if rca_result.severity == Severity.MEDIUM else '🟢'
 
+        # Build response
         response = f"""🔬 **深度 RCA 分析** (Region: {get_current_region()})
 
 **采集数据:** {len(event.metrics)} 指标 | {len(event.alarms)} 告警 | {len(event.trail_events)} 事件 | 耗时 {event.duration_ms}ms
@@ -230,17 +214,14 @@ async def _rca_deep(message: str, message_lower: str) -> str:
 
 ### 📋 证据链
 """
-        for ev in rca_result.evidence:
-            response += f"- {ev}\n"
+        for e in rca_result.evidence:
+            response += f"- {e}\n"
 
         if sop_suggestions:
             response += "\n### 🛠️ 推荐 SOP\n\n"
             response += "| SOP | 名称 | 匹配度 | 步骤 |\n|-----|------|--------|------|\n"
             for sop in sop_suggestions[:3]:
-                response += (
-                    f"| `{sop['sop_id']}` | {sop['name']} "
-                    f"| {sop['match_confidence']:.0%} | {sop['steps']}步 |\n"
-                )
+                response += f"| `{sop['sop_id']}` | {sop['name']} | {sop['match_confidence']:.0%} | {sop['steps']}步 |\n"
             response += "\n使用 `sop run <id>` 执行"
 
         if rca_result.remediation.suggestion:
@@ -257,9 +238,9 @@ def _rca_analyze(message: str) -> str:
 
         bridge = get_bridge()
 
-        match = re.search(
-            r'(?:rca analyze|diagnose|诊断问题|root cause)\s*(.*)', message, re.IGNORECASE,
-        )
+        # Extract symptoms from the message
+        # e.g., "rca analyze high cpu memory leak"
+        match = re.search(r'(?:rca analyze|diagnose|诊断问题|root cause)\s*(.*)', message, re.IGNORECASE)
         symptoms = []
         if match and match.group(1).strip():
             symptoms = match.group(1).strip().split()
@@ -279,8 +260,9 @@ def _rca_analyze(message: str) -> str:
 
         result = bridge.analyze_and_suggest(
             symptoms=symptoms,
-            auto_execute=False,
+            auto_execute=False,  # Don't auto-execute from chat
         )
+
         return result.to_markdown()
     except Exception as e:
         return f"❌ RCA 分析失败: {str(e)}"
@@ -292,9 +274,7 @@ def _rca_autofix(message: str) -> str:
 
         bridge = get_bridge()
 
-        match = re.search(
-            r'(?:rca autofix|rca 自动修复|auto diagnose)\s*(.*)', message, re.IGNORECASE,
-        )
+        match = re.search(r'(?:rca autofix|rca 自动修复|auto diagnose)\s*(.*)', message, re.IGNORECASE)
         symptoms = match.group(1).strip().split() if match and match.group(1).strip() else []
 
         if not symptoms:
@@ -310,18 +290,20 @@ def _rca_autofix(message: str) -> str:
             symptoms=symptoms,
             auto_execute=True,
         )
+
         return result.to_markdown()
     except Exception as e:
         return f"❌ RCA 自动修复失败: {str(e)}"
 
 
-def _rca_feedback(message: str, message_lower: str) -> str:
+def _rca_feedback(message_lower: str) -> str:
     try:
         from src.rca_sop_bridge import get_bridge
 
+        # Format: rca feedback <execution_id> <sop_id> <pattern_id> success/fail
         match = re.search(
             r'rca feedback\s+(\S+)\s+(\S+)\s+(\S+)\s+(success|fail|good|bad)',
-            message_lower,
+            message_lower
         )
         if not match:
             return """📝 **RCA 执行反馈**
@@ -387,16 +369,14 @@ def _rca_stats() -> str:
 
 
 # =========================================================================
-# Safety helpers
+# Private helpers — Safety
 # =========================================================================
 
 def _safety_check(message: str) -> str:
     try:
         from src.sop_safety import get_safety_layer
 
-        match = re.search(
-            r'(?:safety check|安全检查|sop check|dry.run)\s*(\S*)', message, re.IGNORECASE,
-        )
+        match = re.search(r'(?:safety check|安全检查|sop check|dry.run)\s*(\S*)', message, re.IGNORECASE)
         sop_id = match.group(1).strip() if match and match.group(1).strip() else None
 
         if not sop_id:
@@ -420,7 +400,6 @@ def _safety_check(message: str) -> str:
 
 def _safety_stats() -> str:
     try:
-        import json
         from src.sop_safety import get_safety_layer
 
         safety = get_safety_layer()
@@ -464,10 +443,7 @@ def _pending_approvals() -> str:
 
         response = f"🔐 **待审批 ({len(pending)})**\n\n"
         for a in pending:
-            response += (
-                f"- `{a['approval_id']}`: **{a['sop_id']}** ({a['risk_level']}) "
-                f"— 请求人: {a['requested_by']}, 过期: {a['expires_at']}\n"
-            )
+            response += f"- `{a['approval_id']}`: **{a['sop_id']}** ({a['risk_level']}) — 请求人: {a['requested_by']}, 过期: {a['expires_at']}\n"
         response += "\n使用 `approve <approval_id>` 或 `reject <approval_id>` 处理"
         return response
     except Exception as e:
@@ -502,15 +478,19 @@ def _approve_reject(message: str) -> str:
 
 
 # =========================================================================
-# SOP helpers
+# Private helpers — SOP
 # =========================================================================
 
 def _sop_list() -> str:
     try:
         from src.sop_system import get_sop_store
-
         store = get_sop_store()
-        sops = store.list_sops(service=None, category=None)
+
+        # Parse optional filters
+        service_filter = None
+        category_filter = None
+
+        sops = store.list_sops(service=service_filter, category=category_filter)
 
         if not sops:
             return "📋 没有可用的 SOP"
@@ -529,7 +509,7 @@ def _sop_list() -> str:
         return f"❌ 获取 SOP 列表失败: {str(e)}"
 
 
-def _sop_show(message: str, message_lower: str) -> str:
+def _sop_show(message_lower: str) -> str:
     try:
         match = re.search(r'(?:sop show|show sop)\s+(\S+)', message_lower)
         if not match:
@@ -560,6 +540,7 @@ def _sop_show(message: str, message_lower: str) -> str:
 **步骤:**
 """
         for i, step in enumerate(sop.steps, 1):
+            step_obj = step if hasattr(step, 'name') else type('Step', (), step)()
             name = step.name if hasattr(step, 'name') else step.get('name', '')
             desc = step.description if hasattr(step, 'description') else step.get('description', '')
             response += f"{i}. **{name}** - {desc}\n"
@@ -572,6 +553,7 @@ def _sop_show(message: str, message_lower: str) -> str:
 
 def _sop_suggest(message: str) -> str:
     try:
+        # Format: sop suggest <service> <keywords>
         match = re.search(r'suggest\s+(\w+)\s*(.*)', message, re.IGNORECASE)
         if not match:
             return """**推荐 SOP**
@@ -598,21 +580,14 @@ def _sop_suggest(message: str) -> str:
 
 """
         for sop in suggested:
-            est_time = sum(
-                s.estimated_minutes if hasattr(s, 'estimated_minutes') else 5
-                for s in sop.steps
-            )
-            response += (
-                f"**{sop.name}** (`{sop.sop_id}`)\n"
-                f"- {sop.description}\n"
-                f"- 步骤数: {len(sop.steps)} | 预计时间: {est_time}分钟\n\n"
-            )
+            est_time = sum(s.estimated_minutes if hasattr(s, 'estimated_minutes') else 5 for s in sop.steps)
+            response += f"**{sop.name}** (`{sop.sop_id}`)\n- {sop.description}\n- 步骤数: {len(sop.steps)} | 预计时间: {est_time}分钟\n\n"
         return response
     except Exception as e:
         return f"❌ SOP 推荐失败: {str(e)}"
 
 
-def _sop_run(message: str, message_lower: str) -> str:
+def _sop_run(message_lower: str) -> str:
     try:
         match = re.search(r'(?:sop run|run sop|execute sop)\s+(\S+)', message_lower)
         if not match:
@@ -637,7 +612,7 @@ def _sop_run(message: str, message_lower: str) -> str:
         execution = executor.start_execution(sop_id, triggered_by="chat")
 
         if not execution:
-            return "❌ 启动 SOP 执行失败"
+            return f"❌ 启动 SOP 执行失败"
 
         response = f"""🚀 **SOP 执行已启动**
 
@@ -649,10 +624,7 @@ def _sop_run(message: str, message_lower: str) -> str:
 """
         for i, step in enumerate(sop.steps, 1):
             name = step.name if hasattr(step, 'name') else step.get('name', '')
-            step_type = (
-                step.step_type.value if hasattr(step, 'step_type')
-                else step.get('step_type', 'manual')
-            )
+            step_type = step.step_type.value if hasattr(step, 'step_type') else step.get('step_type', 'manual')
             response += f"{i}. {name} ({step_type})\n"
 
         response += f"\n使用 `sop status {execution.execution_id}` 查看执行状态"
