@@ -1,5 +1,5 @@
 """
-HealthIssue API Router — 8 endpoints for health issue lifecycle management.
+HealthIssue API Router — 9 endpoints for health issue lifecycle management.
 
   GET    /api/health-issues                              — list (status/severity filter)
   POST   /api/health-issues                              — create new issue
@@ -9,6 +9,7 @@ HealthIssue API Router — 8 endpoints for health issue lifecycle management.
   PATCH  /api/health-issues/{id}/fix-plan/{plan_id}/approve — approve
   PATCH  /api/health-issues/{id}/fix-plan/{plan_id}/reject  — reject
   POST   /api/health-issues/{id}/feedback                — user feedback
+  POST   /api/health-issues/{id}/reopen                  — reopen resolved issue (note required)
   POST   /api/health-issues/{id}/force-close             — force close (requires permission)
 """
 
@@ -95,6 +96,11 @@ class FixPlanRejectRequest(BaseModel):
 
 class FeedbackRequest(BaseModel):
     feedback: str  # thumbs-up / thumbs-down / free-text
+
+
+class ReopenRequest(BaseModel):
+    note: str
+    actor: Optional[str] = None
 
 
 class ForceCloseRequest(BaseModel):
@@ -290,6 +296,22 @@ def submit_feedback(issue_id: str, body: FeedbackRequest) -> Dict[str, Any]:
     _store.update_issue(issue)
     logger.info("Feedback for HealthIssue %s: %s", issue_id, body.feedback)
     return {"id": issue_id, "feedback": body.feedback}
+
+
+@router.post("/{issue_id}/reopen")
+def reopen_endpoint(issue_id: str, body: ReopenRequest) -> Dict[str, Any]:
+    """Reopen a resolved health issue with a mandatory note."""
+    issue = _store.get_issue(issue_id)
+    if issue is None:
+        raise HTTPException(status_code=404, detail=f"HealthIssue {issue_id} not found")
+
+    try:
+        reopen(issue, note=body.note, actor=body.actor)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    _store.update_issue(issue)
+    return issue.to_dict()
 
 
 @router.post("/{issue_id}/force-close")
