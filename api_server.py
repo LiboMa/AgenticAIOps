@@ -94,6 +94,7 @@ from routers.notifications import router as notifications_router
 from routers.knowledge import router as knowledge_router
 from src.aci.topology.api import router as topology_router
 from src.chaos.api import router as chaos_router
+from routers.health_issues import router as health_issues_router
 
 app.include_router(models_router)
 app.include_router(chat_router)
@@ -115,6 +116,7 @@ app.include_router(notifications_router)
 app.include_router(knowledge_router)
 app.include_router(topology_router)
 app.include_router(chaos_router)
+app.include_router(health_issues_router)
 
 # ---------------------------------------------------------------------------
 # Startup / shutdown events
