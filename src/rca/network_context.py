@@ -232,7 +232,7 @@ class NetworkContextEnricher:
             if "nat-" in msg or "igw-" in msg:
                 import re
 
-                resource_match = re.findall(r"(nat|igw)-[a-f0-9]+", msg)
+                resource_match = re.findall(r"(?:nat|igw)-[a-f0-9]+", msg)
                 if resource_match and not failed_resource:
                     failed_resource = resource_match[0]
 
