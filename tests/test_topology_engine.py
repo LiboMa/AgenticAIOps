@@ -1,8 +1,4 @@
-"""Tests for ACI topology module — engine, algorithms, serializers.
-
-Adapted from agenticops-chat/tests/test_graph_algorithms.py.
-Import paths updated to src.aci.topology.*.
-"""
+"""Tests for graph engine and algorithms."""
 
 import pytest
 
@@ -29,10 +25,7 @@ def _make_vpc_topology(
     has_tgw: bool = False,
     has_peering: bool = False,
 ) -> dict:
-    """Build a minimal VPC topology dict for testing.
-
-    This is the golden contract — the exact schema engine.py consumes.
-    """
+    """Build a minimal VPC topology dict for testing."""
     topo = {
         "vpc_id": "vpc-001",
         "vpc_cidr": "10.0.0.0/16",
@@ -294,7 +287,10 @@ class TestReachability:
         topo = _make_vpc_topology(has_igw=True, has_nat=False, has_blackhole=True)
         g = InfraGraph().build_from_vpc_topology(topo)
 
+        # The private subnet can still find a path via VPC containment edges,
+        # but the blackhole is detectable via anomaly detection.
         result = can_reach_internet(g, "subnet-priv-1")
+        # Path exists through VPC node (structural connectivity)
         assert result.subnet_id == "subnet-priv-1"
 
         # The blackhole should be caught by anomaly detection
@@ -329,6 +325,7 @@ class TestImpactAnalysis:
 
         assert result.failed_node_id == "igw-001"
         assert result.failed_node_type == NodeType.INTERNET_GATEWAY
+        # IGW connects to VPC and route table — those are affected
         assert len(result.affected_nodes) > 0
 
     def test_nonexistent_node(self):
@@ -377,6 +374,7 @@ class TestAnomalyDetection:
     def test_orphan_node_detected(self):
         topo = _make_vpc_topology()
         g = InfraGraph().build_from_vpc_topology(topo)
+        # Add an orphan node
         g._graph.add_node("orphan-001", node_type=NodeType.SUBNET, label="orphan", status=NodeStatus.UNKNOWN)
         result = detect_anomalies(g)
 
@@ -388,6 +386,7 @@ class TestAnomalyDetection:
         g = InfraGraph().build_from_vpc_topology(topo)
         result = detect_anomalies(g)
 
+        # A healthy VPC should have few/no anomalies
         critical = [a for a in result.anomalies if a.severity == "critical"]
         assert len(critical) == 0
 
@@ -398,6 +397,7 @@ class TestNetworkSegments:
         g = InfraGraph().build_from_region_topology(topo)
         result = network_segments(g)
 
+        # All VPCs connected via TGW should be in one segment
         assert result.total_segments == 1
 
     def test_isolated_vpcs(self):
@@ -405,6 +405,7 @@ class TestNetworkSegments:
         g = InfraGraph().build_from_region_topology(topo)
         result = network_segments(g)
 
+        # Without TGW, each VPC is its own segment
         assert result.total_segments == 3
         assert len(result.isolated_vpcs) == 3
 
@@ -423,6 +424,7 @@ class TestSerializers:
         assert result.metadata.node_count == len(result.nodes)
         assert result.metadata.edge_count == len(result.edges)
 
+        # Check node types are ReactFlow-compatible
         node_types = {n.type for n in result.nodes}
         assert "subnetNode" in node_types or "igwNode" in node_types
 
@@ -442,3 +444,216 @@ class TestSerializers:
 
         assert "nodes" in summary.lower() or "Nodes" in summary
         assert "edges" in summary.lower() or "Edges" in summary
+
+
+# ── K8s Topology Tests ───────────────────────────────────────────────
+
+
+class TestK8sTopology:
+    """Tests for the new K8s topology builder (not in agenticops-chat)."""
+
+    @staticmethod
+    def _make_k8s_topology():
+        return {
+            "cluster_name": "test-eks",
+            "nodes": [
+                {"name": "ip-10-0-1-1", "status": "Ready"},
+                {"name": "ip-10-0-1-2", "status": "Ready"},
+                {"name": "ip-10-0-1-3", "status": "NotReady"},
+            ],
+            "namespaces": [
+                {
+                    "name": "default",
+                    "deployments": [
+                        {"name": "nginx", "labels": {"app": "nginx"}, "replicas": 3, "ready_replicas": 3},
+                        {"name": "redis", "labels": {"app": "redis"}, "replicas": 2, "ready_replicas": 1},
+                    ],
+                    "services": [
+                        {"name": "nginx-svc", "type": "ClusterIP", "selector": {"app": "nginx"}},
+                        {"name": "redis-svc", "type": "ClusterIP", "selector": {"app": "redis"}},
+                    ],
+                    "pods": [
+                        {"name": "nginx-abc1", "node": "ip-10-0-1-1", "status": "Running"},
+                        {"name": "nginx-abc2", "node": "ip-10-0-1-2", "status": "Running"},
+                        {"name": "redis-xyz1", "node": "ip-10-0-1-1", "status": "Running"},
+                        {"name": "redis-xyz2", "node": "ip-10-0-1-3", "status": "Pending"},
+                    ],
+                },
+                {
+                    "name": "kube-system",
+                    "deployments": [
+                        {"name": "coredns", "labels": {"k8s-app": "kube-dns"}, "replicas": 2, "ready_replicas": 2},
+                    ],
+                    "services": [],
+                    "pods": [],
+                },
+            ],
+        }
+
+    def test_k8s_topology_builds(self):
+        g = InfraGraph().build_from_k8s_topology(self._make_k8s_topology())
+        assert g.node_count > 0
+        assert g.edge_count > 0
+
+    def test_k8s_cluster_node(self):
+        g = InfraGraph().build_from_k8s_topology(self._make_k8s_topology())
+        cluster = g.get_node("test-eks")
+        assert cluster is not None
+        assert cluster["node_type"] == NodeType.EKS_CLUSTER
+
+    def test_k8s_worker_nodes(self):
+        g = InfraGraph().build_from_k8s_topology(self._make_k8s_topology())
+        workers = g.get_nodes_by_type(NodeType.K8S_NODE)
+        assert len(workers) == 3
+        # NotReady node should have ERROR status
+        not_ready = g.get_node("ip-10-0-1-3")
+        assert not_ready["status"] == NodeStatus.ERROR
+
+    def test_k8s_namespaces(self):
+        g = InfraGraph().build_from_k8s_topology(self._make_k8s_topology())
+        namespaces = g.get_nodes_by_type(NodeType.K8S_NAMESPACE)
+        assert len(namespaces) == 2
+
+    def test_k8s_deployments(self):
+        g = InfraGraph().build_from_k8s_topology(self._make_k8s_topology())
+        deploys = g.get_nodes_by_type(NodeType.K8S_DEPLOYMENT)
+        assert len(deploys) == 3  # nginx, redis, coredns
+
+        # redis has 1/2 ready → WARNING
+        redis = g.get_node("ns/default/deploy/redis")
+        assert redis["status"] == NodeStatus.WARNING
+
+        # nginx has 3/3 ready → HEALTHY
+        nginx = g.get_node("ns/default/deploy/nginx")
+        assert nginx["status"] == NodeStatus.HEALTHY
+
+    def test_k8s_service_exposes_deployment(self):
+        g = InfraGraph().build_from_k8s_topology(self._make_k8s_topology())
+        neighbors = g.get_neighbors("ns/default/svc/nginx-svc", EdgeType.EXPOSES)
+        assert "ns/default/deploy/nginx" in neighbors
+
+    def test_k8s_pod_runs_on_node(self):
+        g = InfraGraph().build_from_k8s_topology(self._make_k8s_topology())
+        neighbors = g.get_neighbors("ns/default/pod/nginx-abc1", EdgeType.RUNS_ON)
+        assert "ip-10-0-1-1" in neighbors
+
+    def test_k8s_pending_pod_status(self):
+        g = InfraGraph().build_from_k8s_topology(self._make_k8s_topology())
+        pod = g.get_node("ns/default/pod/redis-xyz2")
+        assert pod["status"] == NodeStatus.WARNING
+
+    def test_k8s_anomaly_detection(self):
+        """NotReady node should be caught as unhealthy."""
+        g = InfraGraph().build_from_k8s_topology(self._make_k8s_topology())
+        result = detect_anomalies(g)
+        unhealthy = [a for a in result.anomalies if a.type == "unhealthy_node"]
+        # NotReady node + WARNING deployment should show
+        assert len(unhealthy) >= 1
+
+    def test_k8s_merge_with_vpc(self):
+        """K8s and VPC graphs can merge for unified topology."""
+        k8s = InfraGraph().build_from_k8s_topology(self._make_k8s_topology())
+        k8s_count = k8s.node_count
+        vpc = InfraGraph().build_from_vpc_topology(_make_vpc_topology())
+        vpc_count = vpc.node_count
+        merged = k8s.merge(vpc)
+
+        # Both EKS and VPC nodes should exist
+        assert merged.get_node("test-eks") is not None
+        assert merged.get_node("vpc-001") is not None
+        assert merged.node_count == k8s_count + vpc_count
+
+    def test_k8s_reactflow_serialization(self):
+        g = InfraGraph().build_from_k8s_topology(self._make_k8s_topology())
+        result = to_reactflow(g)
+        assert len(result.nodes) > 0
+        node_types = {n.type for n in result.nodes}
+        assert "eksNode" in node_types
+        assert "workerNode" in node_types
+        assert "deploymentNode" in node_types
+
+
+# ── API Router Tests ─────────────────────────────────────────────────
+
+
+class TestTopologyAPI:
+    """Tests for the FastAPI topology router using mocked boto3."""
+
+    @pytest.fixture
+    def mock_boto3(self, monkeypatch):
+        """Mock boto3 client to avoid real AWS calls."""
+        import unittest.mock as mock
+
+        mock_ec2 = mock.MagicMock()
+        mock_ec2.describe_vpcs.return_value = {
+            "Vpcs": [{
+                "VpcId": "vpc-test",
+                "CidrBlock": "10.0.0.0/16",
+                "Tags": [{"Key": "Name", "Value": "test-vpc"}],
+            }]
+        }
+        mock_ec2.describe_internet_gateways.return_value = {
+            "InternetGateways": [{
+                "InternetGatewayId": "igw-test",
+                "Attachments": [{"VpcId": "vpc-test", "State": "attached"}],
+                "Tags": [{"Key": "Name", "Value": "test-igw"}],
+            }]
+        }
+        mock_ec2.describe_subnets.return_value = {
+            "Subnets": [{
+                "SubnetId": "subnet-test",
+                "CidrBlock": "10.0.1.0/24",
+                "AvailabilityZone": "us-east-1a",
+                "AvailableIpAddressCount": 250,
+                "MapPublicIpOnLaunch": True,
+                "Tags": [{"Key": "Name", "Value": "test-subnet"}],
+            }]
+        }
+        mock_ec2.describe_route_tables.return_value = {
+            "RouteTables": [{
+                "RouteTableId": "rtb-test",
+                "Associations": [{"SubnetId": "subnet-test"}],
+                "Routes": [
+                    {"DestinationCidrBlock": "10.0.0.0/16", "GatewayId": "local", "State": "active"},
+                    {"DestinationCidrBlock": "0.0.0.0/0", "GatewayId": "igw-test", "State": "active"},
+                ],
+                "Tags": [{"Key": "Name", "Value": "test-rt"}],
+            }]
+        }
+        mock_ec2.describe_nat_gateways.return_value = {"NatGateways": []}
+        mock_ec2.describe_transit_gateway_attachments.return_value = {"TransitGatewayAttachments": []}
+        mock_ec2.describe_vpc_peering_connections.return_value = {"VpcPeeringConnections": []}
+        mock_ec2.describe_vpc_endpoints.return_value = {"VpcEndpoints": []}
+        mock_ec2.describe_transit_gateways.return_value = {"TransitGateways": []}
+
+        monkeypatch.setattr("boto3.client", lambda *a, **kw: mock_ec2)
+        return mock_ec2
+
+    def test_get_vpc_topology_api(self, mock_boto3):
+        """Test collect_vpc_topology builds correct dict from boto3."""
+        from src.aci.topology.collector import collect_vpc_topology
+
+        topo = collect_vpc_topology("us-east-1", "vpc-test")
+        assert topo["vpc_id"] == "vpc-test"
+        assert topo["vpc_name"] == "test-vpc"
+        assert len(topo["internet_gateways"]) == 1
+        assert len(topo["subnets"]) == 1
+        assert len(topo["route_tables"]) == 1
+
+    def test_vpc_graph_from_boto3(self, mock_boto3):
+        """Test full pipeline: boto3 → topology dict → InfraGraph."""
+        from src.aci.topology.api import _build_vpc_graph
+
+        graph = _build_vpc_graph("us-east-1", "vpc-test")
+        assert graph.node_count > 0
+        assert graph.get_node("vpc-test") is not None
+        assert graph.get_node("igw-test") is not None
+
+    def test_region_graph_from_boto3(self, mock_boto3):
+        """Test region-level graph building."""
+        from src.aci.topology.api import _build_region_graph
+
+        graph = _build_region_graph("us-east-1")
+        assert graph.node_count > 0
+        vpcs = graph.get_nodes_by_type(NodeType.VPC)
+        assert len(vpcs) >= 1

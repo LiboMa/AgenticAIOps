@@ -553,7 +553,7 @@ async def _enrich_with_topology(detect_result: DetectResult) -> dict:
 | `RouteTables[].Routes[].DestinationCidrBlock` | `routes[].destination` | |
 | `RouteTables[].Routes[].GatewayId\|NatGatewayId` | `routes[].target` | 需合并多字段 |
 | `RouteTables[].Routes[].State` | `routes[].state` | |
-| `NatGateways[].NatGatewayId` | `nat_id` | **不是** `nat_gateway_id` |
+| `NatGateways[].NatGatewayId` | `nat_gateway_id` | engine L161 确认 |
 | `SecurityGroups` | `security_group_dependency_map` | 需重构为 map + references |
 
 **collector.py 是纯转换层** — engine.py 零改动。
