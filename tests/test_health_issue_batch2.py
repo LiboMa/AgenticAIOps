@@ -517,30 +517,50 @@ class TestAPIFeedback:
 class TestAPIForceClose:
     """POST /api/health-issues/{id}/force-close."""
 
-    def test_force_close_with_permission(self, api_client):
+    def test_force_close_with_allowed_actor(self, api_client):
         resp = api_client.post("/api/health-issues", json={"title": "Force Close Test"})
         issue_id = resp.json()["id"]
         resp = api_client.post(f"/api/health-issues/{issue_id}/force-close", json={
             "actor": "admin",
-            "has_permission": True,
             "note": "False alarm",
         })
         assert resp.status_code == 200
         assert resp.json()["status"] == "resolved"
 
-    def test_force_close_without_permission_returns_403(self, api_client):
+    def test_force_close_non_whitelisted_actor_returns_403(self, api_client):
+        """P1 security fix: server-side allowlist rejects non-whitelisted actors."""
         resp = api_client.post("/api/health-issues", json={"title": "No Perm"})
         issue_id = resp.json()["id"]
         resp = api_client.post(f"/api/health-issues/{issue_id}/force-close", json={
-            "actor": "junior",
-            "has_permission": False,
+            "actor": "junior-dev",
         })
         assert resp.status_code == 403
+
+    def test_force_close_client_cannot_bypass_permission(self, api_client):
+        """P1: even if client sends has_permission=true, non-whitelisted actor is rejected."""
+        resp = api_client.post("/api/health-issues", json={"title": "Bypass Attempt"})
+        issue_id = resp.json()["id"]
+        # has_permission field should be ignored by server
+        resp = api_client.post(f"/api/health-issues/{issue_id}/force-close", json={
+            "actor": "hacker",
+            "has_permission": True,
+        })
+        assert resp.status_code == 403
+
+    def test_force_close_all_allowed_actors(self, api_client):
+        """All actors in FORCE_CLOSE_ACTORS should succeed."""
+        allowed = ["admin", "senior-ops", "senior-dba", "sre-lead", "platform-admin"]
+        for actor in allowed:
+            resp = api_client.post("/api/health-issues", json={"title": f"FC-{actor}"})
+            issue_id = resp.json()["id"]
+            resp = api_client.post(f"/api/health-issues/{issue_id}/force-close", json={
+                "actor": actor,
+            })
+            assert resp.status_code == 200, f"Expected 200 for actor '{actor}', got {resp.status_code}"
 
     def test_force_close_not_found(self, api_client):
         resp = api_client.post("/api/health-issues/ghost/force-close", json={
             "actor": "admin",
-            "has_permission": True,
         })
         assert resp.status_code == 404
 
