@@ -727,6 +727,16 @@ class TestE2EAPIFlow:
         assert resp.json()["approved_by"] == "system:auto_approve"
         assert resp.json()["approved_at"] is not None
 
+    def test_update_nonexistent_fix_plan_raises(self, store):
+        """Store: update_fix_plan for nonexistent ID → KeyError (line 139)."""
+        ghost = FixPlan(id="ghost-plan")
+        with pytest.raises(KeyError, match="ghost-plan"):
+            store.update_fix_plan(ghost)
+
+    def test_get_nonexistent_rca_returns_none(self, store):
+        """Store: get_rca_result for nonexistent ID → None (line 164)."""
+        assert store.get_rca_result("no-such-rca") is None
+
     def test_reject_then_new_plan(self, client, store):
         """Reject a plan, then submit a new one."""
         resp = client.post("/api/health-issues", json={"title": "Needs replanning"})
