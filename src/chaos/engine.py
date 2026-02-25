@@ -47,7 +47,7 @@ class ChaosEngine:
 
     def __init__(
         self,
-        dry_run: bool = False,
+        dry_run: bool = True,
         namespace_allowlist: Optional[List[str]] = None,
         max_concurrent: int = 3,
         auto_rollback_seconds: int = 600,

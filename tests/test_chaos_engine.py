@@ -371,7 +371,7 @@ class TestSafetyGuards:
 
     def test_engine_default_config(self):
         e = ChaosEngine()
-        assert e.dry_run is False
+        assert e.dry_run is True  # safe default: dry_run=True
         assert e.namespace_allowlist == ["chaos-lab"]
         assert e.max_concurrent == 3
         assert e.auto_rollback_seconds == 600

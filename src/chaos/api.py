@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/chaos", tags=["chaos"])
 
 # Module-level engine instance (shared across requests)
-_engine = ChaosEngine(dry_run=False)
+_engine = ChaosEngine(dry_run=True)
 
 
 def get_engine() -> ChaosEngine:
