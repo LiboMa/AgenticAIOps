@@ -764,3 +764,127 @@ class TestE2EAPIFlow:
         )
         assert resp.status_code == 201
         assert resp.json()["status"] == "approved"  # L1 auto-approve
+
+
+# ---------------------------------------------------------------------------
+# Force-close endpoint (routers/health_issues.py L298-313)
+# ---------------------------------------------------------------------------
+
+class TestForceCloseEndpoint:
+    """Test the POST /{issue_id}/force-close HTTP endpoint."""
+
+    @pytest.fixture
+    def client(self, tmp_path):
+        app = FastAPI()
+        app.include_router(router)
+        from routers.health_issues import _store
+        _store._dir = str(tmp_path)
+        return TestClient(app)
+
+    def test_force_close_happy(self, client):
+        """Force-close from open state with permission."""
+        resp = client.post("/api/health-issues", json={"title": "To close"})
+        issue_id = resp.json()["id"]
+
+        resp = client.post(
+            f"/api/health-issues/{issue_id}/force-close",
+            json={"actor": "admin", "note": "Duplicate", "has_permission": True},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "resolved"
+
+    def test_force_close_without_permission_403(self, client):
+        """Force-close without permission → 403."""
+        resp = client.post("/api/health-issues", json={"title": "Protected"})
+        issue_id = resp.json()["id"]
+
+        resp = client.post(
+            f"/api/health-issues/{issue_id}/force-close",
+            json={"actor": "user", "has_permission": False},
+        )
+        assert resp.status_code == 403
+
+    def test_force_close_not_found_404(self, client):
+        """Force-close nonexistent issue → 404."""
+        resp = client.post(
+            "/api/health-issues/nonexistent/force-close",
+            json={"actor": "admin", "has_permission": True},
+        )
+        assert resp.status_code == 404
+
+    def test_force_close_from_investigating(self, client):
+        """Force-close from investigating state."""
+        resp = client.post("/api/health-issues", json={"title": "Invest then close"})
+        issue_id = resp.json()["id"]
+
+        # Transition to investigating
+        client.patch(
+            f"/api/health-issues/{issue_id}/status",
+            json={"status": "investigating", "actor": "sre"},
+        )
+
+        resp = client.post(
+            f"/api/health-issues/{issue_id}/force-close",
+            json={"actor": "admin", "note": "False alarm", "has_permission": True},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "resolved"
+
+
+# ---------------------------------------------------------------------------
+# Transition endpoint — ValueError from transition() (L190-191)
+# ---------------------------------------------------------------------------
+
+class TestTransitionValueError:
+    """Cover the inner try/except ValueError in the transition endpoint."""
+
+    @pytest.fixture
+    def client(self, tmp_path):
+        app = FastAPI()
+        app.include_router(router)
+        from routers.health_issues import _store
+        _store._dir = str(tmp_path)
+        return TestClient(app)
+
+    def test_invalid_status_value_400(self, client):
+        """Invalid status enum value → 400."""
+        resp = client.post("/api/health-issues", json={"title": "Bad transition"})
+        issue_id = resp.json()["id"]
+
+        resp = client.patch(
+            f"/api/health-issues/{issue_id}/status",
+            json={"status": "nonexistent_status", "actor": "user"},
+        )
+        assert resp.status_code == 400
+        assert "Invalid status" in resp.json()["detail"]
+
+    def test_disallowed_transition_409(self, client):
+        """Valid status but disallowed transition → 409."""
+        resp = client.post("/api/health-issues", json={"title": "Skip ahead"})
+        issue_id = resp.json()["id"]
+
+        # open → fix_approved is not allowed (must go through lifecycle)
+        resp = client.patch(
+            f"/api/health-issues/{issue_id}/status",
+            json={"status": "fix_approved", "actor": "user"},
+        )
+        assert resp.status_code == 409
+        assert "Cannot transition" in resp.json()["detail"]
+
+    def test_transition_internal_valueerror_400(self, client):
+        """transition() raises ValueError after can_transition passes → 400.
+
+        This covers the defensive try/except in the endpoint (L190-191).
+        """
+        from unittest.mock import patch
+
+        resp = client.post("/api/health-issues", json={"title": "Internal err"})
+        issue_id = resp.json()["id"]
+
+        with patch("routers.health_issues.transition", side_effect=ValueError("internal logic error")):
+            resp = client.patch(
+                f"/api/health-issues/{issue_id}/status",
+                json={"status": "investigating", "actor": "user"},
+            )
+        assert resp.status_code == 400
+        assert "internal logic error" in resp.json()["detail"]
