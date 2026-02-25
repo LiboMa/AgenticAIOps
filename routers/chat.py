@@ -18,14 +18,6 @@ from routers.chat_intents.ui_actions import detect_ui_action
 
 router = APIRouter(tags=["chat"])
 
-# =============================================================================
-# Strands Agent Integration
-# =============================================================================
-
-# =============================================================================
-# Multi-Model Agent Factory
-# =============================================================================
-
 # Model ID mapping: frontend model key → Bedrock model ID
 BEDROCK_MODEL_MAP = {
     "claude-opus": "global.anthropic.claude-opus-4-6-v1",
@@ -155,10 +147,6 @@ def get_agent(model_key: str = None):
         return None
 
 
-# =============================================================================
-# Chat Endpoint (integrates with Strands Agent)
-# =============================================================================
-
 @router.post("/api/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
     """Chat with the AIOps agent. Supports multi-model selection."""
@@ -211,7 +199,6 @@ Recommended tools: {', '.join(analysis['recommended_tools'][:3])}
             model_used=model_used,
         )
     except Exception as e:
-        import traceback
         return ChatResponse(
             response=f"Error: {str(e)}\n{traceback.format_exc()}",
             model_used=request.model or "auto",
@@ -299,5 +286,4 @@ async def chat_with_files(
             "files_processed": file_names,
         }
     except Exception as e:
-        import traceback
         return {"response": f"Error processing files: {str(e)}\n{traceback.format_exc()}", "model_used": model}
