@@ -9,17 +9,20 @@ from routers.chat_intents import (
     operations,
     knowledge,
     rca,
+    sop,
     ui_actions,
 )
 from routers.deps import logger
 
 # Registry dict — add new domains here, no if/elif chain needed.
 # Order matters: more-specific handlers first so patterns like 'rca deep'
-# match before generic operations patterns.
+# match before generic operations patterns.  SOP before resources so
+# 'sop list' doesn't accidentally match the 'list' resource handler.
 INTENT_HANDLERS = {
     "health": health.handle,
     "metrics": metrics.handle,
     "rca": rca.handle,
+    "sop": sop.handle,
     "knowledge": knowledge.handle,
     "operations": operations.handle,
     "resources": resources.handle,
