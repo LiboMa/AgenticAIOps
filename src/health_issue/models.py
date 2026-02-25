@@ -209,6 +209,9 @@ class HealthIssue:
     # Feedback
     user_feedback: Optional[str] = None  # thumbs-up / thumbs-down / comment
 
+    # Timeline — structured audit trail of transitions / reopen / force_close
+    timeline: List[Dict[str, Any]] = field(default_factory=list)
+
     # -- serialisation helpers ------------------------------------------------
 
     def to_dict(self) -> Dict[str, Any]:
@@ -238,6 +241,7 @@ class HealthIssue:
             detected_at=data.get("detected_at", _now_iso()),
             resolved_at=data.get("resolved_at"),
             user_feedback=data.get("user_feedback"),
+            timeline=data.get("timeline", []),
         )
 
     def is_resolved(self) -> bool:

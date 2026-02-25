@@ -19,10 +19,13 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from src.health_issue.lifecycle import (
+    ALLOWED_TRANSITIONS,
     approve_fix_plan,
     can_transition,
     create_fix_plan,
+    force_close,
     reject_fix_plan,
+    reopen,
     transition,
 )
 from src.health_issue.models import (
@@ -45,6 +48,8 @@ _store = HealthIssueStore()
 
 class StatusTransitionRequest(BaseModel):
     status: str
+    note: Optional[str] = None
+    actor: Optional[str] = None
 
 
 class FixPlanCreateRequest(BaseModel):
@@ -73,6 +78,12 @@ class FixPlanRejectRequest(BaseModel):
 
 class FeedbackRequest(BaseModel):
     feedback: str  # thumbs-up / thumbs-down / free-text
+
+
+class ForceCloseRequest(BaseModel):
+    actor: str
+    note: str = ""
+    has_permission: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -107,6 +118,9 @@ def get_health_issue(issue_id: str) -> Dict[str, Any]:
     result["fix_plans"] = [
         p.to_dict() for p in _store.list_fix_plans(health_issue_id=issue_id)
     ]
+    result["allowed_transitions"] = [
+        s.value for s in ALLOWED_TRANSITIONS.get(issue.status, [])
+    ]
     return result
 
 
@@ -126,7 +140,7 @@ def transition_status(issue_id: str, body: StatusTransitionRequest) -> Dict[str,
         )
 
     try:
-        transition(issue, new_status)
+        transition(issue, new_status, note=body.note, actor=body.actor)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -221,3 +235,24 @@ def submit_feedback(issue_id: str, body: FeedbackRequest) -> Dict[str, Any]:
     issue.user_feedback = body.feedback
     _store.update_issue(issue)
     return {"status": "ok", "issue_id": issue_id, "feedback": body.feedback}
+
+
+@router.post("/{issue_id}/force-close")
+def force_close_endpoint(issue_id: str, body: ForceCloseRequest) -> Dict[str, Any]:
+    """Force-close a health issue from any state (requires permission)."""
+    issue = _store.get_issue(issue_id)
+    if issue is None:
+        raise HTTPException(status_code=404, detail=f"HealthIssue {issue_id} not found")
+
+    try:
+        force_close(
+            issue,
+            actor=body.actor,
+            note=body.note,
+            has_permission=body.has_permission,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+
+    _store.update_issue(issue)
+    return issue.to_dict()

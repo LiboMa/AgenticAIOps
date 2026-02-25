@@ -3,7 +3,7 @@ HealthIssue 7-State Lifecycle Module
 
 Unified issue lifecycle replacing IssueStatus (8 states) + IncidentStatus (9 states)
 with a single 7-state model: open → investigating → root_cause_identified →
-fix_planned → fix_approved → fix_executed → resolved.
+fix_planned → fix_approved → fix_executed → resolved (⇄ open via reopen).
 """
 
 from .models import (
@@ -18,6 +18,8 @@ from .lifecycle import (
     ALLOWED_TRANSITIONS,
     can_transition,
     transition,
+    reopen,
+    force_close,
     create_fix_plan,
     approve_fix_plan,
     reject_fix_plan,
@@ -42,6 +44,8 @@ __all__ = [
     "ALLOWED_TRANSITIONS",
     "can_transition",
     "transition",
+    "reopen",
+    "force_close",
     "create_fix_plan",
     "approve_fix_plan",
     "reject_fix_plan",
