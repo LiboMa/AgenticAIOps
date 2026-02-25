@@ -540,3 +540,36 @@ class TestDispatchRetry:
         agent._write_dead_letter(detect_result, "test error")
         assert agent._dead_letter_dir.exists()
         assert (agent._dead_letter_dir / f"dl-{detect_result.detect_id}.json").exists()
+
+    @pytest.mark.asyncio
+    async def test_dispatch_non_retryable_error_no_retry(self, agent, detect_result):
+        """ValueError (business error) is NOT retried — fails immediately."""
+        mock_orchestrator = MagicMock()
+        mock_orchestrator.handle_incident = AsyncMock(
+            side_effect=ValueError("invalid trigger_type")
+        )
+
+        with patch("src.incident_orchestrator.get_orchestrator", return_value=mock_orchestrator):
+            with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+                await agent._dispatch(detect_result)
+
+        # Should only be called once — no retries for business errors
+        assert mock_orchestrator.handle_incident.call_count == 1
+        mock_sleep.assert_not_called()
+        assert agent._dispatch_failures == 1
+
+    @pytest.mark.asyncio
+    async def test_dispatch_key_error_not_retried(self, agent, detect_result):
+        """KeyError (business error) is NOT retried."""
+        mock_orchestrator = MagicMock()
+        mock_orchestrator.handle_incident = AsyncMock(
+            side_effect=KeyError("missing_field")
+        )
+
+        with patch("src.incident_orchestrator.get_orchestrator", return_value=mock_orchestrator):
+            with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+                await agent._dispatch(detect_result)
+
+        assert mock_orchestrator.handle_incident.call_count == 1
+        mock_sleep.assert_not_called()
+        assert agent._dispatch_failures == 1

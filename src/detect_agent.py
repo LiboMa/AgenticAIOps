@@ -299,11 +299,18 @@ class DetectAgent:
         Phase A: Direct function call to IncidentOrchestrator.
         Phase B: Replace with self.event_bus.publish(DetectEvent(result)).
         Only this method changes during A→B migration.
+
+        Business errors (ValueError, KeyError, TypeError) are NOT retried —
+        they indicate bad input, not transient infrastructure failures.
         """
+        from src.incident_orchestrator import get_orchestrator
+
+        # Non-retryable (business logic) error types
+        NON_RETRYABLE = (ValueError, KeyError, TypeError, AttributeError)
+
         last_error = None
         for attempt in range(self._dispatch_max_retries):
             try:
-                from src.incident_orchestrator import get_orchestrator
                 orchestrator = get_orchestrator(self.region)
                 await orchestrator.handle_incident(
                     trigger_type=result.source.replace("_scan", "").replace("_trigger", ""),
@@ -312,6 +319,13 @@ class DetectAgent:
                 self._dispatch_successes += 1
                 logger.info(f"[{result.detect_id}] Dispatch succeeded (attempt {attempt + 1})")
                 return
+            except NON_RETRYABLE as e:
+                # Business error — no point retrying
+                logger.error(
+                    f"[{result.detect_id}] Dispatch failed with non-retryable error: {e}"
+                )
+                last_error = e
+                break
             except Exception as e:
                 last_error = e
                 backoff = self._dispatch_base_delay * (2 ** attempt)

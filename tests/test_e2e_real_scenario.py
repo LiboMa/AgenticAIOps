@@ -73,6 +73,14 @@ def _aws_available() -> bool:
 AWS_AVAILABLE = _aws_available()
 skip_no_aws = pytest.mark.skipif(not AWS_AVAILABLE, reason="AWS credentials not available")
 
+# Thread-based timeout for all tests in this file — signal-based timeouts
+# do not interrupt async event loops, causing real-AWS tests to hang.
+# Also mark as "slow" so `pytest -m "not slow"` can skip these.
+pytestmark = [
+    pytest.mark.timeout(90, method="thread"),
+    pytest.mark.slow,
+]
+
 
 # ══════════════════════════════════════════════════════════════
 # STAGE 1: Real AWS Data Collection (EventCorrelator)
