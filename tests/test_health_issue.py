@@ -196,10 +196,11 @@ class TestLifecycleTransitions:
         transition(hi, HealthIssueStatus.FIX_PLANNED)
         assert hi.status == HealthIssueStatus.FIX_PLANNED
 
-    def test_resolved_is_terminal(self):
+    def test_resolved_allows_reopen(self):
         hi = HealthIssue()
         transition(hi, HealthIssueStatus.RESOLVED)
-        assert ALLOWED_TRANSITIONS[HealthIssueStatus.RESOLVED] == []
+        # Rev 2: RESOLVED is no longer terminal — allows reopen to OPEN
+        assert ALLOWED_TRANSITIONS[HealthIssueStatus.RESOLVED] == [HealthIssueStatus.OPEN]
 
     # ── Invalid transitions ──
 
