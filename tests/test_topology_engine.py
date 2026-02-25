@@ -579,9 +579,9 @@ class TestK8sTopology:
 class TestTopologyAPI:
     """Tests for the FastAPI topology router using mocked boto3."""
 
-    @pytest.fixture
-    def mock_boto3(self, monkeypatch):
-        """Mock boto3 client to avoid real AWS calls."""
+    @staticmethod
+    def _make_mock_ec2():
+        """Build a MagicMock EC2 client with standard VPC responses."""
         import unittest.mock as mock
 
         mock_ec2 = mock.MagicMock()
@@ -624,36 +624,44 @@ class TestTopologyAPI:
         mock_ec2.describe_transit_gateway_attachments.return_value = {"TransitGatewayAttachments": []}
         mock_ec2.describe_vpc_peering_connections.return_value = {"VpcPeeringConnections": []}
         mock_ec2.describe_vpc_endpoints.return_value = {"VpcEndpoints": []}
+        mock_ec2.describe_security_groups.return_value = {"SecurityGroups": []}
         mock_ec2.describe_transit_gateways.return_value = {"TransitGateways": []}
-
-        monkeypatch.setattr("src.aci.topology.collector.boto3.client", lambda *a, **kw: mock_ec2)
         return mock_ec2
 
-    def test_get_vpc_topology_api(self, mock_boto3):
+    def test_get_vpc_topology_api(self):
         """Test collect_vpc_topology builds correct dict from boto3."""
+        from unittest.mock import patch
         from src.aci.topology.collector import collect_vpc_topology
 
-        topo = collect_vpc_topology("us-east-1", "vpc-test")
+        mock_ec2 = self._make_mock_ec2()
+        with patch("src.aci.topology.collector.boto3.client", return_value=mock_ec2):
+            topo = collect_vpc_topology("us-east-1", "vpc-test")
         assert topo["vpc_id"] == "vpc-test"
         assert topo["vpc_name"] == "test-vpc"
         assert len(topo["internet_gateways"]) == 1
         assert len(topo["subnets"]) == 1
         assert len(topo["route_tables"]) == 1
 
-    def test_vpc_graph_from_boto3(self, mock_boto3):
+    def test_vpc_graph_from_boto3(self):
         """Test full pipeline: boto3 → topology dict → InfraGraph."""
+        from unittest.mock import patch
         from src.aci.topology.api import _build_vpc_graph
 
-        graph = _build_vpc_graph("us-east-1", "vpc-test")
+        mock_ec2 = self._make_mock_ec2()
+        with patch("src.aci.topology.collector.boto3.client", return_value=mock_ec2):
+            graph = _build_vpc_graph("us-east-1", "vpc-test")
         assert graph.node_count > 0
         assert graph.get_node("vpc-test") is not None
         assert graph.get_node("igw-test") is not None
 
-    def test_region_graph_from_boto3(self, mock_boto3):
+    def test_region_graph_from_boto3(self):
         """Test region-level graph building."""
+        from unittest.mock import patch
         from src.aci.topology.api import _build_region_graph
 
-        graph = _build_region_graph("us-east-1")
+        mock_ec2 = self._make_mock_ec2()
+        with patch("src.aci.topology.collector.boto3.client", return_value=mock_ec2):
+            graph = _build_region_graph("us-east-1")
         assert graph.node_count > 0
         vpcs = graph.get_nodes_by_type(NodeType.VPC)
         assert len(vpcs) >= 1
