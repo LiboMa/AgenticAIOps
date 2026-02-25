@@ -626,7 +626,7 @@ class TestTopologyAPI:
         mock_ec2.describe_vpc_endpoints.return_value = {"VpcEndpoints": []}
         mock_ec2.describe_transit_gateways.return_value = {"TransitGateways": []}
 
-        monkeypatch.setattr("boto3.client", lambda *a, **kw: mock_ec2)
+        monkeypatch.setattr("src.aci.topology.collector.boto3.client", lambda *a, **kw: mock_ec2)
         return mock_ec2
 
     def test_get_vpc_topology_api(self, mock_boto3):
