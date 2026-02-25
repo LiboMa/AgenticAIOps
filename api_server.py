@@ -92,6 +92,7 @@ from routers.aws import router as aws_router
 from routers.proactive import router as proactive_router
 from routers.notifications import router as notifications_router
 from routers.knowledge import router as knowledge_router
+from src.aci.topology.api import router as topology_router
 
 app.include_router(models_router)
 app.include_router(chat_router)
@@ -111,6 +112,7 @@ app.include_router(aws_router)
 app.include_router(proactive_router)
 app.include_router(notifications_router)
 app.include_router(knowledge_router)
+app.include_router(topology_router)
 
 # ---------------------------------------------------------------------------
 # Startup / shutdown events

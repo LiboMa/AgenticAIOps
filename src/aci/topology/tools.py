@@ -1,7 +1,9 @@
 """Topology-based Strands tools for Agent use.
 
-Each tool builds an InfraGraph, runs the appropriate algorithm,
-and returns JSON results for LLM consumption.
+Each tool builds an InfraGraph via the collector, runs the appropriate
+algorithm, and returns JSON results for LLM consumption.
+
+These tools are NOT auto-registered — import them explicitly when needed.
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ from .algorithms import (
     impact_analysis,
     network_segments,
 )
+from .collector import collect_region_topology, collect_vpc_topology
 from .engine import InfraGraph
 from .serializers import to_agent_summary
 
@@ -25,18 +28,15 @@ logger = logging.getLogger(__name__)
 
 
 def _build_vpc_graph(region: str, vpc_id: str) -> InfraGraph:
-    """Build graph from VPC topology via boto3."""
-    from .api import _get_vpc_topology
-
-    topo = _get_vpc_topology(region, vpc_id)
+    """Build graph from VPC topology via collector."""
+    topo = collect_vpc_topology(region, vpc_id)
     return InfraGraph().build_from_vpc_topology(topo)
 
 
 def _build_region_graph(region: str) -> InfraGraph:
-    """Build graph from region topology via boto3."""
-    from .api import _build_region_graph as build_region
-
-    return build_region(region)
+    """Build graph from region topology via collector."""
+    topo = collect_region_topology(region)
+    return InfraGraph().build_from_region_topology(topo)
 
 
 @tool
@@ -48,7 +48,7 @@ def query_reachability(region: str, vpc_id: str, subnet_id: str) -> str:
     blackhole routes that block connectivity.
 
     Args:
-        region: AWS region (e.g., 'us-east-1')
+        region: AWS region (e.g., 'ap-southeast-1')
         vpc_id: VPC ID to analyze
         subnet_id: Subnet ID to check reachability for
 
@@ -73,7 +73,7 @@ def query_impact_radius(region: str, vpc_id: str, resource_id: str) -> str:
     which subnets lose Internet connectivity and which connections are broken.
 
     Args:
-        region: AWS region (e.g., 'us-east-1')
+        region: AWS region (e.g., 'ap-southeast-1')
         vpc_id: VPC ID to analyze
         resource_id: Resource ID to simulate failure for (e.g., nat-xxx, igw-xxx)
 
@@ -97,7 +97,7 @@ def find_network_path(region: str, vpc_id: str, source: str, target: str) -> str
     Returns up to 5 shortest paths with per-hop details.
 
     Args:
-        region: AWS region (e.g., 'us-east-1')
+        region: AWS region (e.g., 'ap-southeast-1')
         vpc_id: VPC ID to analyze
         source: Source resource ID (e.g., subnet-xxx)
         target: Target resource ID (e.g., igw-xxx, nat-xxx, subnet-yyy)
@@ -122,7 +122,7 @@ def detect_network_anomalies(region: str, vpc_id: str) -> str:
     unreachable public subnets, and nodes in error state.
 
     Args:
-        region: AWS region (e.g., 'us-east-1')
+        region: AWS region (e.g., 'ap-southeast-1')
         vpc_id: VPC ID to analyze
 
     Returns:
@@ -145,7 +145,7 @@ def analyze_network_segments(region: str) -> str:
     isolated VPCs, and cross-VPC connectivity via TGW and peering.
 
     Args:
-        region: AWS region (e.g., 'us-east-1')
+        region: AWS region (e.g., 'ap-southeast-1')
 
     Returns:
         JSON with segments, isolated_vpcs, and graph_summary.

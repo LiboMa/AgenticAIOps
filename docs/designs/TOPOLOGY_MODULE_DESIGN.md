@@ -339,46 +339,69 @@ def _build_region_graph(region: str) -> InfraGraph:
 
 ### 4.6 interface.py 对接
 
-```python
-# src/aci/interface.py — 替换 TODO
+> **⚠️ 重要**: `get_topology()` 和 `get_dependencies()` 已有 K8s 实现 (通过 kubectl + `build_from_k8s_topology`)。
+> **不替换**, 而是新增 VPC 拓扑方法。两种拓扑能力并存。
 
-def get_topology(self, namespace: str = "all") -> ContextResult:
-    """VPC 拓扑发现。"""
+| 方法 | 层级 | 数据源 | 状态 |
+|------|------|--------|------|
+| `get_topology(namespace)` | K8s 应用层 | kubectl | ✅ 已实现 |
+| `get_dependencies(service)` | K8s 应用层 | kubectl | ✅ 已实现 |
+| `get_vpc_topology(region, vpc_id)` | VPC 网络层 | boto3 | 🆕 新增 |
+| `get_network_dependencies(resource_id)` | VPC 网络层 | boto3 | 🆕 新增 |
+
+```python
+# src/aci/interface.py — 新增 VPC 拓扑方法 (保留 K8s 方法不动)
+
+def get_vpc_topology(self, region: str = None, vpc_id: str = None) -> ContextResult:
+    """VPC 网络拓扑发现。"""
     try:
-        from src.aci.topology.collector import collect_region_topology
-        from src.aci.topology.engine import InfraGraph
-        from src.aci.topology.serializers import to_agent_summary
+        from .topology.collector import collect_vpc_topology, collect_region_topology
+        from .topology.engine import InfraGraph
+        from .topology.serializers import to_agent_summary
         
-        topo = collect_region_topology(self.region)
-        graph = InfraGraph().build_from_region_topology(topo)
+        region = region or self.region
+        if vpc_id:
+            topo = collect_vpc_topology(region, vpc_id)
+            graph = InfraGraph().build_from_vpc_topology(topo)
+        else:
+            topo = collect_region_topology(region)
+            graph = InfraGraph().build_from_region_topology(topo)
+        
         summary = to_agent_summary(graph)
         
         return ContextResult(
             status=ResultStatus.SUCCESS,
             data={
-                "summary": summary,
+                "graph_summary": summary,
                 "node_count": graph.graph.number_of_nodes(),
                 "edge_count": graph.graph.number_of_edges(),
+                "region": region,
+                "vpc_id": vpc_id,
             },
         )
     except Exception as e:
         return ContextResult(status=ResultStatus.ERROR, data={"error": str(e)})
 
-def get_dependencies(self, service_name: str) -> ContextResult:
-    """服务依赖分析 — 基于 topology graph 的邻居遍历。"""
+def get_network_dependencies(self, resource_id: str, region: str = None, vpc_id: str = None) -> ContextResult:
+    """VPC 资源网络依赖分析。"""
     try:
-        from src.aci.topology.collector import collect_region_topology
-        from src.aci.topology.engine import InfraGraph
+        from .topology.collector import collect_vpc_topology
+        from .topology.engine import InfraGraph
         
-        topo = collect_region_topology(self.region)
-        graph = InfraGraph().build_from_region_topology(topo)
-        neighbors = graph.get_neighbors(service_name, direction="both")
+        region = region or self.region
+        if not vpc_id:
+            return ContextResult(status=ResultStatus.ERROR, data={"error": "vpc_id required"})
+        
+        topo = collect_vpc_topology(region, vpc_id)
+        graph = InfraGraph().build_from_vpc_topology(topo)
+        neighbors = graph.get_neighbors(resource_id, direction="both")
         
         return ContextResult(
             status=ResultStatus.SUCCESS,
             data={
-                "service": service_name,
+                "resource_id": resource_id,
                 "dependencies": neighbors,
+                "vpc_id": vpc_id,
             },
         )
     except Exception as e:

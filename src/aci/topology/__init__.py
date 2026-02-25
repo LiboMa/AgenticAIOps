@@ -20,6 +20,8 @@ from .types import (
     GraphEdge,
     GraphMetadata,
     SerializedGraph,
+    VpcTopology,
+    RegionTopology,
 )
 from .engine import InfraGraph
 
@@ -34,4 +36,6 @@ __all__ = [
     "GraphEdge",
     "GraphMetadata",
     "SerializedGraph",
+    "VpcTopology",
+    "RegionTopology",
 ]

@@ -88,6 +88,39 @@ class EdgeAttrs(BaseModel):
     state: str = ""
 
 
+# ── Collector schema models (Reviewer request) ──────────────────────
+
+
+class VpcTopology(BaseModel):
+    """Schema contract for collector.py output → engine.py input (VPC level)."""
+
+    vpc_id: str
+    vpc_cidr: str
+    vpc_name: str = ""
+    region: str = ""
+    internet_gateways: list[dict[str, Any]] = Field(default_factory=list)
+    subnets: list[dict[str, Any]] = Field(default_factory=list)
+    route_tables: list[dict[str, Any]] = Field(default_factory=list)
+    nat_gateways: list[dict[str, Any]] = Field(default_factory=list)
+    transit_gateway_attachments: list[dict[str, Any]] = Field(default_factory=list)
+    vpc_peering_connections: list[dict[str, Any]] = Field(default_factory=list)
+    vpc_endpoints: list[dict[str, Any]] = Field(default_factory=list)
+    security_group_dependency_map: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    blackhole_routes: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class RegionTopology(BaseModel):
+    """Schema contract for collector.py output → engine.py input (region level)."""
+
+    region: str
+    vpcs: list[dict[str, Any]] = Field(default_factory=list)
+    transit_gateways: list[dict[str, Any]] = Field(default_factory=list)
+    peering_connections: list[dict[str, Any]] = Field(default_factory=list)
+
+
+# ── Serialized graph models ──────────────────────────────────────────
+
+
 class GraphNode(BaseModel):
     """Serialized graph node for API output (ReactFlow compatible)."""
 
