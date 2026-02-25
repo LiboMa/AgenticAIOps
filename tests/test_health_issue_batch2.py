@@ -297,7 +297,6 @@ class TestAPICreateIssue:
         assert data["status"] == "open"
         assert data["title"] == "API Test Issue"
         assert "id" in data
-        return data["id"]
 
     def test_create_minimal_body(self, api_client):
         resp = api_client.post("/api/health-issues", json={})
