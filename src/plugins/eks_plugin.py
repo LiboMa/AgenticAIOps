@@ -83,7 +83,7 @@ class EKSPlugin(PluginBase):
                     "name": cluster.name,
                     "healthy": is_healthy
                 })
-            except:
+            except Exception:
                 cluster_status.append({
                     "cluster_id": cluster.cluster_id,
                     "name": cluster.name,

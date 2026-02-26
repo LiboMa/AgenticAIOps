@@ -236,7 +236,7 @@ class PrometheusProvider:
             url = urljoin(self.prometheus_url, "/-/healthy")
             response = requests.get(url, timeout=5)
             return response.status_code == 200
-        except:
+        except Exception:
             return False
     
     def _parse_instant_result(self, result_data: List[Dict]) -> List[MetricPoint]:

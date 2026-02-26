@@ -190,7 +190,7 @@ class MetricsProvider:
                 return float(cpu_str[:-1])
             else:
                 return float(cpu_str) * 1000  # cores to millicores
-        except:
+        except Exception:
             return 0.0
     
     def _parse_memory(self, mem_str: str) -> float:
@@ -204,5 +204,5 @@ class MetricsProvider:
                 return float(mem_str[:-2]) * 1024 * 1024 * 1024
             else:
                 return float(mem_str)
-        except:
+        except Exception:
             return 0.0

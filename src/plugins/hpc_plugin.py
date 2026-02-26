@@ -73,7 +73,7 @@ class HPCPlugin(PluginBase):
                                         "region": region,
                                         "version": "unknown",
                                     })
-                                except:
+                                except Exception:
                                     pass
             except Exception as e:
                 logger.warning(f"Failed to list HPC clusters in {region}: {e}")

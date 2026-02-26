@@ -473,7 +473,7 @@ class MultiAgentVoting:
             # Extract proposal/diagnosis
             try:
                 proposal = extract_fn(response)
-            except:
+            except Exception:
                 proposal = response[:100]  # Fallback to truncated response
             
             # Calculate weight
