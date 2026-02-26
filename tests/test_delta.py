@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import os
 import tempfile
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -162,8 +162,8 @@ class TestDeltaStore:
     def test_get_between(self, store):
         changes = capture_delta(None, _graph_abc())
         store.store(changes)
-        start = datetime.utcnow() - timedelta(minutes=1)
-        end = datetime.utcnow() + timedelta(minutes=1)
+        start = datetime.now(tz=timezone.utc) - timedelta(minutes=1)
+        end = datetime.now(tz=timezone.utc) + timedelta(minutes=1)
         between = store.get_between(start, end)
         assert len(between) == 5
 
@@ -179,7 +179,7 @@ class TestDeltaStore:
         changes = capture_delta(None, _graph_abc())
         # Set old timestamps
         for c in changes:
-            c.timestamp = (datetime.utcnow() - timedelta(days=30)).isoformat()
+            c.timestamp = (datetime.now(tz=timezone.utc) - timedelta(days=30)).isoformat()
         store.store(changes)
         deleted = store.purge_old(retention_days=7)
         assert deleted == 5

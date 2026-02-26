@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Callable, Coroutine
 
 from .delta import capture_delta, get_delta_store
@@ -124,7 +124,7 @@ class GraphCache:
 
             self._previous = self._graph
             self._graph = new_graph
-            self._last_refresh = datetime.utcnow()
+            self._last_refresh = datetime.now(tz=timezone.utc)
             self._stale = False
             logger.debug(
                 "Graph refreshed: %d nodes, %d edges",
@@ -161,12 +161,11 @@ class GraphCache:
         }
         status = state_map.get(alarm_state.upper(), NodeStatus.WARNING)
 
-        g = self._graph.graph
-        if resource_id not in g:
+        found = self._graph.update_node_status(resource_id, status)
+        if not found:
             logger.debug("inject_alarm: node %s not in graph", resource_id)
             return False
 
-        g.nodes[resource_id]["status"] = status
         self._stale = True  # triggers rebuild on next refresh cycle
         logger.info(
             "Alarm injected: %s → %s (cache marked stale)", resource_id, status,

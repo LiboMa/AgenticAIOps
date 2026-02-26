@@ -3,7 +3,7 @@
 import pytest
 
 from src.aci.topology.engine import InfraGraph
-from src.aci.topology.types import EdgeType, NodeStatus, NodeType
+from src.aci.topology.types import EdgeType, NodeAttrs, NodeStatus, NodeType
 from src.aci.topology.algorithms import (
     can_reach_internet,
     detect_anomalies,
@@ -571,6 +571,56 @@ class TestK8sTopology:
         assert "eksNode" in node_types
         assert "workerNode" in node_types
         assert "deploymentNode" in node_types
+
+
+# ── InfraGraph utility method tests ──────────────────────────────────
+
+
+class TestUpdateNodeStatus:
+    """Tests for InfraGraph.update_node_status()."""
+
+    def test_updates_existing_node(self):
+        topo = _make_vpc_topology(has_igw=True)
+        g = InfraGraph().build_from_vpc_topology(topo)
+        assert g.update_node_status("vpc-001", NodeStatus.ERROR) is True
+        assert g.get_node("vpc-001")["status"] == NodeStatus.ERROR
+
+    def test_returns_false_for_missing_node(self):
+        g = InfraGraph()
+        assert g.update_node_status("nonexistent", NodeStatus.ERROR) is False
+
+    def test_accepts_string_status(self):
+        topo = _make_vpc_topology(has_igw=True)
+        g = InfraGraph().build_from_vpc_topology(topo)
+        assert g.update_node_status("vpc-001", "warning") is True
+        assert g.get_node("vpc-001")["status"] == NodeStatus.WARNING
+
+    def test_invalid_string_falls_back_to_unknown(self):
+        topo = _make_vpc_topology(has_igw=True)
+        g = InfraGraph().build_from_vpc_topology(topo)
+        g.update_node_status("vpc-001", "bogus")
+        assert g.get_node("vpc-001")["status"] == NodeStatus.UNKNOWN
+
+
+class TestCopy:
+    """Tests for InfraGraph.copy()."""
+
+    def test_copy_is_independent(self):
+        topo = _make_vpc_topology(has_igw=True, has_nat=True)
+        g = InfraGraph().build_from_vpc_topology(topo)
+        clone = g.copy()
+        assert clone.node_count == g.node_count
+        assert clone.edge_count == g.edge_count
+        # Mutate original — clone should not change
+        g._add_node("extra", NodeAttrs(node_type=NodeType.SUBNET, label="extra"))
+        assert clone.node_count == g.node_count - 1
+
+    def test_copy_preserves_attributes(self):
+        topo = _make_vpc_topology(has_igw=True)
+        g = InfraGraph().build_from_vpc_topology(topo)
+        clone = g.copy()
+        for nid in ["vpc-001", "igw-001"]:
+            assert clone.get_node(nid) == g.get_node(nid)
 
 
 # ── API Router Tests ─────────────────────────────────────────────────

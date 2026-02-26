@@ -507,6 +507,33 @@ class InfraGraph:
         sub._graph = self._graph.subgraph(node_ids).copy()
         return sub
 
+    def update_node_status(self, node_id: str, status: NodeStatus | str) -> bool:
+        """Update a node's status in-place.  Returns ``True`` if node exists.
+
+        Accepts either a :class:`NodeStatus` enum or a raw string
+        (e.g. ``"error"``).  Used by ``GraphCache.inject_alarm()`` to
+        patch node state between full graph rebuilds.
+        """
+        if node_id not in self._graph:
+            return False
+        if isinstance(status, str):
+            try:
+                status = NodeStatus(status)
+            except ValueError:
+                status = NodeStatus.UNKNOWN
+        self._graph.nodes[node_id]["status"] = status
+        return True
+
+    def copy(self) -> InfraGraph:
+        """Return a deep copy of this graph (independent NetworkX copy).
+
+        Used by ``delta.rebuild_at()`` to create a mutable snapshot
+        without mutating the cached graph.
+        """
+        clone = InfraGraph()
+        clone._graph = self._graph.copy()
+        return clone
+
     @property
     def node_count(self) -> int:
         return self._graph.number_of_nodes()

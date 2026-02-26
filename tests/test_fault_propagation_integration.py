@@ -553,3 +553,70 @@ class TestCriticalPath:
         result = fault_propagation(g, "n0", mode=PropagationMode.PESSIMISTIC)
         # Chain is n0 → n1 → n2 → n3 → n4 → n5
         assert len(result.critical_path) == 6
+
+
+# ── Tests: Bidirectional Edge Propagation ────────────────────────────
+
+
+class TestBidirectionalPropagation:
+
+    def test_peers_with_propagates_both_ways(self):
+        """PEERS_WITH is bidirectional — failure should propagate via reverse edge."""
+        g = InfraGraph()
+        g._add_node("vpc-a", NodeAttrs(node_type=NodeType.VPC, label="vpc-a"))
+        g._add_node("vpc-b", NodeAttrs(node_type=NodeType.VPC, label="vpc-b"))
+        # Only one directed edge: a → b
+        g._add_edge("vpc-a", "vpc-b", EdgeAttrs(edge_type=EdgeType.PEERS_WITH))
+        # Fail vpc-b — should still reach vpc-a via reverse PEERS_WITH
+        result = fault_propagation(g, "vpc-b", mode=PropagationMode.PESSIMISTIC)
+        assert "vpc-a" in result.affected_nodes
+
+    def test_associated_with_propagates_both_ways(self):
+        """ASSOCIATED_WITH is bidirectional."""
+        g = InfraGraph()
+        g._add_node("subnet-1", NodeAttrs(node_type=NodeType.SUBNET, label="sub"))
+        g._add_node("rtb-1", NodeAttrs(node_type=NodeType.ROUTE_TABLE, label="rtb"))
+        # Edge: subnet → rtb
+        g._add_edge("subnet-1", "rtb-1", EdgeAttrs(edge_type=EdgeType.ASSOCIATED_WITH))
+        # Fail rtb-1 — should propagate back to subnet-1
+        result = fault_propagation(g, "rtb-1", mode=PropagationMode.PESSIMISTIC)
+        assert "subnet-1" in result.affected_nodes
+
+    def test_exposes_propagates_both_ways(self):
+        """EXPOSES is bidirectional — Service↔Deployment."""
+        g = InfraGraph()
+        g._add_node("svc", NodeAttrs(node_type=NodeType.K8S_SERVICE, label="svc"))
+        g._add_node("deploy", NodeAttrs(
+            node_type=NodeType.K8S_DEPLOYMENT, label="deploy",
+            raw={"replicas": 1, "ready_replicas": 1},
+        ))
+        # Edge: svc → deploy
+        g._add_edge("svc", "deploy", EdgeAttrs(edge_type=EdgeType.EXPOSES))
+        # Fail deploy — should propagate back to svc
+        result = fault_propagation(g, "deploy", mode=PropagationMode.PESSIMISTIC)
+        assert "svc" in result.affected_nodes
+
+    def test_non_bidirectional_does_not_reverse(self):
+        """CONTAINS is NOT bidirectional — child failure should not propagate to parent."""
+        g = InfraGraph()
+        g._add_node("vpc", NodeAttrs(node_type=NodeType.VPC, label="vpc"))
+        g._add_node("subnet", NodeAttrs(node_type=NodeType.SUBNET, label="sub"))
+        # Edge: vpc → subnet (CONTAINS)
+        g._add_edge("vpc", "subnet", EdgeAttrs(edge_type=EdgeType.CONTAINS))
+        # Fail subnet — should NOT propagate back to vpc
+        result = fault_propagation(g, "subnet", mode=PropagationMode.PESSIMISTIC)
+        assert "vpc" not in result.affected_nodes
+        assert result.affected_nodes == ["subnet"]
+
+    def test_replicas_zero_no_division_error(self):
+        """replicas=0 should not cause ZeroDivisionError."""
+        g = InfraGraph()
+        g._add_node("svc", NodeAttrs(node_type=NodeType.K8S_SERVICE, label="svc"))
+        g._add_node("deploy", NodeAttrs(
+            node_type=NodeType.K8S_DEPLOYMENT, label="deploy",
+            raw={"replicas": 0, "ready_replicas": 0},
+        ))
+        g._add_edge("svc", "deploy", EdgeAttrs(edge_type=EdgeType.EXPOSES))
+        # Should not raise
+        result = fault_propagation(g, "svc", mode=PropagationMode.REALISTIC)
+        assert "deploy" in result.affected_nodes

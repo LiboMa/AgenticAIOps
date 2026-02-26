@@ -19,7 +19,7 @@ from enum import Enum
 from typing import Any
 
 from .engine import InfraGraph
-from .types import NodeType
+from .types import EdgeType, NodeType
 
 logger = logging.getLogger(__name__)
 
@@ -327,8 +327,29 @@ def fault_propagation(
                 reason="root failure",
             ))
 
-        # Outgoing neighbours only (fault propagates downstream)
+        # Outgoing edges (fault propagates downstream)
+        # Plus reverse traversal for bidirectional edge types:
+        #   PEERS_WITH, ASSOCIATED_WITH, EXPOSES (per Architect §3.1.2 direction table)
+        _BIDIRECTIONAL = frozenset({
+            EdgeType.PEERS_WITH,
+            EdgeType.ASSOCIATED_WITH,
+            EdgeType.EXPOSES,
+        })
+
+        neighbors: list[str] = []
         for _, neighbor in g.out_edges(node):
+            neighbors.append(neighbor)
+        # Reverse edges for bidirectional types
+        for predecessor, _ in g.in_edges(node):
+            if predecessor in visited:
+                continue
+            edge_data = g.edges.get((predecessor, node), {})
+            et_raw = edge_data.get("edge_type")
+            # Compare as string or enum
+            if et_raw in _BIDIRECTIONAL or str(et_raw) in {e.value for e in _BIDIRECTIONAL}:
+                neighbors.append(predecessor)
+
+        for neighbor in neighbors:
             if neighbor in visited:
                 continue
 

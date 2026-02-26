@@ -16,7 +16,7 @@ import os
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Generator
 
@@ -117,7 +117,7 @@ class DeltaStore:
         """Persist a batch of topology changes.  Returns count stored."""
         if not changes:
             return 0
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(tz=timezone.utc).isoformat()
         rows = []
         for c in changes:
             rows.append((
@@ -160,7 +160,7 @@ class DeltaStore:
         """
         if window is None:
             window = timedelta(hours=1)
-        since = (datetime.utcnow() - window).isoformat()
+        since = (datetime.now(tz=timezone.utc) - window).isoformat()
 
         sql = "SELECT * FROM topology_changes WHERE timestamp >= ?"
         params: list[Any] = [since]
@@ -195,7 +195,7 @@ class DeltaStore:
     def purge_old(self, retention_days: int | None = None) -> int:
         """Delete deltas older than retention period.  Returns count deleted."""
         days = retention_days or _RETENTION_DAYS
-        cutoff = (datetime.utcnow() - timedelta(days=days)).isoformat()
+        cutoff = (datetime.now(tz=timezone.utc) - timedelta(days=days)).isoformat()
         with self._connect() as conn:
             cursor = conn.execute(
                 "DELETE FROM topology_changes WHERE timestamp < ?", (cutoff,),
@@ -251,7 +251,7 @@ def capture_delta(
     If *old_graph* is ``None`` (first build), all nodes/edges are ``added``.
     """
     changes: list[TopologyChange] = []
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(tz=timezone.utc).isoformat()
 
     old_g = old_graph.graph if old_graph else None
     new_g = new_graph.graph
