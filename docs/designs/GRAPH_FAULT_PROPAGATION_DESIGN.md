@@ -101,13 +101,17 @@ def _infer_edge_weight(
     
     node_type = target_attrs.get("node_type")
     
-    # Check Multi-AZ siblings
-    siblings = graph.get_nodes_by_type(node_type)
+    # Check Multi-AZ siblings (scoped to same parent VPC/Cluster)
+    parent = graph.get_parent(target)
+    siblings = [
+        s for s in graph.get_nodes_by_type(node_type)
+        if graph.get_parent(s) == parent and s != target
+    ]
     azs = {graph.get_node(s).get("availability_zone") for s in siblings 
-           if graph.get_node(s) and s != target}
+           if graph.get_node(s)}
     target_az = target_attrs.get("availability_zone")
     if target_az and len(azs) >= 1:
-        return 0.3, f"multi-az: {len(azs)+1} AZs"
+        return 0.3, f"multi-az: {len(azs)+1} AZs in {parent}"
     
     # Check ASG
     if node_type == NodeType.ASG:
@@ -167,9 +171,24 @@ def fault_propagation(graph, failed_node_id, mode, max_depth, min_weight):
     # Compute critical path (highest cumulative weight)
     critical_path = _find_critical_path(tree, weights, failed_node_id)
     
-    # Normalize impact score
-    total_nodes = len(graph.graph.nodes)
-    impact_score = len(visited) / total_nodes if total_nodes > 0 else 0.0
+    # Normalize impact score (weighted by node criticality)
+    NODE_WEIGHT = {
+        NodeType.SUBNET: 10.0,       # Production subnets are critical
+        NodeType.NAT_GATEWAY: 8.0,
+        NodeType.INTERNET_GATEWAY: 8.0,
+        NodeType.LOAD_BALANCER: 7.0,
+        NodeType.EKS_CLUSTER: 9.0,
+        NodeType.RDS_INSTANCE: 8.0,
+        NodeType.EC2_INSTANCE: 3.0,
+        NodeType.K8S_POD: 1.0,
+        NodeType.SECURITY_GROUP: 0.5,
+    }
+    DEFAULT_WEIGHT = 2.0
+    total_weight = sum(NODE_WEIGHT.get(graph.get_node(n, {}).get("node_type"), DEFAULT_WEIGHT)
+                       for n in graph.graph.nodes)
+    affected_weight = sum(NODE_WEIGHT.get(graph.get_node(n, {}).get("node_type"), DEFAULT_WEIGHT)
+                          for n in visited)
+    impact_score = affected_weight / total_weight if total_weight > 0 else 0.0
     
     return PropagationResult(
         origin_node=failed_node_id,
@@ -277,6 +296,10 @@ def rebuild_at(timestamp: datetime) -> InfraGraph:
     """
     Rebuild the graph as it was at a given timestamp.
     Uses current graph - applies reverse deltas back to target time.
+    
+    IMPORTANT: Deltas MUST be applied in strict reverse chronological order.
+    If node X changed A→B→C, we must reverse C→B first, then B→A.
+    The .order_by(desc) ensures this ordering.
     """
     current = graph_cache.get_current()
     deltas = db.query(TopologyChange)\
