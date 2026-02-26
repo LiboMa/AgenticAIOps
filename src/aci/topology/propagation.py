@@ -23,6 +23,16 @@ from .types import EdgeType, NodeType
 
 logger = logging.getLogger(__name__)
 
+# ── Bidirectional edge types (propagate in both directions) ──────────
+# Per Architect §3.1.2 direction table: PEERS_WITH, ASSOCIATED_WITH,
+# EXPOSES are peer/symmetric relationships.
+_BIDIRECTIONAL: frozenset[EdgeType] = frozenset({
+    EdgeType.PEERS_WITH,
+    EdgeType.ASSOCIATED_WITH,
+    EdgeType.EXPOSES,
+})
+_BIDIRECTIONAL_VALUES: frozenset[str] = frozenset(e.value for e in _BIDIRECTIONAL)
+
 # ── Node importance weights for impact scoring ───────────────────────
 # Higher weight = more critical.  Used by ``_weighted_impact_score()``.
 # Override per-environment via subclass or monkey-patch.
@@ -354,11 +364,6 @@ def fault_propagation(
         # Outgoing edges (fault propagates downstream)
         # Plus reverse traversal for bidirectional edge types:
         #   PEERS_WITH, ASSOCIATED_WITH, EXPOSES (per Architect §3.1.2 direction table)
-        _BIDIRECTIONAL = frozenset({
-            EdgeType.PEERS_WITH,
-            EdgeType.ASSOCIATED_WITH,
-            EdgeType.EXPOSES,
-        })
 
         neighbors: list[str] = []
         for _, neighbor in g.out_edges(node):
@@ -370,7 +375,7 @@ def fault_propagation(
             edge_data = g.edges.get((predecessor, node), {})
             et_raw = edge_data.get("edge_type")
             # Compare as string or enum
-            if et_raw in _BIDIRECTIONAL or str(et_raw) in {e.value for e in _BIDIRECTIONAL}:
+            if et_raw in _BIDIRECTIONAL or str(et_raw) in _BIDIRECTIONAL_VALUES:
                 neighbors.append(predecessor)
 
         for neighbor in neighbors:
@@ -572,7 +577,12 @@ def _render_rca_context_block(
 
     # Truncate if over budget
     if len(text) > max_chars:
-        text = text[:max_chars - 20] + "\n\n*[truncated]*"
+        cut = text[:max_chars - 20]
+        # Cut at last newline to avoid mid-line truncation
+        last_nl = cut.rfind("\n")
+        if last_nl > max_chars // 2:
+            cut = cut[:last_nl]
+        text = cut + "\n\n*[truncated]*"
 
     return text
 
