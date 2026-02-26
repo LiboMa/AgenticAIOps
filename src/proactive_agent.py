@@ -82,6 +82,7 @@ class ProactiveAgentSystem:
             task_type=TaskType.HEARTBEAT,
             action="quick_scan",
             interval_seconds=300,  # 5 minutes
+            enabled=False,  # disabled: sync boto3 blocks event loop (TODO: wrap in run_in_executor)
             config={
                 "services": ["ec2", "lambda", "s3", "rds"],
                 "check_issues": True,
@@ -142,6 +143,10 @@ class ProactiveAgentSystem:
     
     async def _heartbeat_loop(self):
         """Main heartbeat loop - runs periodic checks"""
+        # Delay first heartbeat so the server can stabilize and serve
+        # HTTP requests before heavy AWS API calls block the event loop.
+        await asyncio.sleep(60)
+        logger.info("⏰ Heartbeat loop starting after 60s warm-up delay")
         while self._running:
             try:
                 for task_name, task in self.tasks.items():
