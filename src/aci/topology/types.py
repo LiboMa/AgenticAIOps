@@ -148,6 +148,7 @@ class GraphMetadata(BaseModel):
     node_type_counts: dict[str, int] = Field(default_factory=dict)
     has_anomalies: bool = False
     anomaly_count: int = 0
+    propagation: dict[str, Any] | None = None
 
 
 class SerializedGraph(BaseModel):

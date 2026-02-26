@@ -188,6 +188,80 @@ def to_reactflow(
     return SerializedGraph(nodes=nodes, edges=edges, metadata=metadata)
 
 
+# ── Propagation overlay for ReactFlow ────────────────────────────────
+
+
+def annotate_propagation_overlay(
+    rf: SerializedGraph,
+    prop_result: "PropagationResult",
+) -> SerializedGraph:
+    """Overlay fault propagation data onto an existing ReactFlow graph.
+
+    Adds ``propagation`` key to each affected node's data dict with:
+      - ``wave``: BFS depth (0 = root failure)
+      - ``impact``: cumulative weight at that node
+      - ``is_origin``: True for the root failure node
+
+    Adds ``propagation`` key to affected edges with:
+      - ``weight``: edge propagation weight
+      - ``on_critical_path``: True if on the critical path
+
+    Also sets ``metadata.propagation`` summary.
+    """
+    from .propagation import PropagationResult  # noqa: F811
+
+    # Build lookup: node_id → wave info
+    node_waves: dict[str, dict] = {}
+    for wave in prop_result.waves:
+        for entry in wave.affected:
+            node_waves[entry.node_id] = {
+                "wave": wave.depth,
+                "impact": entry.cumulative_weight if hasattr(entry, "cumulative_weight") else 1.0,
+                "impact_level": entry.impact_level.value if hasattr(entry.impact_level, "value") else str(entry.impact_level),
+                "is_origin": wave.depth == 0,
+            }
+
+    # Build edge lookup from edge_weights
+    prop_edges: dict[tuple[str, str], dict] = {}
+    for (src, tgt), weight in prop_result.edge_weights.items():
+        prop_edges[(src, tgt)] = {
+            "weight": weight,
+            "on_critical_path": False,
+        }
+
+    # Mark critical path edges
+    cp = prop_result.critical_path
+    for i in range(len(cp) - 1):
+        key = (cp[i], cp[i + 1])
+        if key in prop_edges:
+            prop_edges[key]["on_critical_path"] = True
+
+    # Annotate nodes
+    for node in rf.nodes:
+        if node.id in node_waves:
+            node.data["propagation"] = node_waves[node.id]
+
+    # Annotate edges
+    for edge in rf.edges:
+        key = (edge.source, edge.target)
+        rev_key = (edge.target, edge.source)
+        if key in prop_edges:
+            edge.data["propagation"] = prop_edges[key]
+        elif rev_key in prop_edges:
+            edge.data["propagation"] = prop_edges[rev_key]
+
+    # Add propagation summary to metadata
+    rf.metadata.propagation = {
+        "origin": prop_result.origin_node,
+        "mode": prop_result.mode.value if hasattr(prop_result.mode, "value") else str(prop_result.mode),
+        "blast_radius": prop_result.total_impact_score,
+        "affected_count": len(prop_result.affected_nodes),
+        "wave_count": len(prop_result.waves),
+    }
+
+    return rf
+
+
 def to_agent_summary(graph: InfraGraph) -> str:
     """Convert InfraGraph to an agent-friendly text summary."""
     g = graph.graph
