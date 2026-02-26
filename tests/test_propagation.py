@@ -154,13 +154,14 @@ class TestImpactScore:
     def test_partial_impact(self):
         g = _build_linear_graph()
         result = fault_propagation(g, "C", PropagationMode.PESSIMISTIC)
-        # C + D = 2/4
-        assert result.total_impact_score == 0.5
+        # C(NAT=8) + D(IGW=10) = 18 / 31 total weight
+        assert 0.55 < result.total_impact_score < 0.60
 
     def test_leaf_impact(self):
         g = _build_linear_graph()
         result = fault_propagation(g, "D", PropagationMode.PESSIMISTIC)
-        assert result.total_impact_score == 0.25  # 1/4
+        # D(IGW=10) = 10 / 31 total weight
+        assert 0.30 < result.total_impact_score < 0.35
 
 
 # ── Realistic mode tests ─────────────────────────────────────────────

@@ -23,6 +23,24 @@ from .types import EdgeType, NodeType
 
 logger = logging.getLogger(__name__)
 
+# ── Node importance weights for impact scoring ───────────────────────
+# Higher weight = more critical.  Used by ``_weighted_impact_score()``.
+# Override per-environment via subclass or monkey-patch.
+
+NODE_WEIGHT: dict[str, float] = {
+    NodeType.SUBNET: 5.0,
+    NodeType.INTERNET_GATEWAY: 10.0,
+    NodeType.NAT_GATEWAY: 8.0,
+    NodeType.TRANSIT_GATEWAY: 10.0,
+    NodeType.TGW_ATTACHMENT: 4.0,
+    NodeType.PEERING: 6.0,
+    NodeType.VPC_ENDPOINT: 3.0,
+    NodeType.ROUTE_TABLE: 2.0,
+    NodeType.SECURITY_GROUP: 1.0,
+    NodeType.LOAD_BALANCER: 7.0,
+    NodeType.VPC: 8.0,
+}
+
 
 # ── Data types ───────────────────────────────────────────────────────
 
@@ -423,9 +441,21 @@ def fault_propagation(
     # Critical path (highest cumulative weight)
     critical_path = _find_critical_path(tree, weights, failed_node_id)
 
-    # Normalised impact score
+    # Normalised impact score (weighted by node importance)
     total_nodes = g.number_of_nodes()
-    impact_score = len(visited) / total_nodes if total_nodes > 0 else 0.0
+    if total_nodes > 0:
+        total_weight = sum(
+            NODE_WEIGHT.get(g.nodes[n].get("node_type", ""), 1.0)
+            for n in g.nodes
+        )
+        affected_weight = sum(
+            NODE_WEIGHT.get(g.nodes[n].get("node_type", ""), 1.0)
+            for n in visited
+            if n in g.nodes
+        )
+        impact_score = affected_weight / total_weight if total_weight > 0 else 0.0
+    else:
+        impact_score = 0.0
 
     # Impact counts
     n_failed = sum(1 for v in node_impact.values() if v == ImpactLevel.FAILED)
