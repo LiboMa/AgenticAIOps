@@ -1,504 +1,692 @@
-# Graph Fault Propagation & Topology Delta Design
+# Graph-Based Fault Propagation Design
 
-**Author**: Architect  
-**Date**: 2026-02-26  
-**Status**: PROPOSED  
-**Sprint**: agenticops-chat Integration Phase 2
-
----
-
-## 1. Background
-
-The current Graph module (`src/aci/topology/`) models infrastructure topology as a static NetworkX DiGraph with 5 basic algorithms (reachability, impact, path, anomaly detection, segmentation). Two critical gaps prevent it from being an effective SRE diagnostic tool:
-
-1. **No fault propagation model** — `impact_analysis()` uses simple BFS, treating all edges equally. A NAT Gateway failure and an optional cache failure are scored the same.
-2. **No temporal awareness** — Each `build_from_*` call creates a full snapshot. No way to answer "what changed?" or "when did this route become a blackhole?"
-
-This design addresses both gaps and defines the alarm→topology→RCA integration pipeline.
+> **Module**: `src/aci/topology/propagation.py`  
+> **Author**: Architect  
+> **Date**: 2026-02-26  
+> **Status**: DRAFT — Pending Review  
+> **Depends on**: topology engine (`engine.py`), algorithms (`algorithms.py`), network_context (`rca/network_context.py`), detect_agent (`detect_agent.py`)
 
 ---
 
-## 2. Fault Propagation Engine
+## 1. Background & Motivation
 
-### 2.1 Dual-Mode API
+### 1.1 Current State
+
+The topology module provides **static** failure analysis:
+
+- `impact_analysis(graph, failed_node_id)` — removes a node, counts affected neighbours
+- `detect_anomalies(graph)` — finds structural issues (blackhole routes, orphan nodes)
+- `NetworkContextEnricher.enrich()` — wraps both into a dict for RCA
+
+**Gaps**:
+1. **No propagation model** — `impact_analysis` only counts direct neighbours + subnets that lose IGW paths. It does not model cascading failures (e.g., NAT failure → private subnets → services → pods).
+2. **No degradation awareness** — multi-AZ, ASG, or circuit-breaker protection is ignored; everything is treated as hard failure.
+3. **No temporal dimension** — topology is treated as a snapshot; changes (drift, deployments) are not tracked.
+4. **Loose coupling with RCA** — Developer confirmed: `detect_agent.py` calls topology tools independently; results are not automatically injected into the RCA agent prompt.
+
+### 1.2 Target State
+
+```
+CloudWatch Alarm / DetectAgent anomaly
+   │
+   ▼
+┌──────────────┐    ┌──────────────────┐    ┌──────────────────────┐
+│ DetectResult  │───▶│ fault_propagation│───▶│  PropagationResult   │
+│ .anomalies    │    │ (this design)    │    │  .waves[]            │
+│ .topology_ctx │    │                  │    │  .blast_radius       │
+└──────────────┘    └──────────────────┘    │  .degradation_map    │
+                           │                │  .rca_context_block   │
+                           │                └──────────────────────┘
+                           ▼                           │
+                    topology_changes                   ▼
+                    delta store                  RCA Agent prompt
+                    (CloudTrail /                (auto-injected)
+                     drift detect)
+```
+
+---
+
+## 2. Goals
+
+| # | Goal | Metric |
+|---|------|--------|
+| G1 | Multi-hop fault propagation with wave-based simulation | ≥3 hops depth |
+| G2 | Dual propagation mode (pessimistic / realistic) | Degradation reduces blast radius by 30-60% |
+| G3 | Topology change delta tracking | Changes detected within 5 min of CloudTrail event |
+| G4 | Auto-inject propagation context into RCA agent prompt | Zero manual tool calls needed |
+| G5 | <500ms propagation on graphs ≤2,000 nodes | P95 latency |
+| G6 | 100% backward compatible — no API URL changes | Zero breaking change |
+
+---
+
+## 3. Design
+
+### 3.1 Propagation Model
+
+#### 3.1.1 Data Structures
 
 ```python
-from enum import Enum
+# src/aci/topology/propagation.py
+
+from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import Optional
+from enum import Enum
+from typing import Any, Optional
 
 class PropagationMode(str, Enum):
-    PESSIMISTIC = "pessimistic"   # Assume all paths propagate (blast radius)
-    REALISTIC = "realistic"       # Account for redundancy/degradation
+    """How failure spreads through the graph."""
+    PESSIMISTIC = "pessimistic"   # Every dependency = hard failure
+    REALISTIC = "realistic"       # Degradation-aware (default)
+
+class ImpactLevel(str, Enum):
+    """Per-node impact severity after propagation."""
+    FAILED = "failed"             # Node is down
+    DEGRADED = "degraded"         # Partial functionality loss
+    AT_RISK = "at_risk"           # Reachable via single path only
+    HEALTHY = "healthy"           # Unaffected
 
 @dataclass
-class PropagationEdge:
-    """Propagation metadata for a single edge."""
-    source: str
-    target: str
-    weight: float              # 0.0 = fully isolated, 1.0 = fully propagates
-    reason: str                # e.g. "multi-az", "asg-healthy", "circuit-breaker-open"
+class PropagationWave:
+    """One hop of failure spread."""
+    depth: int                                        # 0 = root failure
+    affected_nodes: list[dict[str, Any]]              # [{node_id, node_type, impact_level, reason}]
+    edge_cuts: list[dict[str, str]]                   # [{source, target, edge_type}]
 
-@dataclass  
+@dataclass
+class DegradationFactor:
+    """A protective capability that reduces impact."""
+    factor_type: str              # "multi_az" | "asg" | "circuit_breaker" | "replica_set" | "multi_path"
+    node_id: str
+    description: str
+    mitigation_weight: float      # 0.0–1.0 (1.0 = fully mitigated)
+
+@dataclass
 class PropagationResult:
-    """Result of fault propagation analysis."""
-    origin_node: str
+    """Complete result of fault propagation analysis."""
+    root_failure_id: str
+    root_failure_type: str
     mode: PropagationMode
-    affected_nodes: list[str]                      # Ordered by propagation depth
-    propagation_tree: dict[str, list[str]]         # parent → [children]
-    edge_weights: dict[tuple[str, str], float]     # (src, dst) → weight
-    total_impact_score: float                      # 0.0-1.0 normalized
-    critical_path: list[str]                       # Highest-weight path
-    isolated_by: list[PropagationEdge]             # Edges that blocked propagation (realistic only)
+    waves: list[PropagationWave] = field(default_factory=list)
+    total_affected: int = 0
+    total_degraded: int = 0
+    total_at_risk: int = 0
+    blast_radius_score: float = 0.0                   # 0.0–1.0 (fraction of graph affected)
+    degradation_factors: list[DegradationFactor] = field(default_factory=list)
+    max_depth_reached: int = 0
+    propagation_time_ms: int = 0
 
+    # Pre-rendered for RCA agent injection
+    rca_context_block: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize for API / telemetry."""
+        return {
+            "root_failure": {"id": self.root_failure_id, "type": self.root_failure_type},
+            "mode": self.mode.value,
+            "waves": [
+                {"depth": w.depth, "affected": w.affected_nodes, "edge_cuts": w.edge_cuts}
+                for w in self.waves
+            ],
+            "summary": {
+                "total_affected": self.total_affected,
+                "total_degraded": self.total_degraded,
+                "total_at_risk": self.total_at_risk,
+                "blast_radius_score": round(self.blast_radius_score, 3),
+                "max_depth": self.max_depth_reached,
+            },
+            "degradation_factors": [
+                {"type": d.factor_type, "node": d.node_id, "desc": d.description, "weight": d.mitigation_weight}
+                for d in self.degradation_factors
+            ],
+            "propagation_time_ms": self.propagation_time_ms,
+            "rca_context_block": self.rca_context_block,
+        }
+```
+
+#### 3.1.2 Core Algorithm — `fault_propagation()`
+
+```
+BFS from root failure node:
+  Wave 0: Mark root as FAILED
+  Wave N:
+    For each FAILED/DEGRADED node in wave N-1:
+      For each downstream neighbour (successors + predecessors via undirected for networking):
+        If node already visited → skip
+        Evaluate degradation factors → decide FAILED vs DEGRADED vs AT_RISK
+        Record in wave N
+    Stop when:
+      - No new nodes affected, OR
+      - max_depth reached (default 10), OR
+      - graph fully visited
+```
+
+**Propagation rules by edge type**:
+
+| Edge Type | Direction | Propagation Rule |
+|-----------|-----------|-----------------|
+| `CONTAINS` | parent → child | Parent fails → all children DEGRADED (not FAILED, containers may survive) |
+| `ROUTES_TO` | router → target | Router fails → all routed targets lose that path |
+| `ASSOCIATED_WITH` | subnet → RTB | Subnet or RTB failure propagates to the other |
+| `ATTACHED_TO` | resource → VPC | Resource failure does not kill VPC (VPC is container) |
+| `HOSTED_IN` | NAT/VPCE → subnet | NAT fails → all private subnets routing through it lose egress |
+| `PEERS_WITH` | VPC ↔ VPC | Peering failure → cross-VPC traffic broken |
+| `EXPOSES` | Service → Deployment | Service fails → external access lost; Deployment fails → service degrades |
+| `RUNS_ON` | Pod → Node | Node fails → all pods on it FAILED |
+| `SELECTS` | Service → Pod | Pod fails → service DEGRADED (if replicas remain) |
+| `DEPENDS_ON` | Service → Service | Downstream failure → upstream AT_RISK or DEGRADED |
+
+#### 3.1.3 Interface
+
+```python
 def fault_propagation(
     graph: InfraGraph,
     failed_node_id: str,
-    mode: PropagationMode = PropagationMode.PESSIMISTIC,
+    *,
+    mode: PropagationMode = PropagationMode.REALISTIC,
     max_depth: int = 10,
-    min_weight: float = 0.1,   # Edges below this weight are ignored in realistic mode
+    custom_degradation: dict[str, float] | None = None,
 ) -> PropagationResult:
     """
-    Compute fault propagation from a failed node.
-    
-    Pessimistic: All reachable downstream nodes are affected (weight=1.0 for all edges).
-    Realistic:   Edge weights are computed from redundancy/degradation metadata.
-    """
-    ...
-```
+    Simulate fault propagation from a failed node through the infrastructure graph.
 
-### 2.2 Edge Weight Inference Rules (Convention over Configuration)
+    Args:
+        graph: InfraGraph instance (already built from VPC/K8s topology).
+        failed_node_id: The node that has failed.
+        mode: PESSIMISTIC (all dependencies fail) or REALISTIC (degradation-aware).
+        max_depth: Maximum BFS depth.
+        custom_degradation: Override degradation weights per node_id.
 
-Edge weights are **automatically inferred** from node/edge attributes. No manual annotation required for common patterns.
-
-| Pattern | Detection Method | Weight Adjustment |
-|---------|-----------------|-------------------|
-| **Multi-AZ redundancy** | Target node has siblings in ≥2 AZs with same role | 0.3 (70% resilient) |
-| **ASG with healthy instances** | ASG node has `desired_count > 1` and `healthy_count >= desired_count` | 0.2 (80% resilient) |
-| **Load balancer with multi-target** | ALB/NLB has ≥2 healthy targets | 0.3 |
-| **NAT Gateway (single)** | Subnet has exactly 1 NAT in its route table | 1.0 (SPOF) |
-| **NAT Gateway (multi-AZ)** | Subnet has NAT in ≥2 AZs | 0.4 |
-| **Circuit breaker open** | Node tagged `circuit_breaker: open` or Envoy metadata | 0.0 (fully isolated) |
-| **K8s ReplicaSet healthy** | Deployment has `ready_replicas >= desired_replicas` | 0.2 |
-| **K8s single-pod** | Deployment has `replicas: 1` | 1.0 (SPOF) |
-| **Default (no metadata)** | No redundancy signals detected | 1.0 (pessimistic default) |
-
-```python
-def _infer_edge_weight(
-    graph: InfraGraph, 
-    source: str, 
-    target: str
-) -> tuple[float, str]:
-    """
-    Infer propagation weight for an edge based on target node's redundancy.
-    
     Returns:
-        (weight, reason) — weight 0.0-1.0, reason for audit log
+        PropagationResult with wave-by-wave breakdown + RCA context block.
     """
-    target_attrs = graph.get_node(target)
-    if not target_attrs:
-        return 1.0, "unknown-node"
-    
-    node_type = target_attrs.get("node_type")
-    
-    # Check Multi-AZ siblings (scoped to same parent VPC/Cluster)
-    parent = graph.get_parent(target)
-    siblings = [
-        s for s in graph.get_nodes_by_type(node_type)
-        if graph.get_parent(s) == parent and s != target
-    ]
-    azs = {graph.get_node(s).get("availability_zone") for s in siblings 
-           if graph.get_node(s)}
-    target_az = target_attrs.get("availability_zone")
-    if target_az and len(azs) >= 1:
-        return 0.3, f"multi-az: {len(azs)+1} AZs in {parent}"
-    
-    # Check ASG
-    if node_type == NodeType.ASG:
-        healthy = target_attrs.get("healthy_count", 0)
-        desired = target_attrs.get("desired_count", 1)
-        if healthy >= desired and desired > 1:
-            return 0.2, f"asg-healthy: {healthy}/{desired}"
-    
-    # Check circuit breaker
-    tags = target_attrs.get("tags", {})
-    if tags.get("circuit_breaker") == "open":
-        return 0.0, "circuit-breaker-open"
-    
-    # Check K8s replica count
-    if node_type == NodeType.K8S_DEPLOYMENT:
-        replicas = target_attrs.get("ready_replicas", 0)
-        desired = target_attrs.get("desired_replicas", 1)
-        if replicas >= desired and desired > 1:
-            return 0.2, f"k8s-replicas: {replicas}/{desired}"
-        if desired == 1:
-            return 1.0, "k8s-single-pod"
-    
-    return 1.0, "default-no-redundancy"
 ```
 
-### 2.3 Algorithm
+### 3.2 Degradation Inference Rules
+
+In `REALISTIC` mode, the algorithm auto-detects protective capabilities from graph structure and node metadata:
+
+| Factor | Detection Rule | Default Weight |
+|--------|---------------|----------------|
+| **Multi-AZ** | Node has siblings in different AZs (from `raw.availability_zone`) | 0.7 |
+| **ASG** | Node type is `EC2_INSTANCE` with ASG parent edge | 0.8 |
+| **Replica Set** | K8s Deployment with `raw.replicas > 1` | `1.0 - (1/replicas)` |
+| **Multi-Path** | Node has ≥2 independent paths to internet (from `can_reach_internet` via different IGW/NAT) | 0.5 |
+| **Circuit Breaker** | Service has annotation `resilience.io/circuit-breaker=true` in raw metadata | 0.6 |
+| **NAT Redundancy** | Multiple NAT gateways in different AZs serving same route table | 0.7 |
+
+**Impact downgrade logic**:
 
 ```python
-def fault_propagation(graph, failed_node_id, mode, max_depth, min_weight):
-    visited = {}          # node_id → depth
-    queue = [(failed_node_id, 0)]
-    tree = {}             # parent → [children]
-    weights = {}          # (src, dst) → weight
-    isolated = []         # edges that blocked propagation
-    
-    while queue:
-        node, depth = queue.pop(0)
-        if node in visited or depth > max_depth:
-            continue
-        visited[node] = depth
-        
-        for neighbor in graph.get_neighbors(node, direction="outgoing"):
-            if mode == PropagationMode.PESSIMISTIC:
-                w, reason = 1.0, "pessimistic"
-            else:
-                w, reason = _infer_edge_weight(graph, node, neighbor)
-            
-            weights[(node, neighbor)] = w
-            
-            if w < min_weight:
-                isolated.append(PropagationEdge(node, neighbor, w, reason))
-                continue
-            
-            tree.setdefault(node, []).append(neighbor)
-            queue.append((neighbor, depth + 1))
-    
-    # Compute critical path (highest cumulative weight)
-    critical_path = _find_critical_path(tree, weights, failed_node_id)
-    
-    # Normalize impact score (weighted by node criticality)
-    NODE_WEIGHT = {
-        NodeType.SUBNET: 10.0,       # Production subnets are critical
-        NodeType.NAT_GATEWAY: 8.0,
-        NodeType.INTERNET_GATEWAY: 8.0,
-        NodeType.LOAD_BALANCER: 7.0,
-        NodeType.EKS_CLUSTER: 9.0,
-        NodeType.RDS_INSTANCE: 8.0,
-        NodeType.EC2_INSTANCE: 3.0,
-        NodeType.K8S_POD: 1.0,
-        NodeType.SECURITY_GROUP: 0.5,
-    }
-    DEFAULT_WEIGHT = 2.0
-    total_weight = sum(NODE_WEIGHT.get(graph.get_node(n, {}).get("node_type"), DEFAULT_WEIGHT)
-                       for n in graph.graph.nodes)
-    affected_weight = sum(NODE_WEIGHT.get(graph.get_node(n, {}).get("node_type"), DEFAULT_WEIGHT)
-                          for n in visited)
-    impact_score = affected_weight / total_weight if total_weight > 0 else 0.0
-    
-    return PropagationResult(
-        origin_node=failed_node_id,
-        mode=mode,
-        affected_nodes=sorted(visited.keys(), key=lambda n: visited[n]),
-        propagation_tree=tree,
-        edge_weights=weights,
-        total_impact_score=impact_score,
-        critical_path=critical_path,
-        isolated_by=isolated,
-    )
-```
-
----
-
-## 3. Topology Delta Storage
-
-### 3.1 Schema (`topology_changes` table)
-
-```sql
-CREATE TABLE topology_changes (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    timestamp   TEXT NOT NULL,              -- ISO 8601
-    change_type TEXT NOT NULL,              -- 'node_added' | 'node_removed' | 'node_updated' | 'edge_added' | 'edge_removed'
-    entity_id   TEXT NOT NULL,              -- Node ID or "src->dst" for edges
-    entity_type TEXT,                       -- NodeType enum value
-    old_value   TEXT,                       -- JSON: previous attributes (NULL for additions)
-    new_value   TEXT,                       -- JSON: new attributes (NULL for removals)
-    source      TEXT NOT NULL DEFAULT 'discovery',  -- 'cloudtrail' | 'discovery' | 'manual'
-    source_detail TEXT,                     -- CloudTrail: event_id + principal; discovery: scan_id
-    region      TEXT,
-    account_id  TEXT
-);
-
-CREATE INDEX idx_topo_changes_time ON topology_changes(timestamp);
-CREATE INDEX idx_topo_changes_entity ON topology_changes(entity_id);
-CREATE INDEX idx_topo_changes_source ON topology_changes(source);
-```
-
-### 3.2 Retention Policy
-
-- **7 days** of deltas retained (configurable via `TOPO_DELTA_RETENTION_DAYS`)
-- Cleanup runs daily at 02:00 UTC (piggyback on existing cron)
-- For longer history: aggregate daily summaries before purging
-
-### 3.3 Delta Capture
-
-```python
-def capture_delta(
-    old_graph: InfraGraph | None,
-    new_graph: InfraGraph,
-    source: str = "discovery",
-    source_detail: str | None = None,
-) -> list[TopologyChange]:
+def _evaluate_impact(
+    mode: PropagationMode,
+    node_id: str,
+    node_data: dict,
+    incoming_impact: ImpactLevel,
+    graph: InfraGraph,
+    custom_degradation: dict[str, float] | None,
+) -> tuple[ImpactLevel, list[DegradationFactor]]:
     """
-    Compare two graph snapshots and record deltas.
-    Called after each graph rebuild (60s poll cycle).
+    Given the incoming impact level from a failed upstream,
+    determine this node's actual impact considering degradation.
+
+    Returns:
+        (actual_impact, list of factors that applied)
     """
-    changes = []
-    
-    old_nodes = set(old_graph.graph.nodes) if old_graph else set()
-    new_nodes = set(new_graph.graph.nodes)
-    
-    # Added nodes
-    for node_id in new_nodes - old_nodes:
-        changes.append(TopologyChange(
-            change_type="node_added",
-            entity_id=node_id,
-            new_value=new_graph.get_node(node_id),
-            source=source,
+    if mode == PropagationMode.PESSIMISTIC:
+        return incoming_impact, []
+
+    factors = _detect_degradation_factors(node_id, node_data, graph)
+
+    # Apply custom overrides
+    if custom_degradation and node_id in custom_degradation:
+        factors.append(DegradationFactor(
+            factor_type="custom",
+            node_id=node_id,
+            description="Custom override",
+            mitigation_weight=custom_degradation[node_id],
         ))
-    
-    # Removed nodes
-    for node_id in old_nodes - new_nodes:
-        changes.append(TopologyChange(
-            change_type="node_removed",
-            entity_id=node_id,
-            old_value=old_graph.get_node(node_id),
-            source=source,
-        ))
-    
-    # Updated nodes (status/attribute changes)
-    for node_id in old_nodes & new_nodes:
-        old_attrs = old_graph.get_node(node_id)
-        new_attrs = new_graph.get_node(node_id)
-        if old_attrs != new_attrs:
-            changes.append(TopologyChange(
-                change_type="node_updated",
-                entity_id=node_id,
-                old_value=old_attrs,
-                new_value=new_attrs,
-                source=source,
-            ))
-    
-    # Edge diffs (same pattern)
-    # ...
-    
-    return changes
+
+    if not factors:
+        return incoming_impact, []
+
+    # Max mitigation wins (not cumulative — conservative)
+    max_weight = max(f.mitigation_weight for f in factors)
+
+    if max_weight >= 0.8:
+        return ImpactLevel.AT_RISK, factors      # Well-protected
+    elif max_weight >= 0.4:
+        return ImpactLevel.DEGRADED, factors      # Partially protected
+    else:
+        return incoming_impact, factors            # Minimal protection
 ```
 
-### 3.4 Time-Travel Query
+### 3.3 Topology Change Delta Tracking
+
+#### 3.3.1 Schema — `TopologyChange`
 
 ```python
-def rebuild_at(timestamp: datetime) -> InfraGraph:
-    """
-    Rebuild the graph as it was at a given timestamp.
-    Uses current graph - applies reverse deltas back to target time.
-    
-    IMPORTANT: Deltas MUST be applied in strict reverse chronological order.
-    If node X changed A→B→C, we must reverse C→B first, then B→A.
-    The .order_by(desc) ensures this ordering.
-    """
-    current = graph_cache.get_current()
-    deltas = db.query(TopologyChange)\
-        .filter(TopologyChange.timestamp > timestamp)\
-        .order_by(TopologyChange.timestamp.desc())\
-        .all()
-    
-    graph = current.copy()
-    for delta in deltas:
-        _reverse_apply(graph, delta)
-    
-    return graph
+# src/aci/topology/changes.py
+
+@dataclass
+class TopologyChange:
+    """A single topology change event."""
+    change_id: str                    # uuid
+    timestamp: str                    # ISO 8601
+    source: str                       # "cloudtrail" | "drift_detect" | "k8s_watch" | "manual"
+    change_type: str                  # "node_added" | "node_removed" | "node_updated" | "edge_added" | "edge_removed"
+    node_id: str | None = None
+    edge_source: str | None = None
+    edge_target: str | None = None
+    before: dict[str, Any] | None = None   # Previous state (for updates)
+    after: dict[str, Any] | None = None    # New state
+    metadata: dict[str, Any] = field(default_factory=dict)  # CloudTrail event name, user, etc.
+
+@dataclass
+class TopologyDelta:
+    """A batch of changes between two snapshots."""
+    delta_id: str
+    from_timestamp: str
+    to_timestamp: str
+    changes: list[TopologyChange] = field(default_factory=list)
+    summary: str = ""
+
+    @property
+    def has_breaking_changes(self) -> bool:
+        """True if any change removed a node or edge (potential connectivity loss)."""
+        return any(c.change_type in ("node_removed", "edge_removed") for c in self.changes)
 ```
 
----
+#### 3.3.2 Delta Detection Methods
 
-## 4. Alarm → Topology → RCA Integration Pipeline
+| Source | Mechanism | Latency |
+|--------|-----------|---------|
+| **CloudTrail** | Poll `LookupEvents` with resource type filter (VPC, Subnet, RouteTable, etc.) | ~5 min (CloudTrail delivery delay) |
+| **Drift Detect** | Periodic graph snapshot diff (current vs cached) | Configurable (default 15 min) |
+| **K8s Watch** | (Phase 2) `kubectl get events --watch` or informer-based | Real-time |
 
-### 4.1 Data Flow
-
+**Drift detection** algorithm:
 ```
-CloudWatch Alarm (EventBridge / 60s poll)
-    │
-    ▼
-detect_agent.on_alarm(alarm)
-    │
-    ├─→ graph_cache.get_current()           # O(1), in-memory
-    │       │
-    │       ▼
-    │   fault_propagation(graph, resource_id, PESSIMISTIC)
-    │       │
-    │       ▼
-    │   PropagationResult {
-    │       affected_nodes: ["subnet-abc", "nat-xyz", "pod-123"],
-    │       impact_score: 0.35,
-    │       critical_path: ["i-abc" → "subnet-abc" → "nat-xyz"],
-    │   }
-    │
-    ├─→ detect_network_anomalies(graph)     # ~20ms
-    │       │
-    │       ▼
-    │   AnomalyReport { blackhole_routes: [...], orphan_nodes: [...] }
-    │
-    └─→ build_topo_context(propagation, anomalies)
-            │
-            ▼
-        rca_agent.analyze(
-            issue_id="HI-001",
-            topology_context=topo_context    # Injected into RCA prompt
-        )
+1. Load cached graph snapshot (from last detection cycle)
+2. Build fresh graph from collector
+3. Diff node sets → detect added/removed
+4. Diff edge sets → detect added/removed
+5. For common nodes: diff attributes → detect updated
+6. Store delta + update cached snapshot
 ```
 
-### 4.2 RCA Prompt Topology Section (Template)
+#### 3.3.3 Storage
+
+Phase 1: JSON file per delta — `data/topology_deltas/{delta_id}.json`  
+Phase 2: SQLite `topology_changes` table (aligns with HealthIssue store pattern)
+
+Retention: 7 days (configurable), auto-purge via detect_agent heartbeat.
+
+### 3.4 Alert → Topology → RCA Auto-Injection
+
+This is the critical data flow that Developer identified as missing.
+
+#### 3.4.1 Current Flow (Broken)
+
+```
+DetectAgent.run_detection()
+  ├─ EventCorrelator.collect()         → CorrelatedEvent
+  ├─ PatternMatcher.match()            → pattern_matches
+  └─ KnowledgeBase.add_pattern()       → store
+
+IncidentOrchestrator.handle_incident(detect_result=...)
+  ├─ Stage 1: skip (reuse detect_result)
+  ├─ Stage 2: RCA inference             ← NO topology context
+  ├─ Stage 3: SOP safety
+  └─ Stage 4: execute
+
+RCA Agent tools (rca_agent.py):
+  ├─ query_reachability()              ← LLM decides to call (unreliable)
+  ├─ find_network_path()               ← LLM decides to call (unreliable)
+  └─ detect_network_anomalies()        ← LLM decides to call (unreliable)
+```
+
+#### 3.4.2 Proposed Flow
+
+```
+DetectAgent.run_detection()
+  ├─ EventCorrelator.collect()           → CorrelatedEvent
+  ├─ PatternMatcher.match()              → pattern_matches
+  ├─ [NEW] TopologyContextBuilder.build()→ PropagationResult (if anomalies found)
+  ├─ KnowledgeBase.add_pattern()         → store
+  └─ DetectResult now includes:
+       .topology_context: dict | None     ← NEW field
+       .propagation_result: dict | None   ← NEW field
+
+IncidentOrchestrator.handle_incident(detect_result=...)
+  ├─ Stage 1: skip (reuse)
+  ├─ Stage 2: RCA inference
+  │    └─ [NEW] inject detect_result.propagation_result.rca_context_block
+  │         into the RCA agent system prompt / telemetry context
+  ├─ Stage 3: SOP safety
+  └─ Stage 4: execute
+```
+
+#### 3.4.3 Integration Point — `DetectResult` Extension
 
 ```python
-TOPO_CONTEXT_TEMPLATE = """
-## Network Topology Context
+# detect_agent.py — extend DetectResult
 
-### Fault Propagation (from {origin_node})
-- Mode: {mode}
-- Impact Score: {impact_score:.0%} of infrastructure
-- Affected nodes ({affected_count}): {affected_summary}
-- Critical path: {critical_path}
-- Isolated by redundancy: {isolated_summary}
+@dataclass
+class DetectResult:
+    # ... existing fields ...
 
-### Network Anomalies
-{anomaly_summary}
+    # NEW: Topology context (from NetworkContextEnricher)
+    topology_context: Optional[Dict[str, Any]] = None
+
+    # NEW: Fault propagation result (from fault_propagation)
+    propagation_result: Optional[Dict[str, Any]] = None
+```
+
+#### 3.4.4 Integration Point — `run_detection()` Extension
+
+```python
+# detect_agent.py — after pattern matching, before return
+
+# ── Topology Context (NEW) ──
+if event and event.anomalies:
+    try:
+        from src.rca.network_context import NetworkContextEnricher
+        from src.aci.topology.propagation import fault_propagation, PropagationMode
+
+        enricher = NetworkContextEnricher()
+        vpc_id = self._extract_vpc_id(event)  # from event metadata
+        if vpc_id:
+            net_ctx = enricher.enrich(
+                region=self.region,
+                vpc_id=vpc_id,
+                failed_resource_id=self._extract_failed_resource(event),
+            )
+            result.topology_context = net_ctx.to_dict()
+
+            # Run propagation if critical anomalies found
+            if net_ctx.critical_anomalies:
+                graph = enricher._build_graph(self.region, vpc_id)  # expose helper
+                for anomaly in net_ctx.critical_anomalies:
+                    prop_result = fault_propagation(
+                        graph,
+                        anomaly["node_id"],
+                        mode=PropagationMode.REALISTIC,
+                    )
+                    result.propagation_result = prop_result.to_dict()
+                    break  # First critical anomaly only (for now)
+    except Exception as e:
+        logger.warning(f"[{detect_id}] Topology enrichment failed (non-fatal): {e}")
+```
+
+#### 3.4.5 RCA Context Block Format
+
+The `rca_context_block` is a pre-rendered string injected into the RCA agent prompt. Format:
+
+```
+## 🗺️ Network Topology Context
+
+**Failed Resource**: nat-0abc123 (NAT Gateway)
+**Propagation Mode**: realistic
+**Blast Radius**: 0.34 (34% of graph affected)
+
+### Wave 0 (Root Failure)
+- nat-0abc123 [NAT Gateway] — FAILED
+
+### Wave 1 (Direct Impact)
+- subnet-priv-1a [Private Subnet] — DEGRADED (multi-AZ: NAT in us-east-1b still active)
+- subnet-priv-1b [Private Subnet] — FAILED (single NAT path)
+- rtb-priv [Route Table] — DEGRADED
+
+### Wave 2 (Cascading)
+- vpce-s3 [VPC Endpoint] — AT_RISK (hosted in affected subnet, but S3 gateway route unaffected)
+
+### Degradation Factors
+- multi_az on subnet-priv-1a: weight=0.7 (NAT redundancy across AZs)
 
 ### Recent Topology Changes (last 1h)
-{recent_changes_summary}
-"""
+- 10:02 UTC: Route added rtb-priv → nat-0abc123 (source: cloudtrail, user: deploy-role)
+- 09:45 UTC: NAT Gateway nat-0xyz789 removed (source: cloudtrail, user: cleanup-lambda)
+  ⚠️ This removal may have eliminated redundancy for subnet-priv-1b
 ```
 
-### 4.3 Graceful Degradation
+### 3.5 Cache Miss & Graceful Degradation Strategy
+
+**Definitive behavior** (supersedes any prior Slack discussion):
+
+```
+Cache hit  + Level 1 无异常  → Level 1 context only (<50ms)
+Cache hit  + Level 1 有异常  → Level 1 + Level 2 deep analysis (3-5s)
+Cache miss (graph=None)      → skip topology section entirely
+                               RCA proceeds with metrics + logs only
+                               (NOT fallback to Level 2 live query)
+```
+
+**Rationale**: Cache miss means either cold start or boto3 failure. Doing a live
+Level 2 query at RCA time would add 3-5s latency to *every* RCA during outages —
+precisely when boto3 is most likely to be slow/erroring. Better to degrade
+gracefully and let the background refresh recover the cache.
+
+**InfraGraph prerequisites** (Developer: add before GraphCache):
+- `InfraGraph.update_node_status(resource_id, status)` — for `inject_alarm()`
+- `InfraGraph.copy()` — deep copy for `rebuild_at()` time-travel
 
 ```python
-def build_topo_context(resource_id: str) -> str | None:
-    """Build topology context for RCA. Returns None if graph unavailable."""
-    graph = graph_cache.get_current()
-    if graph is None:
-        logger.warning("Graph cache empty, skipping topology context")
-        return None
-    
-    try:
-        propagation = fault_propagation(graph, resource_id, PropagationMode.REALISTIC)
-        anomalies = detect_network_anomalies(graph)
-        changes = get_recent_changes(timedelta(hours=1))
-        return format_topo_context(propagation, anomalies, changes)
-    except Exception:
-        logger.exception("Topology context generation failed")
-        return None
+# In _enrich_topology():
+graph = graph_cache.get_current()  # may be None
+if graph is None:
+    logger.info("Graph cache empty, topology context skipped")
+    return  # result.topology_context remains None — RCA handles gracefully
 ```
 
-RCA prompt template uses conditional section:
-```python
-if topo_context:
-    prompt += topo_context
-# If None, RCA proceeds with metrics + logs only (graceful degrade)
+### 3.6 API Endpoints
+
+No new URL prefixes. Extensions to existing `/api/topology/*`:
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/topology/vpc/{vpc_id}/propagation?node_id=X&mode=realistic` | Run fault propagation |
+| GET | `/api/topology/vpc/{vpc_id}/changes?since=ISO&source=cloudtrail` | Get topology deltas |
+| GET | `/api/topology/vpc/{vpc_id}/graph?annotate_propagation=node_id` | ReactFlow graph with propagation overlays |
+
+#### Response: `/api/topology/vpc/{vpc_id}/propagation`
+
+```json
+{
+  "root_failure": {"id": "nat-0abc123", "type": "nat"},
+  "mode": "realistic",
+  "waves": [
+    {
+      "depth": 0,
+      "affected": [
+        {"node_id": "nat-0abc123", "node_type": "nat", "impact_level": "failed", "reason": "root failure"}
+      ],
+      "edge_cuts": []
+    },
+    {
+      "depth": 1,
+      "affected": [
+        {"node_id": "subnet-priv-1b", "node_type": "subnet", "impact_level": "failed", "reason": "single NAT path cut"},
+        {"node_id": "subnet-priv-1a", "node_type": "subnet", "impact_level": "degraded", "reason": "multi-AZ NAT (nat-0xyz in 1b still active)"}
+      ],
+      "edge_cuts": [
+        {"source": "rtb-priv", "target": "nat-0abc123", "edge_type": "routes_to"}
+      ]
+    }
+  ],
+  "summary": {
+    "total_affected": 2,
+    "total_degraded": 1,
+    "total_at_risk": 1,
+    "blast_radius_score": 0.34,
+    "max_depth": 2
+  },
+  "degradation_factors": [
+    {"type": "multi_az", "node": "subnet-priv-1a", "desc": "NAT redundancy across AZs", "weight": 0.7}
+  ],
+  "propagation_time_ms": 12
+}
 ```
+
+---
+
+## 4. Implementation Plan
+
+### Phase 1 (Day 1) — Core Propagation (~350 lines)
+
+| File | What | Lines (est) |
+|------|------|-------------|
+| `src/aci/topology/propagation.py` | `fault_propagation()` + models + degradation inference | ~280 |
+| `src/aci/topology/__init__.py` | Export propagation | +2 |
+| `tests/test_propagation.py` | Core algorithm tests (pessimistic + realistic + edge cases) | ~200 |
+
+### Phase 2 (Day 1-2) — DetectAgent Integration (~80 lines)
+
+| File | What | Lines (est) |
+|------|------|-------------|
+| `src/detect_agent.py` | Add `topology_context` + `propagation_result` fields + enrichment in `run_detection()` | ~50 |
+| `src/incident_orchestrator.py` | Inject `rca_context_block` into Stage 2 telemetry | ~30 |
+
+### Phase 3 (Day 2) — Delta Tracking (~200 lines)
+
+| File | What | Lines (est) |
+|------|------|-------------|
+| `src/aci/topology/changes.py` | `TopologyChange` + `TopologyDelta` + drift detector + CloudTrail poller | ~180 |
+| `tests/test_topology_changes.py` | Delta detection + purge tests | ~100 |
+
+### Phase 4 (Day 2-3) — API + ReactFlow (~100 lines)
+
+| File | What | Lines (est) |
+|------|------|-------------|
+| `src/aci/topology/api.py` | 3 new endpoints | ~60 |
+| `src/aci/topology/serializers.py` | `annotate_propagation()` overlay on ReactFlow output | ~40 |
+
+**Total**: ~630 lines new code + ~300 lines tests
 
 ---
 
 ## 5. Interface Stubs for Developer
 
-### 5.1 Graph Cache (Developer to implement)
+These are the contracts for integration. Developer: code against these interfaces.
+
+### 5.1 `fault_propagation()` — topology/propagation.py
 
 ```python
-class GraphCache:
-    """In-memory graph cache with periodic refresh."""
-    
-    def __init__(self, refresh_interval_s: int = 60):
-        self._graph: InfraGraph | None = None
-        self._previous: InfraGraph | None = None
-        self._last_refresh: datetime | None = None
-        self._lock = asyncio.Lock()
-    
-    async def refresh(self) -> None:
-        """Called by background task every refresh_interval_s."""
-        async with self._lock:
-            new_graph = await build_graph_from_aws()  # collector.py
-            if self._graph:
-                deltas = capture_delta(self._graph, new_graph, source="discovery")
-                await store_deltas(deltas)
-            self._previous = self._graph
-            self._graph = new_graph
-            self._last_refresh = datetime.utcnow()
-    
-    def get_current(self) -> InfraGraph | None:
-        return self._graph
-    
-    def is_available(self) -> bool:
-        return self._graph is not None
-    
-    async def inject_alarm(self, resource_id: str, alarm_state: str) -> None:
-        """Update node status from alarm (between full refreshes)."""
-        if self._graph:
-            self._graph.update_node_status(resource_id, alarm_state)
+from src.aci.topology.propagation import fault_propagation, PropagationMode, PropagationResult
 
-# Singleton
-graph_cache = GraphCache()
+# Build graph first (you already have this)
+from src.aci.topology.engine import InfraGraph
+graph = InfraGraph().build_from_vpc_topology(topo_json)
+
+# Run propagation
+result: PropagationResult = fault_propagation(
+    graph,
+    "nat-0abc123",
+    mode=PropagationMode.REALISTIC,
+    max_depth=10,
+)
+
+# For RCA injection:
+rca_block: str = result.rca_context_block
+# Inject into telemetry dict:
+telemetry["network_propagation"] = result.to_dict()
+telemetry["network_propagation_summary"] = rca_block
 ```
 
-### 5.2 detect_agent Integration Point
+### 5.2 DetectResult Extension — detect_agent.py
 
 ```python
-# In detect_agent.py or rca/network_context.py
-async def enrich_with_topology(issue_id: str, resource_id: str) -> str | None:
-    """
-    Called by RCA pipeline to get topology context.
-    Returns formatted string for prompt injection, or None.
-    """
-    return build_topo_context(resource_id)
+# New fields on DetectResult:
+topology_context: Optional[Dict[str, Any]] = None      # NetworkContext.to_dict()
+propagation_result: Optional[Dict[str, Any]] = None     # PropagationResult.to_dict()
+
+# In run_detection(), after pattern matching:
+# Call _enrich_topology(event, result) → populates both fields
+```
+
+### 5.3 RCA Injection — incident_orchestrator.py
+
+```python
+# In handle_incident(), Stage 2 (RCA):
+if detect_result and detect_result.propagation_result:
+    rca_block = detect_result.propagation_result.get("rca_context_block", "")
+    if rca_block:
+        # Prepend to telemetry for LLM context
+        telemetry["network_propagation_context"] = rca_block
+```
+
+### 5.4 TopologyDelta Query — topology/changes.py
+
+```python
+from src.aci.topology.changes import TopologyDeltaStore
+
+store = TopologyDeltaStore(data_dir="data/topology_deltas")
+
+# Record a change (called by drift detector or CloudTrail poller)
+store.record_change(TopologyChange(
+    change_id="...",
+    timestamp="...",
+    source="cloudtrail",
+    change_type="node_removed",
+    node_id="nat-0xyz789",
+    metadata={"event_name": "DeleteNatGateway", "user": "cleanup-lambda"},
+))
+
+# Query recent changes
+delta = store.get_delta(since="2026-02-26T09:00:00Z")
 ```
 
 ---
 
-## 6. File Layout
+## 6. Trade-offs & Alternatives
 
-```
-src/aci/topology/
-├── types.py              # NodeType, EdgeType (existing)
-├── engine.py             # InfraGraph + builders (existing)
-├── algorithms.py         # reachability, impact, path, anomaly (existing)
-├── propagation.py        # NEW: fault_propagation() + edge weight inference
-├── delta.py              # NEW: capture_delta() + TopologyChange model
-├── cache.py              # NEW: GraphCache singleton
-├── serializers.py        # ReactFlow export (existing)
-└── tools.py              # Strands tools (existing)
-```
+### Considered and Rejected
 
----
+| Alternative | Why Rejected |
+|-------------|-------------|
+| **Full event-sourced graph** (store every state transition) | Over-engineering for Phase 1; delta snapshots sufficient |
+| **Probabilistic propagation** (Monte Carlo simulation) | Performance cost (>500ms for 2K nodes); deterministic BFS covers 95% of cases |
+| **Real-time K8s watch integration** | Requires persistent WebSocket; defer to Phase 2 |
+| **Separate propagation microservice** | Unnecessary latency hop; in-process function call is <500ms |
 
-## 7. Estimates
+### Known Limitations
 
-| Component | Lines (est.) | Days | Owner |
-|-----------|-------------|------|-------|
-| `propagation.py` | ~250 | 2 | Architect (design) → Developer (impl) |
-| `delta.py` + migration | ~180 | 1.5 | Developer |
-| `cache.py` | ~100 | 1 | Developer |
-| RCA prompt integration | ~80 | 0.5 | Developer |
-| Tests | ~300 | 2 | Tester |
-| **Total** | **~910** | **~7 days** | |
+1. **Cross-region propagation** — current graph is per-region; cross-region peering requires multi-graph stitching (P2)
+2. **Dynamic degradation** — ASG scaling events change degradation in real-time; we use point-in-time snapshot
+3. **CloudTrail latency** — 5-min delivery delay means changes during active incident may be missed; drift detection (15-min) is backup
+4. **LLM context window** — `rca_context_block` for large graphs may exceed token budget; truncation strategy: show top 3 waves + critical factors only
 
 ---
 
-## 8. Design Constraints (Orchestrator Review)
+## 7. Compatibility
 
-1. **Cache miss = fallback, not empty** — If a resource in an alarm is not in the cached graph (e.g. newly created EC2), automatically fallback to Level 2 (live AWS query) instead of returning "no topology context". Cache miss ≠ no anomaly.
+- **No URL changes** — new endpoints extend existing `/api/topology/*` prefix
+- **DetectResult backward compatible** — new fields default to `None`; existing consumers unaffected
+- **IncidentOrchestrator backward compatible** — topology injection is additive (new key in telemetry dict)
+- **ReactFlow backward compatible** — propagation overlay is opt-in query parameter
 
-2. **Single EventBridge rule, dual effect** — One EventBridge alarm event triggers both:
-   - Graph node status update (`graph_cache.inject_alarm()`)
-   - Topology cache invalidation (mark stale, schedule refresh)
-   
-   Do NOT create two separate EventBridge rules for the same event.
+---
+
+## 8. Testing Strategy
+
+| Category | Tests | Coverage Target |
+|----------|-------|----------------|
+| Propagation algorithm (pessimistic) | BFS depth, all edge types, cycle handling, max_depth | 100% |
+| Propagation algorithm (realistic) | All degradation factor types, weight thresholds, custom overrides | 100% |
+| RCA context block rendering | Format validation, truncation, edge cases (empty graph, no anomalies) | 100% |
+| Delta tracking | Add/remove/update detection, purge, CloudTrail source | 90% |
+| DetectAgent integration | `topology_context` populated, non-fatal fallback on failure | 90% |
+| API endpoints | Response schema, error handling, query params | 85% |
+
+Estimated: **~300 test lines** across 2 test files.
 
 ---
 
 ## 9. Open Questions
 
-1. **CloudTrail integration for `source` field** — Do we have CloudTrail events flowing into the system? If not, all deltas will be `source=discovery` initially.
-2. **Envoy/Istio metrics for circuit breaker** — Requires service mesh. Start with static tags, upgrade later.
-3. **Multi-account topology** — Current `collector.py` is single-account. Cross-account assume_role chain needed for TGW topology.
+1. **Degradation factor sources** — should we support user-defined degradation annotations (e.g., Terraform tags `resilience:multi-az=true`)? → Suggest Phase 2.
+2. **Cross-graph propagation** — when VPC peering spans regions, do we stitch graphs or treat remote VPC as opaque? → Suggest opaque for Phase 1.
+3. **RCA context block token budget** — should we hard-cap at N characters or let the RCA agent manage truncation? → Suggest 2,000 char cap with progressive detail reduction.
+
+---
+
+*Architect — 📐 Ready for review. @cloud-mbot-researcher-1 please evaluate. @cloud-mbot-developer interface stubs are in §5, start with `detect_agent` → `graph_cache` → `rca_prompt` integration points.*
