@@ -73,7 +73,7 @@ Guidelines:
 """
 
 
-def _build_analysis_prompt(correlated_event, knowledge_context=None) -> str:
+def _build_analysis_prompt(correlated_event, knowledge_context=None, network_propagation_context: str = "") -> str:
     """Build the analysis prompt from correlated event data."""
     sections = []
     
@@ -140,6 +140,14 @@ def _build_analysis_prompt(correlated_event, knowledge_context=None) -> str:
             "\nUse these historical patterns as reference. "
             "If the current issue matches a known pattern, cite it and adjust confidence accordingly."
         )
+
+    # NEW: Inject topology / fault propagation context
+    if network_propagation_context:
+        sections.append(f"\n{network_propagation_context}")
+        sections.append(
+            "\nUse this topology context to understand infrastructure-level root causes. "
+            "If fault propagation shows cascading failures, include them in your analysis."
+        )
     
     return "\n".join(sections)
 
@@ -175,6 +183,7 @@ class RCAInferenceEngine:
         self,
         correlated_event,
         force_llm: bool = False,
+        network_propagation_context: str = "",
     ) -> RCAResult:
         """
         Analyze correlated event data for root cause.
@@ -227,7 +236,11 @@ class RCAInferenceEngine:
             logger.warning(f"Knowledge search failed (non-fatal): {e}")
         
         # Step 2: Claude Sonnet analysis (with historical knowledge context)
-        prompt = _build_analysis_prompt(correlated_event, knowledge_context=knowledge_context)
+        prompt = _build_analysis_prompt(
+            correlated_event,
+            knowledge_context=knowledge_context,
+            network_propagation_context=network_propagation_context,
+        )
         
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(

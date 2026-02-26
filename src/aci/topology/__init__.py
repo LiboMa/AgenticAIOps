@@ -24,9 +24,31 @@ from .types import (
     RegionTopology,
 )
 from .engine import InfraGraph
+from .propagation import (
+    PropagationMode,
+    PropagationEdge,
+    PropagationResult,
+    PropagationWave,
+    WaveEntry,
+    DegradationFactor,
+    ImpactLevel,
+    fault_propagation,
+    blast_radius,
+    realistic_impact,
+)
+from .delta import (
+    TopologyChange,
+    DeltaStore,
+    capture_delta,
+    format_recent_changes,
+    get_delta_store,
+)
+from .cache import GraphCache, graph_cache
 
 __all__ = [
+    # engine
     "InfraGraph",
+    # types
     "NodeType",
     "EdgeType",
     "NodeStatus",
@@ -38,4 +60,24 @@ __all__ = [
     "SerializedGraph",
     "VpcTopology",
     "RegionTopology",
+    # propagation (NEW)
+    "PropagationMode",
+    "PropagationEdge",
+    "PropagationResult",
+    "PropagationWave",
+    "WaveEntry",
+    "DegradationFactor",
+    "ImpactLevel",
+    "fault_propagation",
+    "blast_radius",
+    "realistic_impact",
+    # delta (NEW)
+    "TopologyChange",
+    "DeltaStore",
+    "capture_delta",
+    "format_recent_changes",
+    "get_delta_store",
+    # cache (NEW)
+    "GraphCache",
+    "graph_cache",
 ]

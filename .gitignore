@@ -32,3 +32,4 @@ credentials
 data/detect_cache/
 data/incidents/
 =3.0
+data/topology_deltas.db

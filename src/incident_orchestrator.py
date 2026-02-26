@@ -297,8 +297,18 @@ class IncidentOrchestrator:
             
             from src.rca_inference import get_rca_inference_engine
             engine = get_rca_inference_engine()
+
+            # NEW: Extract topology propagation context for RCA prompt injection
+            _rca_topo_ctx = ""
+            if detect_result is not None:
+                _prop = getattr(detect_result, "propagation_result", None)
+                if isinstance(_prop, dict):
+                    _rca_topo_ctx = _prop.get("rca_context_block", "")
             
-            rca_result = await engine.analyze(event)
+            rca_result = await engine.analyze(
+                event,
+                network_propagation_context=_rca_topo_ctx,
+            )
             
             incident.rca_result = rca_result.to_dict()
             incident.stage_timings["analyze"] = int((time.time() - stage_start) * 1000)

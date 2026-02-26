@@ -71,6 +71,12 @@ class DetectResult:
     # Error (if collection failed)
     error: Optional[str] = None
 
+    # Topology context (from NetworkContextEnricher) — NEW
+    topology_context: Optional[Dict[str, Any]] = None
+
+    # Fault propagation result (from fault_propagation) — NEW
+    propagation_result: Optional[Dict[str, Any]] = None
+
     def _parse_timestamp(self) -> datetime:
         """Parse the ISO timestamp string to datetime."""
         if isinstance(self.timestamp, datetime):
@@ -124,6 +130,8 @@ class DetectResult:
             "collection_config": self.collection_config,
             "error": self.error,
             "has_correlated_event": self.correlated_event is not None,
+            "topology_context": self.topology_context,
+            "propagation_result": self.propagation_result,
         }
         if self.correlated_event and hasattr(self.correlated_event, "to_dict"):
             result["correlated_event"] = self.correlated_event.to_dict()
@@ -265,6 +273,10 @@ class DetectAgent:
                     anomalies_detected=[],
                     error=str(e),
                 )
+
+            # ── Topology Enrichment (NEW) ──
+            if result.error is None and result.anomalies_detected:
+                self._enrich_topology(detect_id, result)
 
             # Cache
             self._cache[detect_id] = result
@@ -461,6 +473,98 @@ class DetectAgent:
             logger.debug(f"Persisted DetectResult to {path}")
         except Exception as e:
             logger.warning(f"Failed to persist DetectResult: {e}")
+
+    # ── Topology enrichment ──────────────────────────────────────────
+
+    def _enrich_topology(self, detect_id: str, result: DetectResult):
+        """Populate topology_context and propagation_result on DetectResult.
+
+        Non-fatal: failures are logged and the fields stay None.
+        Uses the graph cache if available, otherwise builds from collector.
+
+        Ref: GRAPH_FAULT_PROPAGATION_DESIGN.md §4.4
+        """
+        try:
+            from src.aci.topology.cache import graph_cache
+            from src.rca.network_context import NetworkContextEnricher
+
+            # Prefer cached graph (O(1)), fallback to on-demand build
+            graph = graph_cache.get_current()
+
+            # Build NetworkContext regardless of graph availability
+            enricher = NetworkContextEnricher()
+            vpc_id = self._extract_vpc_id(result)
+            if not vpc_id:
+                logger.debug(f"[{detect_id}] No VPC ID found, skipping topology enrichment")
+                return
+
+            net_ctx = enricher.enrich(
+                region=self.region,
+                vpc_id=vpc_id,
+                failed_resource_id=self._extract_failed_resource(result),
+            )
+            result.topology_context = net_ctx.to_dict()
+
+            # Run fault propagation if we have a graph + critical anomalies
+            if net_ctx.critical_anomalies and graph is not None:
+                from src.aci.topology.propagation import fault_propagation, PropagationMode
+
+                # Propagate from the first critical anomaly's node
+                for anomaly in net_ctx.critical_anomalies:
+                    node_id = anomaly.get("node_id")
+                    if node_id and node_id in graph.graph:
+                        prop = fault_propagation(
+                            graph,
+                            node_id,
+                            mode=PropagationMode.REALISTIC,
+                        )
+                        result.propagation_result = prop.to_dict()
+                        logger.info(
+                            f"[{detect_id}] Fault propagation: "
+                            f"{prop.total_failed} failed, "
+                            f"{prop.total_degraded} degraded, "
+                            f"blast_radius={prop.total_impact_score:.2f}"
+                        )
+                        break  # First critical anomaly only (for now)
+
+            logger.info(
+                f"[{detect_id}] Topology enrichment complete: "
+                f"context={'yes' if result.topology_context else 'no'}, "
+                f"propagation={'yes' if result.propagation_result else 'no'}"
+            )
+
+        except Exception as e:
+            logger.warning(f"[{detect_id}] Topology enrichment failed (non-fatal): {e}")
+
+    @staticmethod
+    def _extract_vpc_id(result: DetectResult) -> Optional[str]:
+        """Extract VPC ID from correlated event metadata or anomalies."""
+        if result.correlated_event:
+            event = result.correlated_event
+            # Check collection config
+            if hasattr(event, "vpc_id") and event.vpc_id:
+                return event.vpc_id
+            # Check raw data
+            if hasattr(event, "raw") and isinstance(event.raw, dict):
+                vpc_id = event.raw.get("vpc_id")
+                if vpc_id:
+                    return vpc_id
+        # Check raw_data
+        if isinstance(result.raw_data, dict):
+            vpc_id = result.raw_data.get("vpc_id")
+            if vpc_id:
+                return vpc_id
+        return None
+
+    @staticmethod
+    def _extract_failed_resource(result: DetectResult) -> Optional[str]:
+        """Extract primary failed resource ID from anomalies."""
+        for anomaly in result.anomalies_detected:
+            if isinstance(anomaly, dict):
+                resource_id = anomaly.get("resource_id") or anomaly.get("node_id")
+                if resource_id:
+                    return resource_id
+        return None
 
 
 # ── Singleton ── (R5: process-level singleton with async lock)

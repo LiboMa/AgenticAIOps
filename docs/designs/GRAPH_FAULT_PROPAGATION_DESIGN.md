@@ -158,22 +158,26 @@ BFS from root failure node:
       - No new nodes affected, OR
       - max_depth reached (default 10), OR
       - graph fully visited
+
+> **Non-destructive**: Unlike `impact_analysis()` which copies the graph and removes nodes, `fault_propagation()` is read-only. It tracks state in an external `visited: dict[str, ImpactLevel]` dict, never modifying the InfraGraph. This means no `InfraGraph.copy()` or `update_node_status()` methods are needed.
 ```
 
 **Propagation rules by edge type**:
 
-| Edge Type | Direction | Propagation Rule |
-|-----------|-----------|-----------------|
-| `CONTAINS` | parent → child | Parent fails → all children DEGRADED (not FAILED, containers may survive) |
-| `ROUTES_TO` | router → target | Router fails → all routed targets lose that path |
-| `ASSOCIATED_WITH` | subnet → RTB | Subnet or RTB failure propagates to the other |
-| `ATTACHED_TO` | resource → VPC | Resource failure does not kill VPC (VPC is container) |
-| `HOSTED_IN` | NAT/VPCE → subnet | NAT fails → all private subnets routing through it lose egress |
-| `PEERS_WITH` | VPC ↔ VPC | Peering failure → cross-VPC traffic broken |
-| `EXPOSES` | Service → Deployment | Service fails → external access lost; Deployment fails → service degrades |
-| `RUNS_ON` | Pod → Node | Node fails → all pods on it FAILED |
-| `SELECTS` | Service → Pod | Pod fails → service DEGRADED (if replicas remain) |
-| `DEPENDS_ON` | Service → Service | Downstream failure → upstream AT_RISK or DEGRADED |
+| Edge Type | Propagation Direction | Bidirectional? | Propagation Rule |
+|-----------|----------------------|----------------|-----------------|
+| `CONTAINS` | parent → child only | No | Parent fails → children DEGRADED (not FAILED, containers may survive); child fail does NOT propagate up |
+| `ROUTES_TO` | router → target (single) | No | Router fails → routed targets lose that path; target fail creates blackhole but does not propagate back |
+| `ASSOCIATED_WITH` | subnet ↔ RTB | **Yes** | Mutual binding — either side fails → other loses routing capability |
+| `ATTACHED_TO` | resource → VPC | **No propagation** | IGW/TGW fail does not kill VPC (VPC is container); VPC fail does not propagate to attachments |
+| `HOSTED_IN` | NAT/VPCE → subnet (single) | No | NAT fails → hosted subnet loses egress; subnet fail does not affect NAT entity |
+| `PEERS_WITH` | VPC ↔ VPC | **Yes** | Peering failure → cross-VPC traffic broken both directions |
+| `EXPOSES` | Service ↔ Deployment | **Yes** | Service fails → external access lost; Deployment fails → service degrades |
+| `RUNS_ON` | Node → Pod (reverse) | No | Node fails → all pods on it FAILED; pod fail does NOT affect node |
+| `SELECTS` | Pod → Service (reverse, degradation) | No | Pod fails → service DEGRADED (if replicas remain); service fail → pods still run but no traffic |
+| `DEPENDS_ON` | downstream → upstream (single) | No | Downstream fail does not affect upstream |
+
+> **Implementation note**: The BFS walker uses the NetworkX graph in both directions (successors + predecessors) but applies the direction rules above as a filter. Only `ASSOCIATED_WITH`, `PEERS_WITH`, and `EXPOSES` propagate bidirectionally.
 
 #### 3.1.3 Interface
 
@@ -209,7 +213,7 @@ In `REALISTIC` mode, the algorithm auto-detects protective capabilities from gra
 |--------|---------------|----------------|
 | **Multi-AZ** | Node has siblings in different AZs (from `raw.availability_zone`) | 0.7 |
 | **ASG** | Node type is `EC2_INSTANCE` with ASG parent edge | 0.8 |
-| **Replica Set** | K8s Deployment with `raw.replicas > 1` | `1.0 - (1/replicas)` |
+| **Replica Set** | K8s Deployment with `raw.replicas > 1` | `1.0 - (1/replicas)` ; replicas ≤ 1 → no factor generated |
 | **Multi-Path** | Node has ≥2 independent paths to internet (from `can_reach_internet` via different IGW/NAT) | 0.5 |
 | **Circuit Breaker** | Service has annotation `resilience.io/circuit-breaker=true` in raw metadata | 0.6 |
 | **NAT Redundancy** | Multiple NAT gateways in different AZs serving same route table | 0.7 |
@@ -560,7 +564,7 @@ No new URL prefixes. Extensions to existing `/api/topology/*`:
 | `src/aci/topology/api.py` | 3 new endpoints | ~60 |
 | `src/aci/topology/serializers.py` | `annotate_propagation()` overlay on ReactFlow output | ~40 |
 
-**Total**: ~630 lines new code + ~300 lines tests
+**Total**: ~630 lines new code + ~500 lines tests
 
 ---
 
@@ -677,7 +681,7 @@ delta = store.get_delta(since="2026-02-26T09:00:00Z")
 | DetectAgent integration | `topology_context` populated, non-fatal fallback on failure | 90% |
 | API endpoints | Response schema, error handling, query params | 85% |
 
-Estimated: **~300 test lines** across 2 test files.
+Estimated: **~500 test lines** across 2 test files (updated per Tester feedback).
 
 ---
 
