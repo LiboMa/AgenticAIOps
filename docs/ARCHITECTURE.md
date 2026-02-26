@@ -1,7 +1,7 @@
 # AgenticAIOps — 系统架构文档
 
-**版本:** v3.0  
-**更新日期:** 2026-02-25  
+**版本:** v3.1  
+**更新日期:** 2026-02-26  
 **维护者:** AgenticAIOps Team  
 
 ---
@@ -114,12 +114,46 @@ ProactiveAgent (定时巡检)          CloudWatch Alarm (事件触发)
 | **RCA Engine** | `src/rca/engine.py` | 338 | 投票式 RCA (multi-agent) |
 | **Pattern Matcher** | `src/rca/pattern_matcher.py` | 351 | YAML 规则匹配 |
 | **RCA Models** | `src/rca/models.py` | 157 | RCAResult / Severity / Remediation |
+| **Network Context** | `src/rca/network_context.py` | 401 | 拓扑感知 RCA 上下文 (异常+可达性+爆炸半径+SG链) |
 
-### 3.4 基础设施模块
+### 3.4 Topology 模块 (ACI 子系统)
 
 | 模块 | 文件 | 行数 | 功能 |
 |------|------|------|------|
-| **API Server** | `api_server.py` | ~5,007 | FastAPI 主服务 |
+| **Types** | `src/aci/topology/types.py` | ~95 | 拓扑数据模型 (Node/Edge/Graph) |
+| **Engine** | `src/aci/topology/engine.py` | ~580 | VPC/Region/K8s 拓扑构建 |
+| **Algorithms** | `src/aci/topology/algorithms.py` | ~420 | 可达性/影响半径/路径分析/异常检测 |
+| **Collector** | `src/aci/topology/collector.py` | ~320 | boto3 数据采集 + PascalCase→snake_case |
+| **Serializers** | `src/aci/topology/serializers.py` | ~100 | React Flow JSON 导出 |
+| **Tools** | `src/aci/topology/tools.py` | ~65 | Agent 工具接口 |
+| **API** | `src/aci/topology/api.py` | ~75 | 7 个 REST 端点 `/api/topology/*` |
+
+### 3.5 Chaos Lab 模块
+
+| 模块 | 文件 | 行数 | 功能 |
+|------|------|------|------|
+| **Engine** | `src/chaos/engine.py` | ~350 | 混沌实验编排 (安全护栏+auto_rollback) |
+| **Models** | `src/chaos/models.py` | ~50 | 实验数据模型 |
+| **Scenarios** | `src/chaos/scenarios.py` | ~400 | 5 种场景: resource_stress/network_block/pod_kill/config_break/node_drain |
+| **API** | `src/chaos/api.py` | ~65 | 6 个 REST 端点 `/api/chaos/*` (dry_run=True 默认) |
+
+### 3.6 HealthIssue 生命周期模块
+
+| 模块 | 文件 | 行数 | 功能 |
+|------|------|------|------|
+| **Models** | `src/health_issue/models.py` | ~220 | HealthIssueStatus (7态) + FixPlan (L0-L3) |
+| **Lifecycle** | `src/health_issue/lifecycle.py` | ~190 | 状态机 + 审批门控 + reopen/force_close |
+| **Store** | `src/health_issue/store.py` | ~140 | JSON 持久化 |
+| **Migration** | `src/health_issue/migration.py` | ~120 | IssueStatus/IncidentStatus → HealthIssueStatus 映射 |
+
+### 3.7 基础设施模块
+
+| 模块 | 文件 | 行数 | 功能 |
+|------|------|------|------|
+| **API Server** | `api_server.py` | 169 | FastAPI 入口 (路由注册，22 个 router) |
+| **Routers** | `routers/` | 22 文件 | 拆分后的 API 路由层 |
+| **Chat Router** | `routers/chat.py` | 289 | Chat 入口 + agent factory |
+| **Chat Intents** | `routers/chat_intents/` | 8 模块 ~2,445 行 | 领域意图处理 (health/resources/ops/rca/sop/knowledge/metrics/ui_actions) |
 | **AWS Scanner** | `src/aws_scanner.py` | 737 | 13 服务资源扫描 |
 | **AWS Ops** | `src/aws_ops.py` | 1,793 | EC2/RDS/Lambda CRUD (Chat 用) |
 | **Config** | `src/config.py` | 81 | 环境配置 |
@@ -127,7 +161,7 @@ ProactiveAgent (定时巡检)          CloudWatch Alarm (事件触发)
 | **Notifications** | `src/notifications.py` | 267 | Slack 告警 |
 | **kubectl Wrapper** | `src/kubectl_wrapper.py` | 265 | K8s 操作封装 |
 
-### 3.5 ACI (Agent-Cloud Interface)
+### 3.8 ACI (Agent-Cloud Interface)
 
 | 模块 | 文件 | 行数 | 功能 |
 |------|------|------|------|
@@ -137,7 +171,7 @@ ProactiveAgent (定时巡检)          CloudWatch Alarm (事件触发)
 | **Operations** | `src/aci/operations/` | ~255 | kubectl/shell 操作 |
 | **Security** | `src/aci/security/` | ~320 | 审计 + 过滤 |
 
-### 3.6 其他
+### 3.9 其他
 
 | 模块 | 文件 | 行数 | 功能 |
 |------|------|------|------|
@@ -188,7 +222,23 @@ ProactiveAgent (定时巡检)          CloudWatch Alarm (事件触发)
 
 ```
 agentic-aiops-mvp/
-├── api_server.py              # FastAPI 主服务 (~5,007 行)
+├── api_server.py              # FastAPI 入口 (169 行, 路由注册)
+├── routers/                   # 22 个 API Router 模块
+│   ├── chat.py                # Chat 入口 (289 行)
+│   ├── chat_intents/          # 8 个领域意图处理模块
+│   │   ├── __init__.py        # registry-dict dispatcher
+│   │   ├── health.py          # 健康检查意图
+│   │   ├── resources.py       # 资源查询意图
+│   │   ├── operations.py      # 运维操作意图
+│   │   ├── rca.py             # RCA 分析意图
+│   │   ├── sop.py             # SOP 推荐意图
+│   │   ├── knowledge.py       # 知识库查询意图
+│   │   ├── metrics.py         # 指标查询意图
+│   │   └── ui_actions.py      # UI 动作意图
+│   ├── health_issues.py       # HealthIssue 生命周期 API
+│   ├── incident.py            # 事件管理 API
+│   ├── aws.py                 # AWS 操作 API
+│   └── ...                    # 其他 18 个 router
 ├── src/
 │   ├── proactive_agent.py     # 主动巡检 Agent
 │   ├── detect_agent.py        # 检测 Agent (采集+缓存+分发)
@@ -209,8 +259,11 @@ agentic-aiops-mvp/
 │   ├── notifications.py       # Slack 通知
 │   ├── kubectl_wrapper.py     # K8s 封装
 │   ├── utils/time.py          # 时间工具
-│   ├── rca/                   # RCA 引擎 + Pattern Matcher
+│   ├── rca/                   # RCA 引擎 + Pattern Matcher + Network Context
 │   ├── aci/                   # Agent-Cloud Interface
+│   │   └── topology/          # VPC/Region/K8s 拓扑分析 (NetworkX)
+│   ├── chaos/                 # 混沌实验 Lab (5 种场景)
+│   ├── health_issue/          # HealthIssue 7 状态生命周期
 │   ├── plugins/               # 服务插件
 │   ├── runbook/               # Runbook 系统
 │   ├── issues/                # Issue 跟踪
@@ -220,8 +273,8 @@ agentic-aiops-mvp/
 │   ├── plugins/               # 插件配置 YAML
 │   └── rca_patterns.yaml      # Pattern 规则 YAML
 ├── agents/                    # Agent manifests (5 roles)
-├── dashboard/                 # React 前端
-├── tests/                     # 测试 (874+ cases)
+├── dashboard/                 # React 前端 (AppV2.jsx, LobeChat 风格)
+├── tests/                     # 测试 (2,032+ cases, 67% 覆盖率)
 └── docs/                      # 文档
     ├── ARCHITECTURE.md        # 本文件 (唯一架构文档)
     └── designs/               # 设计文档
@@ -249,8 +302,11 @@ EC2: mbot-sg-1 (m6i.xlarge, ap-southeast-1)
 |------|------|--------|
 | 单账户 | 仅支持一个 AWS 账户 | P1 |
 | PatternMatcher 规则 | YAML 规则面向 K8s，需扩充 CloudWatch 场景 | P1 |
-| api_server.py 过大 | ~5,007 行，待拆分 Router | P2 |
+| Heartbeat sync boto3 | `detect_agent.run_detection()` 同步阻塞事件循环，需 async 化 (Bug-018) | P2 |
+| aws_ops.py 0% 覆盖 | 1,793 行无测试 | P2 |
 | Bedrock KB | PatternRAG 未接入 (需 KB ID 配置) | P2 |
+| chat.py agent_factory | 可提取为独立模块 (289→~170 行) | P2 |
+| 前端 ReactFlow | Topology 可视化未接入前端 | P2 |
 | 无 RBAC | 所有用户同权限 | P3 |
 | 单点部署 | 无 HA/灾备 | P3 |
 
