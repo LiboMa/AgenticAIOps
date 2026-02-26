@@ -11,7 +11,6 @@ import {
   RobotOutlined,
   CloseOutlined,
   CloudServerOutlined,
-  RocketOutlined,
 } from '@ant-design/icons'
 import ChatPanelPD from './components/ChatPanelPD'
 
@@ -22,7 +21,6 @@ const Diagnosis = lazy(() => import('./pages/Diagnosis'))
 const Metrics = lazy(() => import('./pages/Metrics'))
 const Settings = lazy(() => import('./pages/Settings'))
 const CloudServices = lazy(() => import('./pages/CloudServices'))
-const Automation = lazy(() => import('./pages/Automation'))
 
 const { Header, Content, Footer } = Layout
 
@@ -85,7 +83,6 @@ function App() {
       ),
     },
     { key: 'cloud', icon: <CloudServerOutlined />, label: 'Cloud Services' },
-    { key: 'automation', icon: <RocketOutlined />, label: 'Automation' },
     { key: 'diagnosis', icon: <SearchOutlined />, label: 'Diagnostics' },
     { key: 'metrics', icon: <LineChartOutlined />, label: 'Analytics' },
     { key: 'settings', icon: <SettingOutlined />, label: 'Settings' },
@@ -105,7 +102,6 @@ function App() {
         {currentPage === 'overview' && <Overview {...props} />}
         {currentPage === 'issues' && <IssueCenter {...props} />}
         {currentPage === 'cloud' && <CloudServices {...props} />}
-        {currentPage === 'automation' && <Automation {...props} />}
         {currentPage === 'diagnosis' && <Diagnosis {...props} />}
         {currentPage === 'metrics' && <Metrics {...props} />}
         {currentPage === 'settings' && <Settings {...props} />}
