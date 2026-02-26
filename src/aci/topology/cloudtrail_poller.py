@@ -11,6 +11,7 @@ Design ref: docs/designs/GRAPH_FAULT_PROPAGATION_DESIGN.md §3.3, §5.4
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from datetime import datetime, timedelta, timezone
@@ -332,8 +333,6 @@ def poll_cloudtrail_events(
             PaginationConfig={"MaxItems": pages * 50, "PageSize": 50},
         )
 
-        import json as _json
-
         for page in page_iter:
             for event in page.get("Events", []):
                 event_name = event.get("EventName", "")
@@ -347,7 +346,7 @@ def poll_cloudtrail_events(
                 raw = event.get("CloudTrailEvent", "")
                 if raw:
                     try:
-                        detail = _json.loads(raw)
+                        detail = json.loads(raw)
                     except (ValueError, TypeError):
                         pass
 
