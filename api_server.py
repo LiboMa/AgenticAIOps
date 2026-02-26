@@ -22,24 +22,15 @@ PID_FILE = "/tmp/aiops-api.pid"
 
 
 def _acquire_pid_lock():
-    """Acquire PID lockfile. Exit if another instance is running."""
-    my_pid = os.getpid()
-    my_ppid = os.getppid()
-    if os.path.exists(PID_FILE):
-        try:
-            with open(PID_FILE) as f:
-                old_pid = int(f.read().strip())
-            # Skip if the stored PID is ourselves or our parent (uvicorn master)
-            if old_pid != my_pid and old_pid != my_ppid:
-                os.kill(old_pid, 0)
-                print(f"❌ Another API server is already running (PID {old_pid}). "
-                      f"Remove {PID_FILE} if this is stale.")
-                sys.exit(1)
-        except (ValueError, ProcessLookupError, PermissionError):
-            pass
+    """Write PID file for informational purposes (no hard lock).
 
+    Port-bind is the real guard against duplicate instances — if another
+    uvicorn is already bound to :8000, the new one will fail with
+    ``[Errno 98] address already in use`` which is more reliable than
+    PID-file locking (especially with multiple agents / exec sessions).
+    """
     with open(PID_FILE, "w") as f:
-        f.write(str(my_pid))
+        f.write(str(os.getpid()))
 
 
 def _release_pid_lock():
