@@ -462,7 +462,19 @@ src/aci/topology/
 
 ---
 
-## 8. Open Questions
+## 8. Design Constraints (Orchestrator Review)
+
+1. **Cache miss = fallback, not empty** — If a resource in an alarm is not in the cached graph (e.g. newly created EC2), automatically fallback to Level 2 (live AWS query) instead of returning "no topology context". Cache miss ≠ no anomaly.
+
+2. **Single EventBridge rule, dual effect** — One EventBridge alarm event triggers both:
+   - Graph node status update (`graph_cache.inject_alarm()`)
+   - Topology cache invalidation (mark stale, schedule refresh)
+   
+   Do NOT create two separate EventBridge rules for the same event.
+
+---
+
+## 9. Open Questions
 
 1. **CloudTrail integration for `source` field** — Do we have CloudTrail events flowing into the system? If not, all deltas will be `source=discovery` initially.
 2. **Envoy/Istio metrics for circuit breaker** — Requires service mesh. Start with static tags, upgrade later.
