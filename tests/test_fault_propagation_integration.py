@@ -291,6 +291,29 @@ class TestEdgeWeightInference:
         w, reason = _infer_edge_weight(g, "src", "nonexistent")
         assert w == 1.0
 
+    def test_resilience_tag_reduces_weight(self):
+        """User-defined resilience:* tags should reduce propagation weight."""
+        g = InfraGraph()
+        g._add_node("src", NodeAttrs(node_type=NodeType.K8S_SERVICE, label="src"))
+        g._add_node("tgt", NodeAttrs(
+            node_type=NodeType.K8S_SERVICE, label="tgt",
+            raw={"tags": {"resilience:multi-region": "true"}},
+        ))
+        w, reason = _infer_edge_weight(g, "src", "tgt")
+        assert w <= 0.3
+        assert "resilience-tag" in reason
+
+    def test_resilience_tag_disabled_ignored(self):
+        """resilience:* tag with value 'false' should NOT reduce weight."""
+        g = InfraGraph()
+        g._add_node("src", NodeAttrs(node_type=NodeType.K8S_SERVICE, label="src"))
+        g._add_node("tgt", NodeAttrs(
+            node_type=NodeType.K8S_SERVICE, label="tgt",
+            raw={"tags": {"resilience:multi-region": "false"}},
+        ))
+        w, reason = _infer_edge_weight(g, "src", "tgt")
+        assert w == 1.0  # tag not active → no protection
+
 
 # ── Tests: RCA Context Block Rendering ──────────────────────────────
 

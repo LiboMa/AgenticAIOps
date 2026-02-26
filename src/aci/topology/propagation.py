@@ -186,6 +186,12 @@ def _infer_edge_weight(
     if tags.get("circuit_breaker") == "open":
         return 0.0, "circuit-breaker-open"
 
+    # ── Resilience tags (user-defined, e.g. Terraform) ───────────────
+    for tag_key, tag_val in tags.items():
+        if tag_key.startswith("resilience:") and str(tag_val).lower() in ("true", "enabled"):
+            factor_name = tag_key.removeprefix("resilience:")
+            return 0.3, f"resilience-tag:{factor_name}"
+
     # ── ASG with healthy instances ───────────────────────────────────
     if node_type == NodeType.ASG:
         healthy = raw.get("healthy_count", 0)
