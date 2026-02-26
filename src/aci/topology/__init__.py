@@ -44,6 +44,12 @@ from .delta import (
     get_delta_store,
 )
 from .cache import GraphCache, graph_cache
+from .cloudtrail_poller import (
+    CloudTrailPollerLoop,
+    cloudtrail_poller,
+    poll_cloudtrail_events,
+    poll_and_store,
+)
 
 __all__ = [
     # engine
@@ -80,4 +86,9 @@ __all__ = [
     # cache (NEW)
     "GraphCache",
     "graph_cache",
+    # cloudtrail poller (NEW)
+    "CloudTrailPollerLoop",
+    "cloudtrail_poller",
+    "poll_cloudtrail_events",
+    "poll_and_store",
 ]
