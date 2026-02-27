@@ -17,6 +17,12 @@ metadata:
     domains: [k8s, eks, kubernetes, pod, deployment, node, service, ingress, daemonset, statefulset, replicaset, namespace, pvc, configmap, secret, hpa]
     keywords: [CrashLoopBackOff, OOMKilled, ImagePullBackOff, Pending, NotReady, Evicted, BackOff, ErrImagePull, CreateContainerConfigError, RunContainerError, FailedScheduling, Unhealthy, ContainerCreating]
     confidence_boost: 0.2
+safety:
+  tiers:
+    read: [get_pods, describe_resource, get_events, kubectl_logs, get_nodes, top_pods, top_nodes, rollout_status, get_resource_yaml, check_endpoints]
+    write: [scale_resource, rollout_restart, rollout_undo, label_resource, apply_manifest, patch_resource]
+    dangerous: [delete_resource, drain_node, cordon_node, uncordon_node]
+  security_filter: kubectl
 allowed-tools: Bash(kubectl:*)
 ---
 

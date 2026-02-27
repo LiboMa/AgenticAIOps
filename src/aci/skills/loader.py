@@ -12,7 +12,7 @@ Directory layout expected per skill::
 
     skills/<name>/
     ├── SKILL.md              # Required — YAML frontmatter + Markdown
-    ├── scripts/              # Python modules with @tool functions
+    ├── tools/                # Python modules with @tool functions
     │   ├── diagnose.py
     │   └── remediate.py
     ├── references/           # On-demand reference docs
@@ -122,7 +122,7 @@ class SkillLoader:
 
         summary = self._parse_frontmatter(skill_md, skill_dir)
         instructions = self._parse_instructions(skill_md)
-        tools = self._discover_tools(skill_dir / "scripts")
+        tools = self._discover_tools(skill_dir / "tools")
         safety = self._load_safety(skill_dir / "safety")
         ref_paths = self._list_references(skill_dir / "references")
 
@@ -245,7 +245,7 @@ class SkillLoader:
 
     @staticmethod
     def _discover_tools(scripts_dir: Path) -> List[Callable]:
-        """Find all @tool-decorated functions in scripts/*.py.
+        """Find all @tool-decorated functions in tools/*.py.
 
         Uses importlib to dynamically load each module and inspect
         for the ``strands.tool`` marker attribute.
@@ -272,7 +272,7 @@ class SkillLoader:
                         tools.append(obj)
                         logger.debug("Found @tool: %s in %s", _name, py_file.name)
             except Exception:
-                logger.warning("Failed to load scripts/%s", py_file.name, exc_info=True)
+                logger.warning("Failed to load tools/%s", py_file.name, exc_info=True)
 
         return tools
 
