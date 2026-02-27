@@ -11,8 +11,12 @@ import time
 from typing import List, Optional
 
 from ..models import OperationResult, ResultStatus
+from ..security.filters import SecurityFilter
 
 logger = logging.getLogger(__name__)
+
+# Module-level shared SecurityFilter instance
+_SECURITY_FILTER = SecurityFilter()
 
 
 # Allowed kubectl operations
@@ -41,6 +45,7 @@ class KubectlExecutor:
         namespace: Optional[str] = None,
         output_format: str = "json",
         timeout: int = 60,
+        approval_token: Optional[str] = None,
     ) -> OperationResult:
         """
         Execute kubectl command.
@@ -50,11 +55,48 @@ class KubectlExecutor:
             namespace: Target namespace
             output_format: Output format (json, yaml, wide)
             timeout: Command timeout in seconds
+            approval_token: Approval token for dangerous operations
         
         Returns:
             OperationResult
         """
         start_time = time.time()
+        
+        # --- P0 Security Gate: enforce SecurityFilter before execution ---
+        is_safe, reason = _SECURITY_FILTER.check_kubectl(args)
+        if not is_safe:
+            if not approval_token:
+                logger.warning(
+                    "BLOCKED kubectl command (no approval): %s — %s",
+                    " ".join(args),
+                    reason,
+                )
+                return OperationResult(
+                    status=ResultStatus.ERROR,
+                    command=f"kubectl {' '.join(args)}",
+                    duration_ms=0,
+                    error=f"Security check failed: {reason}. Provide approval_token for dangerous operations.",
+                )
+            logger.info(
+                "Dangerous kubectl command APPROVED (token=%s): %s",
+                approval_token[:8] + "...",
+                " ".join(args),
+            )
+        
+        # Also enforce local is_safe_operation checks (protected namespaces, etc.)
+        local_safe, local_reason = self.is_safe_operation(args, namespace)
+        if not local_safe and not approval_token:
+            logger.warning(
+                "BLOCKED kubectl command (local check): %s — %s",
+                " ".join(args),
+                local_reason,
+            )
+            return OperationResult(
+                status=ResultStatus.ERROR,
+                command=f"kubectl {' '.join(args)}",
+                duration_ms=0,
+                error=f"Operation not allowed: {local_reason}. Provide approval_token for dangerous operations.",
+            )
         
         # Build command
         cmd = ["kubectl"] + args
