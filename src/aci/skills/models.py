@@ -70,7 +70,7 @@ class SkillSummary:
 
 @dataclass
 class SafetyConfig:
-    """Per-skill safety configuration loaded from safety/ directory."""
+    """Per-skill safety configuration loaded from references/safety/ directory."""
 
     tier: SafetyTier = SafetyTier.READ_ONLY
     """Default safety tier for this skill."""
@@ -111,7 +111,7 @@ class SkillDefinition:
     """Per-skill safety configuration."""
 
     _tools: List[Callable] = field(default_factory=list, repr=False)
-    """Discovered @tool callables from scripts/."""
+    """Discovered @tool callables from scripts/ (or tools/)."""
 
     _reference_paths: List[Path] = field(default_factory=list, repr=False)
     """Paths to reference docs (loaded on demand)."""

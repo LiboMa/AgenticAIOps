@@ -8,21 +8,21 @@ disclosure pattern:
 2. ``load()`` — fully parse a selected skill (instructions + tools + safety)
 3. ``register_tools()`` — bridge to Strands Agent tool registration
 
-Directory layout expected per skill::
+Directory layout expected per skill (agentskills.io spec + SRE extensions)::
 
     skills/<name>/
     ├── SKILL.md              # Required — YAML frontmatter + Markdown
-    ├── tools/                # Python modules with @tool functions
+    ├── scripts/              # Executable tool code (spec standard)
     │   ├── diagnose.py
     │   └── remediate.py
-    ├── references/           # On-demand reference docs
+    ├── references/           # On-demand reference docs (spec standard)
     │   ├── TROUBLESHOOT.md
-    │   └── DANGEROUS_OPS.md
-    ├── assets/               # Static resources (templates, schemas)
-    │   └── command_allowlist.yaml
-    └── safety/               # SRE security extension
-        ├── safety_tier.yaml
-        └── blast_radius.yaml
+    │   ├── DANGEROUS_OPS.md
+    │   └── safety/           # SRE security extension (under references/)
+    │       ├── safety_tier.yaml
+    │       └── blast_radius.yaml
+    └── assets/               # Static resources — templates, schemas
+        └── command_allowlist.yaml
 """
 
 from __future__ import annotations
@@ -99,8 +99,8 @@ class SkillLoader:
     def load(self, name: str) -> SkillDefinition:
         """Fully load a skill by name.
 
-        Parses SKILL.md body, discovers @tool functions in scripts/,
-        and loads safety/ configuration.
+        Parses SKILL.md body, discovers @tool functions in scripts/ (or tools/),
+        and loads references/safety/ configuration.
 
         Args:
             name: Skill name (e.g. 'linux-admin').
@@ -122,8 +122,16 @@ class SkillLoader:
 
         summary = self._parse_frontmatter(skill_md, skill_dir)
         instructions = self._parse_instructions(skill_md)
-        tools = self._discover_tools(skill_dir / "tools")
-        safety = self._load_safety(skill_dir / "safety")
+        # Spec standard: scripts/; backward compat: tools/
+        tools_dir = skill_dir / "scripts"
+        if not tools_dir.is_dir():
+            tools_dir = skill_dir / "tools"
+        tools = self._discover_tools(tools_dir)
+        # Safety config lives under references/safety/ (spec-aligned)
+        safety_dir = skill_dir / "references" / "safety"
+        if not safety_dir.is_dir():
+            safety_dir = skill_dir / "safety"  # backward compat
+        safety = self._load_safety(safety_dir)
         ref_paths = self._list_references(skill_dir / "references")
 
         definition = SkillDefinition(
@@ -245,7 +253,7 @@ class SkillLoader:
 
     @staticmethod
     def _discover_tools(scripts_dir: Path) -> List[Callable]:
-        """Find all @tool-decorated functions in tools/*.py.
+        """Find all @tool-decorated functions in scripts/*.py (or tools/*.py).
 
         Uses importlib to dynamically load each module and inspect
         for the ``strands.tool`` marker attribute.
@@ -278,7 +286,7 @@ class SkillLoader:
 
     @staticmethod
     def _load_safety(safety_dir: Path) -> SafetyConfig:
-        """Load safety/ configuration files."""
+        """Load references/safety/ configuration files."""
         config = SafetyConfig()
         if not safety_dir.is_dir():
             return config
@@ -317,10 +325,13 @@ class SkillLoader:
 
     @staticmethod
     def _list_references(ref_dir: Path) -> List[Path]:
-        """List reference doc paths."""
+        """List reference doc paths (excludes safety/ subdirectory)."""
         if not ref_dir.is_dir():
             return []
-        return sorted(f for f in ref_dir.iterdir() if f.is_file())
+        return sorted(
+            f for f in ref_dir.iterdir()
+            if f.is_file()
+        )
 
 
 def _is_strands_tool(func: Callable) -> bool:
