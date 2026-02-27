@@ -12,7 +12,8 @@ Directory layout expected per skill (agentskills.io spec + SRE extensions)::
 
     skills/<name>/
     ├── SKILL.md              # Required — YAML frontmatter + Markdown
-    ├── scripts/              # Executable tool code (spec standard)
+    ├── tools.py              # Strands @tool functions (Phase 1 convention)
+    ├── scripts/              # Executable tool code (spec standard, Phase 2)
     │   ├── diagnose.py
     │   └── remediate.py
     ├── references/           # On-demand reference docs (spec standard)
@@ -122,11 +123,18 @@ class SkillLoader:
 
         summary = self._parse_frontmatter(skill_md, skill_dir)
         instructions = self._parse_instructions(skill_md)
-        # Spec standard: scripts/; backward compat: tools/
-        tools_dir = skill_dir / "scripts"
-        if not tools_dir.is_dir():
-            tools_dir = skill_dir / "tools"
-        tools = self._discover_tools(tools_dir)
+        # Tool discovery priority:
+        # 1. tools.py single file (Strands @tool convention, Phase 1)
+        # 2. scripts/ directory (agentskills.io spec standard, Phase 2)
+        # 3. tools/ directory (legacy/backward compat)
+        tools_py = skill_dir / "tools.py"
+        if tools_py.is_file():
+            tools = self._discover_tools_from_file(tools_py)
+        else:
+            tools_dir = skill_dir / "scripts"
+            if not tools_dir.is_dir():
+                tools_dir = skill_dir / "tools"
+            tools = self._discover_tools(tools_dir)
         # Safety config lives under references/safety/ (spec-aligned)
         safety_dir = skill_dir / "references" / "safety"
         if not safety_dir.is_dir():
@@ -250,6 +258,35 @@ class SkillLoader:
             return match.group(2).strip()
         # No frontmatter — treat entire file as instructions
         return content.strip()
+
+    @staticmethod
+    def _discover_tools_from_file(tools_py: Path) -> List[Callable]:
+        """Find all @tool-decorated functions in a single tools.py file.
+
+        This is the Phase 1 convention: a single ``tools.py`` at the skill
+        root containing all Strands @tool functions.
+        """
+        tools: List[Callable] = []
+        if not tools_py.is_file():
+            return tools
+
+        try:
+            spec = importlib.util.spec_from_file_location(
+                f"skill_tools.{tools_py.stem}", tools_py
+            )
+            if spec is None or spec.loader is None:
+                return tools
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)  # type: ignore[union-attr]
+
+            for _name, obj in inspect.getmembers(module):
+                if _is_strands_tool(obj):
+                    tools.append(obj)
+                    logger.debug("Found @tool: %s in %s", _name, tools_py.name)
+        except Exception:
+            logger.warning("Failed to load %s", tools_py.name, exc_info=True)
+
+        return tools
 
     @staticmethod
     def _discover_tools(scripts_dir: Path) -> List[Callable]:
