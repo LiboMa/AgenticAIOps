@@ -1,0 +1,9 @@
+tier: guarded
+requires_approval:
+  - revoke_sg_rule
+  - delete_route
+  - delete_nacl_entry
+  - detach_igw
+  - delete_nat_gateway
+  - disassociate_route_table
+deny_by_default: true

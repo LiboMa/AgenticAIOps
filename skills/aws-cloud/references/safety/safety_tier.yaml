@@ -1,0 +1,9 @@
+tier: guarded
+requires_approval:
+  - terminate_instances
+  - delete_stack
+  - delete_snapshot
+  - detach_volume
+  - remove_role_from_instance_profile
+  - delete_function
+deny_by_default: true

@@ -1,0 +1,4 @@
+scope: service
+description: "Operations may affect network/compute/storage/database availability"
+max_affected_resources: 10
+requires_change_window: true

@@ -1,0 +1,9 @@
+tier: guarded
+requires_approval:
+  - delete_db_instance
+  - delete_db_cluster
+  - delete_dynamodb_table
+  - failover_db_cluster
+  - restore_from_snapshot
+  - delete_cache_cluster
+deny_by_default: true
