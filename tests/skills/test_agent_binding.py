@@ -1,6 +1,10 @@
 """E2E tests: Agent-Skill binding and tier enforcement."""
 
 import json
+import os
+from src.approval_token import generate as gen_token, reset_cache as reset_token_cache
+
+os.environ.setdefault("APPROVAL_TOKEN_SECRET", "test-secret-for-unit-tests-1234567890")
 import pytest
 from src.skills import SkillRegistry
 from src.skills._models import SecurityTier
@@ -88,7 +92,7 @@ class TestTierEnforcementE2E:
         set_agent_context("sre", SecurityTier.T3_DESTRUCTIVE)
         from src.skills.linux_admin.tools import process_kill
         # Will fail at execution (PID doesn't exist) but should pass security
-        result = json.loads(process_kill(pid=999999, approval_token="approved-123"))
+        result = json.loads(process_kill(pid=999999, approval_token=gen_token("process_kill")))
         # Either success (kill ran) or error (PID not found) — not blocked
         assert result["status"] in ("success", "error")
 
@@ -96,7 +100,7 @@ class TestTierEnforcementE2E:
         """SRE agent calling T3 needs dual tokens."""
         set_agent_context("sre", SecurityTier.T3_DESTRUCTIVE)
         from src.skills.linux_admin.tools import system_reboot
-        result = json.loads(system_reboot(approval_token="token-a"))
+        result = json.loads(system_reboot(approval_token=gen_token("system_reboot")))
         assert result["status"] == "blocked"
 
     def test_sre_t3_dual_approval_works(self, registry):
@@ -104,7 +108,7 @@ class TestTierEnforcementE2E:
         set_agent_context("sre", SecurityTier.T3_DESTRUCTIVE)
         from src.skills.linux_admin.tools import system_reboot
         result = json.loads(system_reboot(
-            approval_token="token-a", approval_token_2="token-b"
+            approval_token=gen_token("system_reboot:primary"), approval_token_2=gen_token("system_reboot:secondary")
         ))
         assert result["status"] in ("success", "dry_run")
 

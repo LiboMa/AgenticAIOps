@@ -228,7 +228,9 @@ def _check_injection(kwargs: Dict[str, Any]) -> None:
 
 
 def _check_approval(tier: SecurityTier, kwargs: Dict[str, Any], tool_name: str) -> None:
-    """Layer 5: Approval gate for T2+ operations."""
+    """Layer 5: Approval gate for T2+ operations — HMAC verified."""
+    from src.approval_token import verify as verify_token
+
     token = kwargs.pop("approval_token", None)
 
     if tier == SecurityTier.T3_DESTRUCTIVE:
@@ -239,13 +241,15 @@ def _check_approval(tier: SecurityTier, kwargs: Dict[str, Any], tool_name: str) 
                 "APPROVAL_GATE",
                 f"Tool '{tool_name}' is T3_DESTRUCTIVE — requires dual approval_token + approval_token_2",
             )
-        if token == token2:
-            raise SecurityViolation(
-                "APPROVAL_GATE",
-                "Dual approval tokens must be from different sources (tokens are identical)",
-            )
-        # Phase 1: accept non-empty strings. Phase 2: HMAC validation.
-        logger.info("T3 dual approval accepted for '%s'", tool_name)
+        # Tokens verified with different action suffixes (primary/secondary)
+        # HMAC verify both tokens (different action suffixes to ensure distinct sources)
+        ok1, reason1 = verify_token(token, f"{tool_name}:primary")
+        if not ok1:
+            raise SecurityViolation("APPROVAL_GATE", f"approval_token invalid: {reason1}")
+        ok2, reason2 = verify_token(token2, f"{tool_name}:secondary")
+        if not ok2:
+            raise SecurityViolation("APPROVAL_GATE", f"approval_token_2 invalid: {reason2}")
+        logger.info("T3 dual approval HMAC-verified for '%s'", tool_name)
 
     elif tier == SecurityTier.T2_HIGH_RISK:
         if not token:
@@ -253,5 +257,7 @@ def _check_approval(tier: SecurityTier, kwargs: Dict[str, Any], tool_name: str) 
                 "APPROVAL_GATE",
                 f"Tool '{tool_name}' is T2_HIGH_RISK — requires approval_token",
             )
-        # Phase 1: accept non-empty strings. Phase 2: HMAC validation.
-        logger.info("T2 approval accepted for '%s'", tool_name)
+        ok, reason = verify_token(token, tool_name)
+        if not ok:
+            raise SecurityViolation("APPROVAL_GATE", f"approval_token invalid: {reason}")
+        logger.info("T2 approval HMAC-verified for '%s'", tool_name)

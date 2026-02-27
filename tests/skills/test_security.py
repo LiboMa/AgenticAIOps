@@ -1,6 +1,10 @@
 """Tests for src/skills/_security.py — Layer 1-5 security enforcement."""
 
 import json
+import os
+from src.approval_token import generate as gen_token, reset_cache as reset_token_cache
+
+os.environ.setdefault("APPROVAL_TOKEN_SECRET", "test-secret-for-unit-tests-1234567890")
 import pytest
 from src.skills._security import (
     secure_tool, SecurityViolation, SecurityTier,
@@ -72,7 +76,7 @@ class TestLayer1GlobalBlacklist:
         set_agent_context("sre", SecurityTier.T3_DESTRUCTIVE)
         result = json.loads(dangerous_tool(
             command="rm -rf /",
-            approval_token="valid-token",
+            approval_token=gen_token("dangerous_tool"),
         ))
         assert result["status"] == "blocked"
 
@@ -130,7 +134,7 @@ class TestLayer5ApprovalGate:
         set_agent_context("sre", SecurityTier.T3_DESTRUCTIVE)
         result = json.loads(dangerous_tool(
             command="kubectl delete pod x",
-            approval_token="approved-123",
+            approval_token=gen_token("dangerous_tool"),
         ))
         assert result["status"] == "success"
 
@@ -138,7 +142,7 @@ class TestLayer5ApprovalGate:
         set_agent_context("sre", SecurityTier.T3_DESTRUCTIVE)
         result = json.loads(destructive_tool(
             target="node-1",
-            approval_token="token-a",
+            approval_token=gen_token("destructive_tool"),
         ))
         assert result["status"] == "blocked"
 
@@ -155,8 +159,8 @@ class TestLayer5ApprovalGate:
         set_agent_context("sre", SecurityTier.T3_DESTRUCTIVE)
         result = json.loads(destructive_tool(
             target="node-1",
-            approval_token="token-a",
-            approval_token_2="token-b",
+            approval_token=gen_token("destructive_tool:primary"),
+            approval_token_2=gen_token("destructive_tool:secondary"),
         ))
         assert result["status"] == "success"
 

@@ -1,3 +1,7 @@
+import os
+from src.approval_token import generate as gen_token, reset_cache as reset_token_cache
+
+os.environ.setdefault("APPROVAL_TOKEN_SECRET", "test-secret-for-unit-tests-1234567890")
 """
 Tests for KubectlExecutor security gate (P0 fix).
 
@@ -65,7 +69,7 @@ class TestSecurityGateApproval:
         result = executor.execute(
             ["delete", "pod", "my-pod"],
             namespace="staging",
-            approval_token="tok-abc123xyz",
+            approval_token=gen_token("kubectl " + " ".join(["delete", "pod", "test-pod"])),
         )
         # Should NOT be blocked — it's a single pod delete (not in DANGEROUS_KUBECTL)
         # and approval_token overrides local check
@@ -80,7 +84,7 @@ class TestSecurityGateApproval:
         )
         result = executor.execute(
             ["drain", "node-1", "--ignore-daemonsets"],
-            approval_token="tok-emergency-001",
+            approval_token=gen_token("kubectl " + " ".join(["delete", "namespace", "production"])),
         )
         assert result.status == ResultStatus.SUCCESS
 

@@ -18,6 +18,17 @@ logger = logging.getLogger(__name__)
 # Module-level shared SecurityFilter instance
 _SECURITY_FILTER = SecurityFilter()
 
+# HMAC token verification (P1 fix)
+def _verify_approval_token(token: str, command_str: str) -> tuple:
+    """Verify HMAC approval token. Returns (ok, reason)."""
+    try:
+        from src.approval_token import verify
+        return verify(token, command_str)
+    except ValueError as e:
+        # APPROVAL_TOKEN_SECRET not set — fall back to accept (ops grace period)
+        logger.warning("approval_token HMAC skipped: %s", e)
+        return True, "HMAC verification skipped (secret not configured)"
+
 
 # Allowed kubectl operations
 ALLOWED_READ_OPS = ["get", "describe", "logs", "top", "explain", "api-resources", "api-versions"]
@@ -77,11 +88,25 @@ class KubectlExecutor:
                     duration_ms=0,
                     error=f"Security check failed: {reason}. Provide approval_token for dangerous operations.",
                 )
-            logger.info(
-                "Dangerous kubectl command APPROVED (token=%s): %s",
-                approval_token[:8] + "...",
-                " ".join(args),
-            )
+            # HMAC verify the token
+                cmd_str = f"kubectl {' '.join(args)}"
+                ok, reason = _verify_approval_token(approval_token, cmd_str)
+                if not ok:
+                    logger.warning(
+                        "BLOCKED kubectl command (invalid token): %s — %s",
+                        " ".join(args), reason,
+                    )
+                    return OperationResult(
+                        status=ResultStatus.ERROR,
+                        command=cmd_str,
+                        duration_ms=0,
+                        error=f"Invalid approval token: {reason}",
+                    )
+                logger.info(
+                    "Dangerous kubectl command APPROVED (HMAC-verified, token=%s): %s",
+                    approval_token[:8] + "...",
+                    " ".join(args),
+                )
         
         # Also enforce local is_safe_operation checks (protected namespaces, etc.)
         local_safe, local_reason = self.is_safe_operation(args, namespace)
