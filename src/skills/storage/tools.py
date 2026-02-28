@@ -12,7 +12,7 @@ def _boto(svc, method, **kw):
     except Exception as e: return {"error": str(e)}
 
 @secure_tool(tier=SecurityTier.T0_READONLY, skill="storage", command_param=None)
-def s3_list_buckets() -> str:
+def storage_list_buckets() -> str:
     """List all S3 buckets with size summary."""
     return ToolResult.success(_boto("s3", "list_buckets")).to_json()
 
