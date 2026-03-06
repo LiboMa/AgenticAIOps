@@ -1,7 +1,7 @@
 # AgenticAIOps — 系统架构文档
 
-**版本:** v3.1  
-**更新日期:** 2026-02-26  
+**版本:** v3.2  
+**更新日期:** 2026-03-06  
 **维护者:** AgenticAIOps Team  
 
 ---
@@ -171,7 +171,31 @@ ProactiveAgent (定时巡检)          CloudWatch Alarm (事件触发)
 | **Operations** | `src/aci/operations/` | ~255 | kubectl/shell 操作 |
 | **Security** | `src/aci/security/` | ~320 | 审计 + 过滤 |
 
-### 3.9 其他
+### 3.9 Skills Framework (Agent 能力系统)
+
+| 模块 | 文件 | 行数 | 功能 |
+|------|------|------|------|
+| **SkillRegistry** | `src/skills/__init__.py` | ~93 | Skill 注册、发现、加载 |
+| **Models** | `src/skills/_models.py` | ~53 | SecurityTier (T0-T3) + SkillManifest |
+| **Security** | `src/skills/_security.py` | ~98 | `@secure_tool` 装饰器 + Tier 强制 |
+| **Executor** | `src/skills/_executor.py` | ~61 | 安全执行器 (沙箱隔离) |
+| **Agent Binding** | `src/skills/agent_binding.py` | ~57 | Agent → Skill 绑定映射 |
+| **Kubernetes** | `src/skills/kubernetes/` | 3 文件 | K8s 工具 (kubectl 封装 + 安全策略) |
+| **AWS General** | `src/skills/aws_general/tools.py` | ~89 | 30 @tools (16 read + 10 write + 4 dangerous) |
+| **Monitoring** | `src/skills/monitoring/tools.py` | ~68 | CloudWatch 指标/告警查询 |
+| **Linux Admin** | `src/skills/linux_admin/tools.py` | ~101 | 系统管理工具 |
+| **Database** | `src/skills/database_admin/tools.py` | ~51 | RDS/DynamoDB 操作 |
+| **Network** | `src/skills/network_engineer/tools.py` | ~73 | VPC/SG/Route 工具 |
+| **Storage** | `src/skills/storage/tools.py` | ~47 | S3/EBS 存储工具 |
+| **Log Analysis** | `src/skills/log_analysis/tools.py` | ~56 | CloudWatch Logs 分析 |
+
+**安全分级体系:**
+- **T0 (Read-Only)**: 只读查询，自动批准
+- **T1 (Safe-Write)**: 安全写操作，自动批准
+- **T2 (Risky-Write)**: 风险写操作，需审批
+- **T3 (Dangerous)**: 危险操作，需 HMAC approval_token 验证
+
+### 3.10 其他
 
 | 模块 | 文件 | 行数 | 功能 |
 |------|------|------|------|
@@ -264,6 +288,20 @@ agentic-aiops-mvp/
 │   │   └── topology/          # VPC/Region/K8s 拓扑分析 (NetworkX)
 │   ├── chaos/                 # 混沌实验 Lab (5 种场景)
 │   ├── health_issue/          # HealthIssue 7 状态生命周期
+│   ├── skills/                # Skills Framework (8 skills, 103 tools)
+│   │   ├── __init__.py        # SkillRegistry
+│   │   ├── _models.py         # SecurityTier + SkillManifest
+│   │   ├── _security.py       # @secure_tool 装饰器
+│   │   ├── _executor.py       # 安全执行器
+│   │   ├── agent_binding.py   # Agent→Skill 绑定
+│   │   ├── kubernetes/        # K8s 工具 + 安全策略
+│   │   ├── aws_general/       # AWS 通用工具 (30 @tools)
+│   │   ├── monitoring/        # 监控工具
+│   │   ├── linux_admin/       # 系统管理
+│   │   ├── database_admin/    # 数据库工具
+│   │   ├── network_engineer/  # 网络工具
+│   │   ├── storage/           # 存储工具
+│   │   └── log_analysis/      # 日志分析
 │   ├── plugins/               # 服务插件
 │   ├── runbook/               # Runbook 系统
 │   ├── issues/                # Issue 跟踪
@@ -274,7 +312,7 @@ agentic-aiops-mvp/
 │   └── rca_patterns.yaml      # Pattern 规则 YAML
 ├── agents/                    # Agent manifests (5 roles)
 ├── dashboard/                 # React 前端 (AppV2.jsx, LobeChat 风格)
-├── tests/                     # 测试 (2,032+ cases, 67% 覆盖率)
+├── tests/                     # 测试 (2,600+ cases, 76% 覆盖率)
 └── docs/                      # 文档
     ├── ARCHITECTURE.md        # 本文件 (唯一架构文档)
     └── designs/               # 设计文档
@@ -302,7 +340,7 @@ EC2: mbot-sg-1 (m6i.xlarge, ap-southeast-1)
 |------|------|--------|
 | 单账户 | 仅支持一个 AWS 账户 | P1 |
 | PatternMatcher 规则 | YAML 规则面向 K8s，需扩充 CloudWatch 场景 | P1 |
-| Heartbeat sync boto3 | `detect_agent.run_detection()` 同步阻塞事件循环，需 async 化 (Bug-018) | P2 |
+| ~~Heartbeat sync boto3~~ | ~~`detect_agent.run_detection()` 同步阻塞事件循环~~ (**已修复**: `run_in_executor`) | ~~P2~~ |
 | aws_ops.py 0% 覆盖 | 1,793 行无测试 | P2 |
 | Bedrock KB | PatternRAG 未接入 (需 KB ID 配置) | P2 |
 | chat.py agent_factory | 可提取为独立模块 (289→~170 行) | P2 |
