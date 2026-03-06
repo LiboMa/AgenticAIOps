@@ -113,7 +113,7 @@ class TestProactiveAgentSystemInit:
         assert hb.task_type == TaskType.HEARTBEAT
         assert hb.action == "quick_scan"
         assert hb.interval_seconds == 300
-        assert hb.enabled is False  # disabled: sync boto3 blocks event loop (Bug-018)
+        assert hb.enabled is True  # re-enabled: boto3 calls wrapped via run_in_executor
 
     def test_daily_report_task_config(self):
         system = ProactiveAgentSystem()
@@ -178,7 +178,7 @@ class TestTaskManagement:
         status = system.get_status()
         assert status["running"] is False
         assert "heartbeat" in status["tasks"]
-        assert status["tasks"]["heartbeat"]["enabled"] is False  # disabled: sync boto3 (Bug-018)
+        assert status["tasks"]["heartbeat"]["enabled"] is True  # re-enabled: boto3 wrapped via run_in_executor
         assert status["tasks"]["heartbeat"]["action"] == "quick_scan"
         assert status["tasks"]["heartbeat"]["last_run"] is None
 
