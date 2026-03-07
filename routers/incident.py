@@ -437,7 +437,4 @@ async def webhook_alarm(request: Request):
         return {"status": "error", "error": str(e), "traceback": traceback.format_exc()[:500]}
 
 
-@router.get("/health")
-async def health_check():
-    """Health check endpoint."""
-    return {"status": "healthy", "timestamp": datetime.now(timezone.utc).isoformat()}
+# /health liveness endpoint moved to routers/health.py (268e8cc)
