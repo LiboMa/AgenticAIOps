@@ -211,18 +211,12 @@ class TestHandleResult:
 
     @pytest.mark.asyncio
     async def test_alert_triggers_orchestrator_with_detect_result(self, system):
-        """Alert should trigger Orchestrator with the cached DetectResult."""
+        """Bug-019: Incident pipeline auto-trigger disabled from heartbeat.
+        Alert should log and queue, but NOT trigger Orchestrator."""
         from src.proactive_agent import ProactiveResult
 
         mock_detect_result = _make_detect_result()
         system._last_detect_result = mock_detect_result
-
-        mock_incident = MagicMock()
-        mock_incident.incident_id = "inc-test"
-        mock_incident.status.value = "completed"
-
-        mock_orchestrator = MagicMock()
-        mock_orchestrator.handle_incident = AsyncMock(return_value=mock_incident)
 
         alert_result = ProactiveResult(
             task_name="heartbeat",
@@ -233,13 +227,11 @@ class TestHandleResult:
             summary="1 issues detected",
         )
 
-        with patch("src.incident_orchestrator.get_orchestrator", return_value=mock_orchestrator):
+        with patch("src.incident_orchestrator.get_orchestrator") as mock_get_orch:
             await system._handle_result(alert_result)
 
-        mock_orchestrator.handle_incident.assert_called_once()
-        call_kwargs = mock_orchestrator.handle_incident.call_args[1]
-        assert call_kwargs["trigger_type"] == "proactive"
-        assert call_kwargs["detect_result"] is mock_detect_result
+        # Bug-019: orchestrator should NOT be called from heartbeat
+        mock_get_orch.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_ok_does_not_trigger_orchestrator(self, system):

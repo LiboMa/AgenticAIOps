@@ -90,10 +90,14 @@ class ProactiveAgentSystem:
         )
         
         # Daily report - every 24 hours at 8:00
+        # Bug-019: DISABLED — _action_full_report uses sync boto3 calls
+        # (aws_scanner, aws_ops) that block the event loop. Re-enable after
+        # wrapping scanner methods in run_in_executor.
         self.tasks["daily_report"] = ProactiveTask(
             name="daily_report",
             task_type=TaskType.CRON,
             action="full_report",
+            enabled=False,
             interval_seconds=86400,  # 24 hours
             cron_expr="0 8 * * *",
             config={
@@ -103,10 +107,13 @@ class ProactiveAgentSystem:
         )
         
         # Security scan - every 12 hours
+        # Bug-019: DISABLED — _action_security_check calls scanner._scan_iam(),
+        # _scan_s3(), _scan_cloudwatch_alarms() synchronously, blocking event loop.
         self.tasks["security_scan"] = ProactiveTask(
             name="security_scan",
             task_type=TaskType.CRON,
             action="security_check",
+            enabled=False,
             interval_seconds=43200,  # 12 hours
             config={
                 "check_iam": True,
@@ -395,30 +402,22 @@ class ProactiveAgentSystem:
             logger.warning(f"🚨 {result.task_name}: {result.summary}")
             await self.results_queue.put(result)
 
-            # Trigger IncidentOrchestrator with DetectAgent's cached result (R3)
-            if self._last_detect_result is not None:
-                try:
-                    from src.incident_orchestrator import get_orchestrator
-
-                    orchestrator = get_orchestrator()
-                    incident = await asyncio.wait_for(
-                        orchestrator.handle_incident(
-                            trigger_type="proactive",
-                            trigger_data={
-                                "task_name": result.task_name,
-                                "findings_count": len(result.findings),
-                                "summary": result.summary,
-                            },
-                            detect_result=self._last_detect_result,
-                            auto_execute=False,
-                        ),
-                        timeout=120,
-                    )
-                    logger.info(f"Incident pipeline triggered: {incident.incident_id} → {incident.status.value}")
-                except asyncio.TimeoutError:
-                    logger.error(f"Incident pipeline timed out after 120s for {result.task_name}")
-                except Exception as e:
-                    logger.error(f"Failed to trigger incident pipeline: {e}")
+            # NOTE: Incident pipeline auto-trigger disabled (Bug-019).
+            # The RCA pipeline's sync boto3 Bedrock calls block the event loop
+            # even when wrapped in run_in_executor (boto3 default timeouts are
+            # too long). Heartbeat should detect & report only; incident
+            # pipeline should be triggered explicitly via API.
+            # TODO: Re-enable after adding boto3 Config(connect_timeout=10,
+            #       read_timeout=30) to Bedrock client in rca_inference.py.
+            #
+            # if self._last_detect_result is not None:
+            #     try:
+            #         from src.incident_orchestrator import get_orchestrator
+            #         orchestrator = get_orchestrator()
+            #         incident = await orchestrator.handle_incident(...)
+            #     except Exception as e:
+            #         logger.error(f"Failed to trigger incident pipeline: {e}")
+                    #         logger.error(f"Failed to trigger incident pipeline: {e}")
 
             # Call registered callbacks
             if "alert" in self.callbacks:
