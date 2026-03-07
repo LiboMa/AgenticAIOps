@@ -9,6 +9,12 @@ from routers.deps import get_health_scheduler
 router = APIRouter(tags=["health"])
 
 
+@router.get("/health")
+async def liveness():
+    """Liveness probe — always returns 200."""
+    return {"status": "ok"}
+
+
 @router.get("/api/health/check")
 async def run_health_check(namespace: Optional[str] = None):
     """Run health check now."""
