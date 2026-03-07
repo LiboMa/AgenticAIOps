@@ -179,17 +179,17 @@ class ProactiveAgentSystem:
         
         return False
     
-    async def _execute_task(self, task: ProactiveTask) -> ProactiveResult:
-        """Execute a proactive task"""
+    async def _execute_task(self, task: ProactiveTask, timeout_seconds: int = 120) -> ProactiveResult:
+        """Execute a proactive task with timeout protection."""
         logger.info(f"🔄 Executing proactive task: {task.name}")
         
         try:
             if task.action == "quick_scan":
-                return await self._action_quick_scan(task)
+                coro = self._action_quick_scan(task)
             elif task.action == "full_report":
-                return await self._action_full_report(task)
+                coro = self._action_full_report(task)
             elif task.action == "security_check":
-                return await self._action_security_check(task)
+                coro = self._action_security_check(task)
             else:
                 return ProactiveResult(
                     task_name=task.name,
@@ -198,6 +198,16 @@ class ProactiveAgentSystem:
                     timestamp=datetime.now(timezone.utc),
                     summary=f"Unknown action: {task.action}"
                 )
+            return await asyncio.wait_for(coro, timeout=timeout_seconds)
+        except asyncio.TimeoutError:
+            logger.error(f"Task {task.name} timed out after {timeout_seconds}s")
+            return ProactiveResult(
+                task_name=task.name,
+                task_type=task.task_type,
+                status="error",
+                timestamp=datetime.now(timezone.utc),
+                summary=f"Timeout after {timeout_seconds}s"
+            )
         except Exception as e:
             logger.error(f"Task execution error: {e}")
             return ProactiveResult(
@@ -391,17 +401,22 @@ class ProactiveAgentSystem:
                     from src.incident_orchestrator import get_orchestrator
 
                     orchestrator = get_orchestrator()
-                    incident = await orchestrator.handle_incident(
-                        trigger_type="proactive",
-                        trigger_data={
-                            "task_name": result.task_name,
-                            "findings_count": len(result.findings),
-                            "summary": result.summary,
-                        },
-                        detect_result=self._last_detect_result,
-                        auto_execute=False,
+                    incident = await asyncio.wait_for(
+                        orchestrator.handle_incident(
+                            trigger_type="proactive",
+                            trigger_data={
+                                "task_name": result.task_name,
+                                "findings_count": len(result.findings),
+                                "summary": result.summary,
+                            },
+                            detect_result=self._last_detect_result,
+                            auto_execute=False,
+                        ),
+                        timeout=120,
                     )
                     logger.info(f"Incident pipeline triggered: {incident.incident_id} → {incident.status.value}")
+                except asyncio.TimeoutError:
+                    logger.error(f"Incident pipeline timed out after 120s for {result.task_name}")
                 except Exception as e:
                     logger.error(f"Failed to trigger incident pipeline: {e}")
 
