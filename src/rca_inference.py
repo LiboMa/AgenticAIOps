@@ -177,6 +177,15 @@ class RCAInferenceEngine:
             logger.warning(f"RCAInferenceEngine: Skills not available: {e}")
             self._skill_tools = []
             self._skill_prompt = ""
+
+        # Knowledge Flywheel (ADR-009)
+        try:
+            from src.knowledge.flywheel import KnowledgeFlywheel
+            self._flywheel = KnowledgeFlywheel()
+            logger.info("RCAInferenceEngine: KnowledgeFlywheel loaded")
+        except Exception as e:
+            logger.warning(f"RCAInferenceEngine: KnowledgeFlywheel not available: {e}")
+            self._flywheel = None
     
     @property
     def bedrock(self):
@@ -219,6 +228,44 @@ class RCAInferenceEngine:
         
         # Step 1.5 (NEW): Search historical knowledge via KnowledgeSearchService
         knowledge_context = None
+
+        # Step 1.4 (NEW): Search Knowledge Flywheel for historical similar cases
+        flywheel_context = ""
+        flywheel = getattr(self, "_flywheel", None)
+        if flywheel is not None:
+            try:
+                search_parts = []
+                for anomaly in correlated_event.anomalies[:3]:
+                    search_parts.append(
+                        f"{anomaly.get('resource', '')} {anomaly.get('metric', '')} "
+                        f"{anomaly.get('description', '')}"
+                    )
+                for alarm in correlated_event.alarms[:3]:
+                    if alarm.state == "ALARM":
+                        search_parts.append(f"{alarm.metric_name} {alarm.name}")
+                flywheel_query = " ".join(search_parts).strip() or "AWS infrastructure issue"
+                similar_cases = flywheel.search_similar(flywheel_query, top_k=3)
+                if similar_cases:
+                    lines = ["\n## Historical Similar Cases (Knowledge Flywheel)"]
+                    for i, hit in enumerate(similar_cases, 1):
+                        lines.append(f"\n### Case {i} (score: {hit.score:.2f}, source: {hit.source})")
+                        lines.append(f"- Case ID: {hit.case_id}")
+                        if hit.content:
+                            lines.append(f"- Details: {hit.content[:500]}")
+                        if hit.metadata:
+                            lines.append(f"- Severity: {hit.metadata.get('severity', 'unknown')}")
+                    lines.append(
+                        "\nUse these historical cases as additional context. "
+                        "If the current issue matches a previous case, reference it."
+                    )
+                    flywheel_context = "\n".join(lines)
+                    logger.info(
+                        "Knowledge Flywheel returned %d similar cases for RCA",
+                        len(similar_cases),
+                    )
+            except Exception as e:
+                logger.warning("Knowledge Flywheel search failed (non-fatal): %s", e)
+
         try:
             from src.knowledge_search import get_knowledge_search
             ks = get_knowledge_search()
@@ -253,6 +300,10 @@ class RCAInferenceEngine:
             network_propagation_context=network_propagation_context,
         )
 
+        # Inject flywheel historical cases into prompt
+        if flywheel_context:
+            prompt = f"{prompt}\n{flywheel_context}"
+
         # Inject skills context if available
         if self._skill_prompt:
             prompt = f"{prompt}\n\n{self._skill_prompt}"
@@ -263,6 +314,7 @@ class RCAInferenceEngine:
         )
         
         if result and result.confidence >= CONFIDENCE_UPGRADE_THRESHOLD:
+            self._capture_to_flywheel(result, correlated_event)
             return result
         
         # Step 3: Low confidence → upgrade to Opus
@@ -275,11 +327,40 @@ class RCAInferenceEngine:
                 None, self._invoke_claude, prompt, RCA_MODEL_DEEP
             )
             if opus_result and opus_result.confidence > result.confidence:
+                self._capture_to_flywheel(opus_result, correlated_event)
                 return opus_result
         
         # Return whatever we have
-        return result or self._no_issue_result(correlated_event)
+        final_result = result or self._no_issue_result(correlated_event)
+        self._capture_to_flywheel(final_result, correlated_event)
+        return final_result
     
+    def _capture_to_flywheel(self, result: RCAResult, correlated_event) -> None:
+        """Capture RCA result into Knowledge Flywheel for future reference.
+
+        Non-fatal: any failure is logged and silently ignored.
+        """
+        flywheel = getattr(self, "_flywheel", None)
+        if flywheel is None:
+            return
+        try:
+            symptoms = ", ".join(result.matched_symptoms[:5]) if result.matched_symptoms else ""
+            remediation_text = ""
+            if result.remediation:
+                remediation_text = getattr(result.remediation, "suggestion", "") or getattr(result.remediation, "description", "")
+            flywheel.capture(
+                title=result.pattern_name or result.pattern_id,
+                symptoms=symptoms,
+                root_cause=result.root_cause,
+                resolution=remediation_text,
+                resource_type=getattr(correlated_event, "resource_type", ""),
+                severity=result.severity.value if hasattr(result.severity, "value") else str(result.severity),
+                region=getattr(correlated_event, "region", ""),
+            )
+            logger.info("RCA result captured to Knowledge Flywheel: %s", result.pattern_id)
+        except Exception as e:
+            logger.warning("Knowledge Flywheel capture failed (non-fatal): %s", e)
+
     def _invoke_claude(self, prompt: str, model_id: str) -> Optional[RCAResult]:
         """Invoke Bedrock Claude for RCA analysis."""
         try:

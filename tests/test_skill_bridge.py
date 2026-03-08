@@ -299,6 +299,49 @@ class TestResetBridge:
 
 
 # ===========================================================================
+# SkillBridge context-aware loading
+# ===========================================================================
+
+class TestSkillBridgeContextLoading:
+
+    def test_empty_context_returns_monitoring_fallback(self, mock_discover):
+        """Empty context should fallback to monitoring domain tools."""
+        from src.skills.skill_bridge import SkillBridge
+        bridge = SkillBridge("detect")
+        tools = bridge.load_for_context({})
+        assert len(tools) > 0, "Empty context should return monitoring fallback tools"
+        # Verify we got monitoring-domain tools
+        tool_names = [getattr(t, 'tool_name', getattr(t, '__name__', '')) for t in tools]
+        monitoring_indicators = ['cw_', 'cloudwatch', 'metric', 'alarm', 'log', 'monitoring']
+        has_monitoring = any(
+            any(ind in name.lower() for ind in monitoring_indicators)
+            for name in tool_names
+        )
+        assert has_monitoring, f"Fallback tools should be from monitoring domain, got: {tool_names}"
+
+    def test_eks_context_returns_kubernetes_tools(self, mock_discover):
+        """EKS pod_crash context should return kubernetes tools."""
+        from src.skills.skill_bridge import SkillBridge
+        bridge = SkillBridge("detect")
+        tools = bridge.load_for_context({"resource_type": "eks", "alert_type": "pod_crash"})
+        assert len(tools) > 0
+        tool_names = [getattr(t, 'tool_name', getattr(t, '__name__', '')) for t in tools]
+        k8s_indicators = ['kubectl', 'kube', 'pod', 'namespace', 'node']
+        has_k8s = any(
+            any(ind in name.lower() for ind in k8s_indicators)
+            for name in tool_names
+        )
+        assert has_k8s, f"EKS context should include kubernetes tools, got: {tool_names}"
+
+    def test_max_tools_per_invocation_enforced(self, mock_discover):
+        """Tools returned should not exceed MAX_TOOLS_PER_INVOCATION."""
+        from src.skills.skill_bridge import SkillBridge, MAX_TOOLS_PER_INVOCATION
+        bridge = SkillBridge("sre")  # SRE has access to all tools
+        tools = bridge.load_for_context({"resource_type": "eks"})
+        assert len(tools) <= MAX_TOOLS_PER_INVOCATION
+
+
+# ===========================================================================
 # DetectAgent skills integration
 # ===========================================================================
 

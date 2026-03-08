@@ -178,6 +178,15 @@ class DetectAgent:
             self._skill_tools = []
             self._skill_prompt = ""
 
+        # Alert Ingress Service (ADR-009)
+        try:
+            from src.alert.ingress import AlertIngressService
+            self._alert_ingress = AlertIngressService()
+            logger.info("DetectAgent: AlertIngressService loaded")
+        except Exception as e:
+            logger.warning(f"DetectAgent: AlertIngressService not available: {e}")
+            self._alert_ingress = None
+
     async def run_detection(
         self,
         services: List[str] = None,
@@ -301,6 +310,37 @@ class DetectAgent:
             self._persist_result(result)
 
             return result
+
+    async def process_alert(self, alert) -> DetectResult:
+        """Process a StructuredAlert through the ingestion pipeline.
+
+        If AlertIngressService is available, delegates to it for parsing,
+        dedup, and enrichment. Otherwise falls back to run_detection().
+
+        Args:
+            alert: StructuredAlert from src.alert.models.
+
+        Returns:
+            DetectResult from the detection pipeline.
+        """
+        ingress = getattr(self, "_alert_ingress", None)
+        if ingress is not None:
+            try:
+                result = await ingress.process(alert, self)
+                if result is not None:
+                    return result
+                # Duplicate alert was suppressed — return a minimal result
+                logger.info(f"Alert suppressed (duplicate): {getattr(alert, 'alert_id', 'unknown')}")
+                return DetectResult(
+                    detect_id=f"dup-{getattr(alert, 'alert_id', 'unknown')}",
+                    timestamp=datetime.now(timezone.utc).isoformat(),
+                    source="alert_duplicate",
+                )
+            except Exception as e:
+                logger.warning(f"AlertIngressService.process failed, falling back to run_detection: {e}")
+
+        # Fallback: run standard detection cycle
+        return await self.run_detection(source="alarm_trigger")
 
     async def on_anomaly_detected(self, result: DetectResult):
         """

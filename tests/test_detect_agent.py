@@ -161,6 +161,8 @@ class TestDetectAgent:
         a._collecting = asyncio.Lock()
         a._latest = None
         a._cache = {}
+        a._skill_tools = []
+        a._skill_prompt = ""
         os.makedirs(DETECT_CACHE_DIR, exist_ok=True)
         return a
 
@@ -294,6 +296,8 @@ class TestConcurrency:
         agent._collecting = asyncio.Lock()
         agent._latest = None
         agent._cache = {}
+        agent._skill_tools = []
+        agent._skill_prompt = ""
         os.makedirs(DETECT_CACHE_DIR, exist_ok=True)
 
         call_order = []
