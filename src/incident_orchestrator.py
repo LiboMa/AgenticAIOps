@@ -414,6 +414,10 @@ class IncidentOrchestrator:
             if incident.status == IncidentStatus.COMPLETED and matched_sops:
                 self._auto_feedback(incident, rca_result, matched_sops)
             
+            # ── Stage 6: Autonomous Learning Loops (ADR-009 §10) ─
+            if incident.status == IncidentStatus.COMPLETED:
+                await self._autonomous_learning(incident, rca_result)
+            
             # ── Persist incident record ───────────────────────────
             self._persist_incident(incident)
             
@@ -587,6 +591,63 @@ class IncidentOrchestrator:
         except Exception as e:
             logger.warning(f"Failed to learn from incident: {e}")
     
+    async def _autonomous_learning(self, incident: IncidentRecord, rca_result):
+        """Stage 6: Post-RCA autonomous learning loops (ADR-009 §10).
+
+        6a: Knowledge Flywheel — CaseStudy auto-capture (no review needed)
+        6b: SOPAutoWriter — generate/update SOP via Harness (needs review)
+        6c: SkillGapDetector — detect and generate new Skills (needs review)
+
+        Stage 6 failures MUST NOT affect Stages 1-5 (defensive isolation).
+        """
+        resolution_log = getattr(incident, "resolution_log", [])
+        rca_dict = rca_result.to_dict() if hasattr(rca_result, "to_dict") else {}
+
+        # 6a: Knowledge Flywheel (auto, no review)
+        try:
+            from src.knowledge.flywheel import KnowledgeFlywheel
+            flywheel = KnowledgeFlywheel()
+            await flywheel.capture(rca_result, incident)
+            logger.info(f"[{incident.incident_id}] Stage 6a: CaseStudy captured")
+        except Exception as e:
+            logger.warning(f"[{incident.incident_id}] Stage 6a (Flywheel) failed: {e}")
+
+        # 6b: SOP auto-writer (Harness + review gate)
+        try:
+            from src.sop.auto_writer import SOPAutoWriter, SOPDeduplicator
+            dedup = SOPDeduplicator()
+            writer = SOPAutoWriter(deduplicator=dedup)
+            sop_draft = await writer.evaluate_and_write(
+                incident, rca_dict, resolution_log
+            )
+            if sop_draft:
+                logger.info(
+                    f"[{incident.incident_id}] Stage 6b: SOP draft generated — "
+                    f"{sop_draft.sop_id} ({sop_draft.status})"
+                )
+        except Exception as e:
+            logger.warning(f"[{incident.incident_id}] Stage 6b (SOPAutoWriter) failed: {e}")
+
+        # 6c: Skills self-bootstrap (Harness + review gate)
+        try:
+            from src.skills.iteration import SkillGapDetector, SkillIterationGuard
+            detector = SkillGapDetector()
+            guard = SkillIterationGuard()
+            gap = detector.analyze_incident(incident, rca_dict, resolution_log)
+            if gap and guard.should_iterate(gap):
+                guard.record_iteration(gap)
+                logger.info(
+                    f"[{incident.incident_id}] Stage 6c: Skill gap detected — "
+                    f"{gap.gap_type} ({gap.suggested_skill_domain})"
+                )
+                # Harness invocation deferred to Phase 10 E2E wiring
+            elif gap:
+                logger.debug(
+                    f"[{incident.incident_id}] Stage 6c: Skill gap suppressed (dedup)"
+                )
+        except Exception as e:
+            logger.warning(f"[{incident.incident_id}] Stage 6c (SkillGapDetector) failed: {e}")
+
     def _persist_incident(self, incident: IncidentRecord):
         """Persist incident record to local JSON file."""
         try:

@@ -52,8 +52,8 @@ class GrafanaAlertParser(AlertParser):
                 title = "Grafana Alert"
                 severity = "medium"
 
-            # Extract dashboard link
-            link_match = re.search(r'(https?://\S+grafana\S*)', message)
+            # Extract dashboard link (strip Slack angle brackets <url>)
+            link_match = re.search(r'(https?://[^\s<>]+grafana[^\s<>]*)', message)
             tags = {}
             if link_match:
                 tags["dashboard_url"] = link_match.group(1)
