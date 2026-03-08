@@ -449,10 +449,9 @@ class TestStage6RegressionSafety:
             "symptoms": ["test"],
         }
 
-        # CURRENT BEHAVIOR: exception propagates (BUG)
-        # EXPECTED: should catch and fall back to new_pattern trigger
-        with pytest.raises(RuntimeError, match="KB connection lost"):
-            await writer.evaluate_and_write(incident, rca_result, ["step1"])
+        # BUG FIXED: exception is now caught and falls back to new_pattern trigger
+        result = await writer.evaluate_and_write(incident, rca_result, ["step1"])
+        # Should not raise; deduplicator failure is handled gracefully
 
     def test_skill_validator_never_raises(self):
         """SkillValidator.validate() returns result, never raises."""

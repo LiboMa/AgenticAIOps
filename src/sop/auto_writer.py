@@ -222,7 +222,11 @@ based on the following incident and RCA results.
         incident_id = getattr(incident, "incident_id", str(incident))
 
         # 1. Check for existing similar SOP
-        existing_sop = await self.deduplicator.find_similar(root_cause, service)
+        try:
+            existing_sop = await self.deduplicator.find_similar(root_cause, service)
+        except Exception as e:
+            logger.warning("Deduplicator failed, treating as new_pattern: %s", e)
+            existing_sop = None
 
         # 2. Evaluate trigger
         trigger = self.evaluate_trigger(existing_sop, rca_result, resolution_log)
