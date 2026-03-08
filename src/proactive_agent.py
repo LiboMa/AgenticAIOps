@@ -407,8 +407,8 @@ class ProactiveAgentSystem:
             # even when wrapped in run_in_executor (boto3 default timeouts are
             # too long). Heartbeat should detect & report only; incident
             # pipeline should be triggered explicitly via API.
-            # TODO: Re-enable after adding boto3 Config(connect_timeout=10,
-            #       read_timeout=30) to Bedrock client in rca_inference.py.
+            # Timeout config added to Bedrock client in rca_inference.py.
+            # TODO: Re-enable auto-trigger and verify event loop is not blocked.
             #
             # if self._last_detect_result is not None:
             #     try:

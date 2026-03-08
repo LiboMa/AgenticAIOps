@@ -192,10 +192,16 @@ class RCAInferenceEngine:
         """Lazy-init Bedrock client."""
         if self._bedrock_client is None:
             import boto3
+            from botocore.config import Config
             from src.config import AWS_REGION
             self._bedrock_client = boto3.client(
                 'bedrock-runtime',
-                region_name=AWS_REGION  # ap-southeast-1 (models available)
+                region_name=AWS_REGION,  # ap-southeast-1 (models available)
+                config=Config(
+                    connect_timeout=10,
+                    read_timeout=30,
+                    retries={"max_attempts": 2},
+                ),
             )
         return self._bedrock_client
     
