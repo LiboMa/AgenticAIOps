@@ -377,7 +377,7 @@ class SkillGapDetector:
     # 触发场景
     TRIGGERS = {
         "novel_tool_usage": "SRE 修复过程中用了 Skills 未覆盖的命令/API",
-        "detection_miss":   "RCA 发现告警漏报 (false negative)",
+        "detection_miss":   "RCA 发现告警漏报 (false negative) — 判定: rca_result.was_alert_triggered == False",
         "repeated_manual":  "同类告警 ≥3 次仍需手动处理 (无匹配 Skill)",
         "low_confidence":   "RCA confidence < 0.5 且找不到合适 Skill",
     }
@@ -506,6 +506,7 @@ class SkillSpecBuilder:
             output_dir=f"src/skills/{gap.suggested_skill_domain}/",
             expected_files=["SKILL.md", "tools.py", f"tests/test_{gap.suggested_skill_domain}.py"],
             timeout_seconds=300,
+            max_retries=3,  # Researcher review #3: fail → 调整 prompt retry → 仍 fail → escalate
         )
 ```
 
@@ -693,6 +694,10 @@ class SOPDocument(BaseModel):
     updated_from_incidents: list[str] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
+    
+    # 版本管理 (Researcher review #1)
+    version: str = "1.0.0"                    # semver, Harness 更新时 bump minor
+    previous_versions: list[str] = Field(default_factory=list)  # S3 key history for rollback
     
     # S3 存储路径 (Researcher 建议)
     @property
@@ -928,6 +933,8 @@ Phase 7 // Phase 8 可双路并行。
 ## 13. 安全约束 (补充 §5)
 
 8. Harness 生成的 tools.py 在沙箱中 dry-run，不直接在生产环境执行
+   - Phase 1 沙箱: subprocess + tempdir, env 剥离敏感变量, timeout=10s, 只验证 import+签名
+   - Phase 2 沙箱: 容器化 (EKS Pod, readOnlyRootFilesystem, 禁止出站网络)
 9. 新 Skill 默认 `safety_tier: T0_READONLY`，需人工批准才能提升到 T1+
 10. Harness 不可修改 immutable files: `_security.py`, `SecurityFilter`, `approval_token.py`
 11. SOP 默认 `status: draft`，不自动执行，需人工确认后升级为 `active`
