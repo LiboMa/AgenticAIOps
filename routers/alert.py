@@ -7,6 +7,17 @@ from fastapi import APIRouter, Query
 
 router = APIRouter(prefix="/api/alert", tags=["alert"])
 
+# Singleton — avoid re-creating on every request (history would be lost)
+_svc = None
+
+
+def _get_svc():
+    global _svc
+    if _svc is None:
+        from src.alert.ingress import AlertIngressService
+        _svc = AlertIngressService()
+    return _svc
+
 
 @router.get("/feed")
 async def get_alert_feed(
@@ -18,10 +29,7 @@ async def get_alert_feed(
     Returns list of parsed alerts, newest first.
     """
     try:
-        from src.alert.ingress import AlertIngressService
-
-        svc = AlertIngressService()
-        # Get recent alerts from the service's history
+        svc = _get_svc()
         alerts = list(getattr(svc, "_history", []))
         if provider:
             alerts = [a for a in alerts if a.get("provider") == provider]
@@ -36,9 +44,7 @@ async def get_alert_feed(
 async def get_alert_stats():
     """Return alert parser statistics — counts by provider and severity."""
     try:
-        from src.alert.ingress import AlertIngressService
-
-        svc = AlertIngressService()
+        svc = _get_svc()
         history = list(getattr(svc, "_history", []))
 
         by_provider = {}
