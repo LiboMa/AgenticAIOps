@@ -1,7 +1,7 @@
 # AgenticAIOps — 系统架构文档
 
-**版本:** v3.2  
-**更新日期:** 2026-03-06  
+**版本:** v3.3  
+**更新日期:** 2026-03-08  
 **维护者:** AgenticAIOps Team  
 
 ---
@@ -195,7 +195,44 @@ ProactiveAgent (定时巡检)          CloudWatch Alarm (事件触发)
 - **T2 (Risky-Write)**: 风险写操作，需审批
 - **T3 (Dangerous)**: 危险操作，需 HMAC approval_token 验证
 
-### 3.10 其他
+### 3.10 Alert Ingress 模块 (多源告警接入)
+
+| 模块 | 文件 | 行数 | 功能 |
+|------|------|------|------|
+| **Alert Models** | `src/alert/models.py` | ~106 | 标准化告警数据模型 |
+| **Alert Ingress** | `src/alert/ingress.py` | ~131 | 多源告警接入路由 + 归一化 |
+| **Parser Base** | `src/alert/parsers/base.py` | ~47 | 告警解析器基类 |
+| **CloudWatch Parser** | `src/alert/parsers/cloudwatch.py` | ~147 | CloudWatch Alarm 告警解析 |
+| **Datadog Parser** | `src/alert/parsers/datadog.py` | ~79 | Datadog Webhook 告警解析 |
+| **Grafana Parser** | `src/alert/parsers/grafana.py` | ~74 | Grafana Alert 告警解析 |
+| **PagerDuty Parser** | `src/alert/parsers/pagerduty.py` | ~87 | PagerDuty 告警解析 |
+| **Generic Parser** | `src/alert/parsers/generic.py` | ~87 | 通用告警解析器 (fallback) |
+
+### 3.11 Knowledge Flywheel 模块 (知识飞轮)
+
+| 模块 | 文件 | 行数 | 功能 |
+|------|------|------|------|
+| **Flywheel** | `src/knowledge/flywheel.py` | ~246 | 知识飞轮核心引擎 (Pattern→Index→Feedback 闭环) |
+| **Case Study** | `src/knowledge/case_study.py` | ~95 | 案例沉淀 + 结构化存储 |
+| **Vector Store** | `src/knowledge/vector_store.py` | ~204 | 向量存储抽象层 (Bedrock Titan Embeddings) |
+| **Search** | `src/knowledge/search.py` | ~150 | 统一知识检索 (关键词 + 向量 + 混合) |
+
+### 3.12 SOP AutoWriter (SOP 自动生成)
+
+| 模块 | 文件 | 行数 | 功能 |
+|------|------|------|------|
+| **SOPAutoWriter** | `src/sop/auto_writer.py` | ~304 | 基于 RCA 结果自动生成 SOP (LLM 辅助) + 去重 + 评审 |
+
+### 3.13 Skills Iteration 模块 (能力自主进化)
+
+| 模块 | 文件 | 行数 | 功能 |
+|------|------|------|------|
+| **SkillGapDetector** | `src/skills/iteration/gap_detector.py` | ~203 | 技能缺口检测 (基于事件反馈分析) |
+| **SkillValidator** | `src/skills/iteration/validator.py` | ~251 | 新技能验证 (沙箱测试 + 安全审查) |
+| **SpecBuilder** | `src/skills/iteration/spec_builder.py` | ~142 | 技能规格自动构建器 |
+| **Guard** | `src/skills/iteration/guard.py` | ~80 | 技能迭代护栏 (频率限制 + 变更审批) |
+
+### 3.14 其他
 
 | 模块 | 文件 | 行数 | 功能 |
 |------|------|------|------|
@@ -288,12 +325,25 @@ agentic-aiops-mvp/
 │   │   └── topology/          # VPC/Region/K8s 拓扑分析 (NetworkX)
 │   ├── chaos/                 # 混沌实验 Lab (5 种场景)
 │   ├── health_issue/          # HealthIssue 7 状态生命周期
+│   ├── alert/                 # 多源告警接入
+│   │   ├── ingress.py         # 告警路由 + 归一化
+│   │   ├── models.py          # 标准化告警模型
+│   │   └── parsers/           # 解析器 (CloudWatch/Datadog/Grafana/PagerDuty/Generic)
+│   ├── knowledge/             # 知识飞轮
+│   │   ├── flywheel.py        # 闭环学习引擎
+│   │   ├── case_study.py      # 案例沉淀
+│   │   ├── vector_store.py    # 向量存储抽象层
+│   │   └── search.py          # 统一知识检索
+│   ├── sop/                   # SOP 子系统
+│   │   └── auto_writer.py     # SOP 自动生成 (LLM 辅助)
 │   ├── skills/                # Skills Framework (8 skills, 103 tools)
 │   │   ├── __init__.py        # SkillRegistry
 │   │   ├── _models.py         # SecurityTier + SkillManifest
 │   │   ├── _security.py       # @secure_tool 装饰器
 │   │   ├── _executor.py       # 安全执行器
 │   │   ├── agent_binding.py   # Agent→Skill 绑定
+│   │   ├── skill_bridge.py    # Architect SkillBridge
+│   │   ├── iteration/         # 能力自主进化 (GapDetector/Validator/SpecBuilder/Guard)
 │   │   ├── kubernetes/        # K8s 工具 + 安全策略
 │   │   ├── aws_general/       # AWS 通用工具 (30 @tools)
 │   │   ├── monitoring/        # 监控工具
@@ -312,7 +362,7 @@ agentic-aiops-mvp/
 │   └── rca_patterns.yaml      # Pattern 规则 YAML
 ├── agents/                    # Agent manifests (5 roles)
 ├── dashboard/                 # React 前端 (AppV2.jsx, LobeChat 风格)
-├── tests/                     # 测试 (2,600+ cases, 76% 覆盖率)
+├── tests/                     # 测试 (3,135 cases, 87% 覆盖率)
 └── docs/                      # 文档
     ├── ARCHITECTURE.md        # 本文件 (唯一架构文档)
     └── designs/               # 设计文档
