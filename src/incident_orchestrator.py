@@ -1,0 +1,731 @@
+"""
+Incident Orchestrator — Step 4 Closed-Loop Integration
+
+Ties together Step 1 (Data Collection) → Step 2 (RCA Inference) → 
+Step 3 (Safety Layer) → SOP Execution into a single automated pipeline.
+
+Flow:
+  Alert/Trigger → Collect → Analyze → Match SOP → Safety Check → Execute → Learn
+       ↑                                                              │
+       └─────────────── Feedback Loop ────────────────────────────────┘
+
+Trigger types:
+  - CloudWatch Alarm (auto)
+  - Anomaly Detection (auto)
+  - Health Event (auto)
+  - Manual chat command (user)
+
+Design ref: docs/designs/SOP_RCA_ENHANCEMENT_DESIGN.md
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import time
+import uuid
+from datetime import datetime, timezone
+from typing import Optional, Dict, Any, List, TYPE_CHECKING
+from dataclasses import dataclass, field, asdict
+from enum import Enum
+
+if TYPE_CHECKING:
+    from src.detect_agent import DetectResult
+
+logger = logging.getLogger(__name__)
+
+
+class TriggerType(Enum):
+    ALARM = "alarm"
+    ANOMALY = "anomaly"
+    HEALTH_EVENT = "health_event"
+    MANUAL = "manual"
+    PROACTIVE = "proactive"
+    DETECT_AGENT = "detect_agent"
+
+
+class IncidentStatus(Enum):
+    TRIGGERED = "triggered"
+    COLLECTING = "collecting"
+    ANALYZING = "analyzing"
+    SOP_MATCHED = "sop_matched"
+    SAFETY_CHECK = "safety_check"
+    EXECUTING = "executing"
+    WAITING_APPROVAL = "waiting_approval"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+@dataclass
+class IncidentRecord:
+    """Full lifecycle record of an incident through the pipeline."""
+    incident_id: str
+    trigger_type: TriggerType
+    trigger_data: Dict[str, Any]
+    region: str
+    status: IncidentStatus = IncidentStatus.TRIGGERED
+    
+    # Pipeline results
+    collection_summary: Optional[Dict[str, Any]] = None
+    rca_result: Optional[Dict[str, Any]] = None
+    matched_sops: Optional[List[Dict[str, Any]]] = None
+    safety_check: Optional[Dict[str, Any]] = None
+    execution_result: Optional[Dict[str, Any]] = None
+    
+    # Timing
+    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    completed_at: Optional[str] = None
+    duration_ms: int = 0
+    stage_timings: Dict[str, int] = field(default_factory=dict)
+    
+    # Errors
+    error: Optional[str] = None
+    
+    def to_dict(self) -> Dict[str, Any]:
+        d = asdict(self)
+        d['trigger_type'] = self.trigger_type.value
+        d['status'] = self.status.value
+        return d
+    
+    def to_markdown(self) -> str:
+        """Generate markdown incident report."""
+        status_icon = {
+            IncidentStatus.TRIGGERED: "🔔",
+            IncidentStatus.COLLECTING: "📡",
+            IncidentStatus.ANALYZING: "🧠",
+            IncidentStatus.SOP_MATCHED: "🔍",
+            IncidentStatus.SAFETY_CHECK: "🛡️",
+            IncidentStatus.EXECUTING: "⚡",
+            IncidentStatus.WAITING_APPROVAL: "🔐",
+            IncidentStatus.COMPLETED: "✅",
+            IncidentStatus.FAILED: "❌",
+        }.get(self.status, "❓")
+        
+        md = f"""## {status_icon} 事件 `{self.incident_id[:12]}`
+
+| 属性 | 值 |
+|------|-----|
+| 触发类型 | {self.trigger_type.value} |
+| 状态 | {self.status.value} |
+| 区域 | {self.region} |
+| 总耗时 | {self.duration_ms}ms |
+| 时间 | {self.created_at} |
+"""
+        # Stage timings
+        if self.stage_timings:
+            md += "\n### ⏱️ 各阶段耗时\n\n"
+            md += "| 阶段 | 耗时 |\n|------|------|\n"
+            for stage, ms in self.stage_timings.items():
+                md += f"| {stage} | {ms}ms |\n"
+        
+        # RCA Result
+        if self.rca_result:
+            rca = self.rca_result
+            sev = rca.get('severity', 'unknown')
+            sev_icon = '🔴' if sev == 'high' else '🟡' if sev == 'medium' else '🟢'
+            md += f"\n### 🔍 根因分析\n\n"
+            md += f"**根因:** {rca.get('root_cause', 'N/A')}\n"
+            md += f"**严重性:** {sev_icon} {sev.upper()}\n"
+            md += f"**置信度:** {rca.get('confidence', 0):.0%}\n"
+            md += f"**模型:** `{rca.get('pattern_id', 'N/A')}`\n"
+            
+            evidence = rca.get('evidence', [])
+            if evidence:
+                md += "\n**证据:**\n"
+                for e in evidence[:5]:
+                    md += f"- {e}\n"
+        
+        # SOP Match
+        if self.matched_sops:
+            md += "\n### 🛠️ 推荐 SOP\n\n"
+            md += "| SOP | 名称 | 风险 | 匹配度 |\n|-----|------|------|--------|\n"
+            for sop in self.matched_sops[:3]:
+                md += f"| `{sop['sop_id']}` | {sop['name']} | {sop.get('risk_level', '?')} | {sop['match_confidence']:.0%} |\n"
+        
+        # Safety Check
+        if self.safety_check:
+            sc = self.safety_check
+            md += f"\n### 🛡️ 安全检查\n\n"
+            md += f"**风险等级:** {sc.get('risk_level', '?')}\n"
+            md += f"**执行模式:** {sc.get('execution_mode', '?')}\n"
+            md += f"**通过:** {'✅' if sc.get('passed') else '❌'}\n"
+        
+        # Execution Result
+        if self.execution_result:
+            ex = self.execution_result
+            md += f"\n### ⚡ 执行结果\n\n"
+            md += f"**SOP:** `{ex.get('sop_id', '?')}`\n"
+            md += f"**结果:** {'✅ 成功' if ex.get('success') else '❌ 失败'}\n"
+            if ex.get('message'):
+                md += f"**详情:** {ex['message']}\n"
+        
+        # Error
+        if self.error:
+            md += f"\n### ❌ 错误\n\n```\n{self.error}\n```\n"
+        
+        return md
+
+
+class IncidentOrchestrator:
+    """
+    Main orchestrator that connects all pipeline stages.
+    
+    Alert → Collect (Step 1) → Analyze (Step 2) → Safety (Step 3) → Execute → Learn
+    """
+    
+    def __init__(self, region: str = "ap-southeast-1"):
+        self.region = region
+        self._incidents: Dict[str, IncidentRecord] = {}
+    
+    async def handle_incident(
+        self,
+        trigger_type: str = "manual",
+        trigger_data: Dict[str, Any] = None,
+        services: List[str] = None,
+        auto_execute: bool = False,
+        dry_run: bool = False,
+        force: bool = False,
+        lookback_minutes: int = 15,
+        detect_result: Optional[DetectResult] = None,
+    ) -> IncidentRecord:
+        """
+        Full closed-loop incident handling pipeline.
+        
+        Args:
+            trigger_type: alarm/anomaly/health_event/manual
+            trigger_data: Raw trigger data
+            services: Service filter for data collection
+            auto_execute: Auto-execute matched SOPs
+            dry_run: Preview only
+            force: Override cooldowns
+            detect_result: Optional DetectResult from Detect Agent.
+                When provided (and fresh), Stage 1 (data collection) is
+                skipped, reusing the pre-collected CorrelatedEvent.
+                Rules:
+                  - manual trigger → always fresh collection (user expects live data)
+                  - stale detect_result → fallback to fresh collection
+                  - fresh detect_result + non-manual → reuse (skip Stage 1)
+            
+        Returns:
+            IncidentRecord with full pipeline results
+        """
+        incident_id = f"inc-{uuid.uuid4().hex[:12]}"
+        start_time = time.time()
+        
+        incident = IncidentRecord(
+            incident_id=incident_id,
+            trigger_type=TriggerType(trigger_type),
+            trigger_data=trigger_data or {},
+            region=self.region,
+        )
+        self._incidents[incident_id] = incident
+        
+        try:
+            # ── Stage 1: Data Collection ──────────────────────────
+            # Reuse DetectResult from Detect Agent when available + fresh.
+            # Manual triggers always get fresh data (R2).
+            # Stale results fall back to fresh collection (R1).
+            incident.status = IncidentStatus.COLLECTING
+            stage_start = time.time()
+            
+            # Determine whether to reuse cached detection data (R2)
+            from src.detect_agent import DetectResult as _DR
+            use_cached = (
+                isinstance(detect_result, _DR)
+                and not detect_result.is_stale
+                and trigger_type != "manual"  # R2: manual → always fresh
+                and detect_result.correlated_event is not None
+            )
+            
+            if use_cached:
+                # Reuse Detect Agent's pre-collected CorrelatedEvent
+                event = detect_result.correlated_event
+                logger.info(
+                    f"[{incident_id}] Reusing DetectResult {detect_result.detect_id} "
+                    f"({detect_result.freshness_label}, {detect_result.age_seconds:.0f}s old) "
+                    f"— skipping Stage 1 collection"
+                )
+                incident.collection_summary = {
+                    "collection_id": event.collection_id,
+                    "metrics": len(event.metrics),
+                    "alarms": len(event.alarms),
+                    "trail_events": len(event.trail_events),
+                    "anomalies": len(event.anomalies),
+                    "health_events": len(event.health_events),
+                    "duration_ms": event.duration_ms,
+                    "source": "detect_agent_reuse",
+                    "detect_id": detect_result.detect_id,
+                    "data_age_seconds": round(detect_result.age_seconds, 1),
+                }
+            else:
+                # Fresh collection — manual trigger, stale data, or no detect_result
+                if isinstance(detect_result, _DR) and detect_result.is_stale:
+                    logger.warning(
+                        f"[{incident_id}] DetectResult {detect_result.detect_id} is stale "
+                        f"({detect_result.age_seconds:.0f}s old), falling back to fresh collection"
+                    )
+                elif trigger_type == "manual" and detect_result is not None:
+                    logger.info(
+                        f"[{incident_id}] Manual trigger — ignoring cached DetectResult, "
+                        f"collecting fresh data"
+                    )
+                
+                from src.event_correlator import get_correlator
+                correlator = get_correlator(self.region)
+                
+                event = await correlator.collect(
+                    services=services,
+                    lookback_minutes=lookback_minutes,
+                )
+                
+                incident.collection_summary = {
+                    "collection_id": event.collection_id,
+                    "metrics": len(event.metrics),
+                    "alarms": len(event.alarms),
+                    "trail_events": len(event.trail_events),
+                    "anomalies": len(event.anomalies),
+                    "health_events": len(event.health_events),
+                    "duration_ms": event.duration_ms,
+                    "source": "fresh_collection",
+                }
+            
+            incident.stage_timings["collect"] = int((time.time() - stage_start) * 1000)
+            
+            # ── Stage 2: RCA Inference ────────────────────────────
+            incident.status = IncidentStatus.ANALYZING
+            stage_start = time.time()
+            
+            from src.rca_inference import get_rca_inference_engine
+            engine = get_rca_inference_engine()
+
+            # NEW: Extract topology propagation context for RCA prompt injection
+            _rca_topo_ctx = ""
+            if detect_result is not None:
+                _prop = getattr(detect_result, "propagation_result", None)
+                if isinstance(_prop, dict):
+                    _rca_topo_ctx = _prop.get("rca_context_block", "")
+            
+            rca_result = await engine.analyze(
+                event,
+                network_propagation_context=_rca_topo_ctx,
+            )
+            
+            incident.rca_result = rca_result.to_dict()
+            incident.stage_timings["analyze"] = int((time.time() - stage_start) * 1000)
+            
+            # ── Stage 3: SOP Matching ─────────────────────────────
+            incident.status = IncidentStatus.SOP_MATCHED
+            stage_start = time.time()
+            
+            from src.rca_sop_bridge import get_bridge
+            bridge = get_bridge()
+            
+            # Match SOPs using the bridge (pass pre-computed RCA result)
+            matched_sops = bridge.match_sops(rca_result)
+            
+            # Enrich with auto_execute policy
+            for sop in matched_sops:
+                sop_severity = sop.get('severity', 'medium')
+                sop['auto_execute'] = (
+                    sop_severity == 'low' and rca_result.confidence >= 0.8
+                )
+            incident.matched_sops = matched_sops
+            incident.stage_timings["sop_match"] = int((time.time() - stage_start) * 1000)
+            
+            # ── Stage 4: Safety Check ─────────────────────────────
+            if matched_sops:
+                incident.status = IncidentStatus.SAFETY_CHECK
+                stage_start = time.time()
+                
+                from src.sop_safety import get_safety_layer
+                safety = get_safety_layer()
+                
+                best_sop = matched_sops[0]
+                
+                # Extract resource IDs from RCA
+                # Prefer affected_resources from RCA, fallback to matched_symptoms
+                resource_ids = (
+                    getattr(rca_result, 'affected_resources', None)
+                    or getattr(rca_result, 'matched_symptoms', None)
+                    or []
+                )
+                
+                safety_result = safety.check(
+                    sop_id=best_sop['sop_id'],
+                    resource_ids=resource_ids,
+                    dry_run=dry_run,
+                    force=force,
+                    context={
+                        "confidence": rca_result.confidence,
+                        "severity": rca_result.severity.value if hasattr(rca_result.severity, 'value') else str(rca_result.severity),
+                        "incident_id": incident_id,
+                    },
+                )
+                
+                # Enrich matched SOPs with risk level
+                for sop in matched_sops:
+                    sop['risk_level'] = safety._classify_risk(sop['sop_id']).value
+                
+                incident.safety_check = safety_result.to_dict()
+                incident.stage_timings["safety_check"] = int((time.time() - stage_start) * 1000)
+                
+                # ── Stage 5: Execute or Wait ──────────────────────
+                if auto_execute and safety_result.passed and not dry_run:
+                    incident.status = IncidentStatus.EXECUTING
+                    stage_start = time.time()
+                    
+                    exec_result = self._execute_sop(
+                        best_sop['sop_id'],
+                        rca_result,
+                        resource_ids,
+                        safety,
+                    )
+                    
+                    incident.execution_result = exec_result
+                    incident.stage_timings["execute"] = int((time.time() - stage_start) * 1000)
+                    
+                elif safety_result.execution_mode == "approval":
+                    incident.status = IncidentStatus.WAITING_APPROVAL
+                    
+                    # Create approval request
+                    approval = safety.request_approval(
+                        sop_id=best_sop['sop_id'],
+                        context={
+                            "incident_id": incident_id,
+                            "root_cause": rca_result.root_cause,
+                            "confidence": rca_result.confidence,
+                        },
+                    )
+                    incident.execution_result = {
+                        "action": "approval_requested",
+                        "approval_id": approval.approval_id,
+                        "sop_id": best_sop['sop_id'],
+                        "message": f"需要审批: {approval.approval_id}",
+                    }
+            
+            # ── Complete ──────────────────────────────────────────
+            if incident.status not in (IncidentStatus.WAITING_APPROVAL,):
+                incident.status = IncidentStatus.COMPLETED
+            
+            incident.completed_at = datetime.now(timezone.utc).isoformat()
+            incident.duration_ms = int((time.time() - start_time) * 1000)
+            
+            # ── Feedback Loop: Auto-learn from results ────────────
+            if incident.status == IncidentStatus.COMPLETED and matched_sops:
+                self._auto_feedback(incident, rca_result, matched_sops)
+            
+            # ── Stage 6: Autonomous Learning Loops (ADR-009 §10) ─
+            if incident.status == IncidentStatus.COMPLETED:
+                await self._autonomous_learning(incident, rca_result)
+            
+            # ── Persist incident record ───────────────────────────
+            self._persist_incident(incident)
+            
+            logger.info(
+                f"Incident {incident_id} completed: {incident.status.value} "
+                f"in {incident.duration_ms}ms"
+            )
+            
+            return incident
+            
+        except Exception as e:
+            incident.status = IncidentStatus.FAILED
+            incident.error = str(e)
+            incident.duration_ms = int((time.time() - start_time) * 1000)
+            logger.error(f"Incident {incident_id} failed: {e}")
+            return incident
+    
+    def _execute_sop(
+        self,
+        sop_id: str,
+        rca_result,
+        resource_ids: List[str],
+        safety,
+    ) -> Dict[str, Any]:
+        """Execute a SOP with safety recording."""
+        try:
+            from src.sop_system import get_sop_executor
+            
+            executor = get_sop_executor()
+            
+            # Create snapshot before execution
+            snapshot = safety.create_snapshot(
+                sop_id=sop_id,
+                resource_ids=resource_ids,
+                pre_state={"rca_severity": rca_result.severity.value if hasattr(rca_result.severity, 'value') else str(rca_result.severity)},
+            )
+            
+            # Execute
+            execution = executor.start_execution(
+                sop_id=sop_id,
+                triggered_by="incident_orchestrator",
+                context={
+                    "rca_pattern_id": rca_result.pattern_id,
+                    "root_cause": rca_result.root_cause,
+                    "snapshot_id": snapshot.snapshot_id,
+                },
+            )
+            
+            # Record execution in safety layer
+            safety.record_execution(sop_id, resource_ids)
+            
+            if execution:
+                return {
+                    "success": True,
+                    "sop_id": sop_id,
+                    "execution_id": execution.execution_id,
+                    "snapshot_id": snapshot.snapshot_id,
+                    "message": f"SOP {sop_id} 已启动",
+                }
+            else:
+                return {
+                    "success": False,
+                    "sop_id": sop_id,
+                    "message": "SOP executor returned None",
+                }
+        except Exception as e:
+            return {
+                "success": False,
+                "sop_id": sop_id,
+                "message": str(e),
+            }
+    
+    def _auto_feedback(self, incident: IncidentRecord, rca_result, matched_sops):
+        """Auto-generate feedback from completed incidents to strengthen patterns."""
+        try:
+            from src.rca_sop_bridge import get_bridge
+            bridge = get_bridge()
+            
+            pattern_id = rca_result.pattern_id
+            
+            # If execution happened and succeeded, submit positive feedback
+            if incident.execution_result and incident.execution_result.get('success'):
+                sop_id = incident.execution_result.get('sop_id', '')
+                bridge.submit_feedback(
+                    execution_id=incident.execution_result.get('execution_id', incident.incident_id),
+                    sop_id=sop_id,
+                    rca_pattern_id=pattern_id,
+                    success=True,
+                    root_cause_confirmed=rca_result.confidence >= 0.8,
+                    resolution_time_seconds=int(incident.duration_ms / 1000),
+                    notes=f"Auto-feedback from incident {incident.incident_id}",
+                )
+                logger.info(f"Auto-feedback: {pattern_id} → {sop_id} (success)")
+            
+            # Even without execution, strengthen the pattern↔SOP mapping
+            # if high confidence and SOPs were matched
+            elif rca_result.confidence >= 0.85 and matched_sops:
+                best_sop = matched_sops[0]
+                bridge.submit_feedback(
+                    execution_id=incident.incident_id,
+                    sop_id=best_sop['sop_id'],
+                    rca_pattern_id=pattern_id,
+                    success=True,  # High-confidence match = implicit positive signal
+                    root_cause_confirmed=False,
+                    notes=f"High-confidence match ({rca_result.confidence:.0%}), no execution",
+                )
+                logger.info(f"Auto-feedback (match only): {pattern_id} → {best_sop['sop_id']}")
+            
+            # NEW: Persist learned pattern to S3 + OpenSearch via KnowledgeSearchService
+            self._learn_from_incident(incident, rca_result)
+            
+        except Exception as e:
+            logger.warning(f"Auto-feedback failed: {e}")
+    
+    def _learn_from_incident(self, incident: IncidentRecord, rca_result):
+        """
+        Learn from completed incident — persist new pattern to S3 + OpenSearch.
+        
+        Closes the feedback loop: RCA results are stored as patterns
+        for future detection cycles to reference.
+        """
+        try:
+            # Only learn from high-confidence, non-healthy results
+            if rca_result.confidence < 0.7 or rca_result.pattern_id == "healthy":
+                return
+            
+            from src.s3_knowledge_base import AnomalyPattern
+            from src.knowledge_search import get_knowledge_search
+            
+            # Determine severity string
+            severity_str = "medium"
+            if hasattr(rca_result.severity, 'value'):
+                severity_str = rca_result.severity.value
+            elif isinstance(rca_result.severity, str):
+                severity_str = rca_result.severity
+            
+            # Build pattern from RCA result
+            pattern = AnomalyPattern(
+                pattern_id=f"learned-{incident.incident_id}",
+                title=rca_result.root_cause[:100] if rca_result.root_cause else "Unknown",
+                description=rca_result.root_cause or "",
+                resource_type=getattr(rca_result, 'affected_service', '') or
+                              (rca_result.matched_symptoms[0] if rca_result.matched_symptoms else "unknown"),
+                severity=severity_str,
+                symptoms=[str(s) for s in (rca_result.matched_symptoms or [])[:10]],
+                root_cause=rca_result.root_cause or "",
+                remediation=getattr(rca_result.remediation, 'suggestion', '') if rca_result.remediation else "",
+                tags=[f"learned", f"confidence-{rca_result.confidence:.0%}", incident.incident_id[:12]],
+                confidence=rca_result.confidence,
+                source="auto_learned",
+            )
+            
+            ks = get_knowledge_search()
+            # Use asyncio to run the async index method
+            import asyncio
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # Schedule as a task if we're already in an async context
+                    asyncio.ensure_future(ks.index(pattern, quality_score=rca_result.confidence))
+                else:
+                    loop.run_until_complete(ks.index(pattern, quality_score=rca_result.confidence))
+            except RuntimeError:
+                # No event loop — create one
+                asyncio.run(ks.index(pattern, quality_score=rca_result.confidence))
+            
+            logger.info(
+                f"Learned pattern from incident {incident.incident_id}: "
+                f"{pattern.title[:60]} (confidence: {rca_result.confidence:.0%})"
+            )
+        except Exception as e:
+            logger.warning(f"Failed to learn from incident: {e}")
+    
+    async def _autonomous_learning(self, incident: IncidentRecord, rca_result):
+        """Stage 6: Post-RCA autonomous learning loops (ADR-009 §10).
+
+        6a: Knowledge Flywheel — CaseStudy auto-capture (no review needed)
+        6b: SOPAutoWriter — generate/update SOP via Harness (needs review)
+        6c: SkillGapDetector — detect and generate new Skills (needs review)
+
+        Stage 6 failures MUST NOT affect Stages 1-5 (defensive isolation).
+        """
+        resolution_log = getattr(incident, "resolution_log", [])
+        rca_dict = rca_result.to_dict() if hasattr(rca_result, "to_dict") else {}
+
+        # 6a: Knowledge Flywheel (auto, no review)
+        try:
+            from src.knowledge.flywheel import KnowledgeFlywheel
+            flywheel = KnowledgeFlywheel()
+            await flywheel.capture(rca_result, incident)
+            logger.info(f"[{incident.incident_id}] Stage 6a: CaseStudy captured")
+        except Exception as e:
+            logger.warning(f"[{incident.incident_id}] Stage 6a (Flywheel) failed: {e}")
+
+        # 6b: SOP auto-writer (Harness + review gate)
+        try:
+            from src.sop.auto_writer import SOPAutoWriter, SOPDeduplicator
+            dedup = SOPDeduplicator()
+            writer = SOPAutoWriter(deduplicator=dedup)
+            sop_draft = await writer.evaluate_and_write(
+                incident, rca_dict, resolution_log
+            )
+            if sop_draft:
+                logger.info(
+                    f"[{incident.incident_id}] Stage 6b: SOP draft generated — "
+                    f"{sop_draft.sop_id} ({sop_draft.status})"
+                )
+        except Exception as e:
+            logger.warning(f"[{incident.incident_id}] Stage 6b (SOPAutoWriter) failed: {e}")
+
+        # 6c: Skills self-bootstrap (Harness + review gate)
+        try:
+            from src.skills.iteration import SkillGapDetector, SkillIterationGuard
+            detector = SkillGapDetector()
+            guard = SkillIterationGuard()
+            gap = detector.analyze_incident(incident, rca_dict, resolution_log)
+            if gap and guard.should_iterate(gap):
+                guard.record_iteration(gap)
+                logger.info(
+                    f"[{incident.incident_id}] Stage 6c: Skill gap detected — "
+                    f"{gap.gap_type} ({gap.suggested_skill_domain})"
+                )
+                # Harness invocation deferred to Phase 10 E2E wiring
+            elif gap:
+                logger.debug(
+                    f"[{incident.incident_id}] Stage 6c: Skill gap suppressed (dedup)"
+                )
+        except Exception as e:
+            logger.warning(f"[{incident.incident_id}] Stage 6c (SkillGapDetector) failed: {e}")
+
+    def _persist_incident(self, incident: IncidentRecord):
+        """Persist incident record to local JSON file."""
+        try:
+            import json
+            import os
+            
+            persist_dir = os.path.join(os.path.dirname(__file__), '..', 'data', 'incidents')
+            os.makedirs(persist_dir, exist_ok=True)
+            
+            filepath = os.path.join(persist_dir, f"{incident.incident_id}.json")
+            with open(filepath, 'w') as f:
+                json.dump(incident.to_dict(), f, indent=2, default=str)
+            
+            logger.info(f"Persisted incident {incident.incident_id} to {filepath}")
+        except Exception as e:
+            logger.warning(f"Failed to persist incident: {e}")
+    
+    def get_incident(self, incident_id: str) -> Optional[IncidentRecord]:
+        """Get an incident by ID."""
+        return self._incidents.get(incident_id)
+    
+    def list_incidents(self, limit: int = 20, status: str = None) -> List[Dict[str, Any]]:
+        """List recent incidents."""
+        incidents = list(self._incidents.values())
+        
+        if status:
+            incidents = [i for i in incidents if i.status.value == status]
+        
+        incidents.sort(key=lambda x: x.created_at, reverse=True)
+        return [i.to_dict() for i in incidents[:limit]]
+    
+    def get_stats(self) -> Dict[str, Any]:
+        """Get orchestrator statistics."""
+        incidents = list(self._incidents.values())
+        
+        by_status = {}
+        for i in incidents:
+            by_status[i.status.value] = by_status.get(i.status.value, 0) + 1
+        
+        completed = [i for i in incidents if i.status == IncidentStatus.COMPLETED]
+        avg_duration = (
+            sum(i.duration_ms for i in completed) / len(completed)
+            if completed else 0
+        )
+        
+        # Average stage timings
+        avg_stages = {}
+        for i in completed:
+            for stage, ms in i.stage_timings.items():
+                if stage not in avg_stages:
+                    avg_stages[stage] = []
+                avg_stages[stage].append(ms)
+        
+        avg_stages = {
+            stage: int(sum(times) / len(times))
+            for stage, times in avg_stages.items()
+        }
+        
+        return {
+            "total_incidents": len(incidents),
+            "by_status": by_status,
+            "avg_duration_ms": int(avg_duration),
+            "avg_stage_timings": avg_stages,
+            "target_ms": 25000,
+            "within_target": avg_duration <= 25000 if completed else True,
+        }
+
+
+# =============================================================================
+# Singleton
+# =============================================================================
+
+_orchestrator: Optional[IncidentOrchestrator] = None
+
+
+def get_orchestrator(region: str = "ap-southeast-1") -> IncidentOrchestrator:
+    """Get or create the incident orchestrator singleton."""
+    global _orchestrator
+    if _orchestrator is None:
+        _orchestrator = IncidentOrchestrator(region=region)
+    return _orchestrator

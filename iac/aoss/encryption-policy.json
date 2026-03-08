@@ -1,0 +1,11 @@
+{
+    "name": "agentic-aiops-kb-encryption",
+    "type": "encryption",
+    "policy": {
+        "Rules": [{
+            "ResourceType": "collection",
+            "Resource": ["collection/agentic-aiops-kb"]
+        }],
+        "AWSOwnedKey": true
+    }
+}

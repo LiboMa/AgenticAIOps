@@ -1,0 +1,13 @@
+author: ''
+config:
+  head_node_ssh: {}
+  regions:
+  - ap-southeast-1
+dependencies: []
+description: AWS ParallelCluster HPC management
+enabled: false
+homepage: ''
+icon: 🖧
+name: HPC Clusters
+type: hpc
+version: 1.0.0

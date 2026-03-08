@@ -1,0 +1,11 @@
+{
+    "name": "agentic-aiops-kb-network",
+    "type": "network",
+    "policy": [{
+        "Rules": [
+            {"ResourceType": "collection", "Resource": ["collection/agentic-aiops-kb"]},
+            {"ResourceType": "dashboard", "Resource": ["collection/agentic-aiops-kb"]}
+        ],
+        "AllowFromPublic": true
+    }]
+}

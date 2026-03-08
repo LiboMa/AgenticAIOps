@@ -1,0 +1,13 @@
+author: ''
+config:
+  auto_discover: true
+  regions:
+  - ap-southeast-1
+dependencies: []
+description: Amazon EKS multi-cluster management
+enabled: true
+homepage: ''
+icon: ☸️
+name: EKS Default
+type: eks
+version: 1.0.0

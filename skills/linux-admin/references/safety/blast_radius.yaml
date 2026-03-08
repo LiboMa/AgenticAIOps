@@ -1,0 +1,11 @@
+scope: single-host
+description: >
+  Linux admin operations affect the target host only.
+  Network changes (iptables, route) can affect reachability
+  of dependent services.
+high_impact:
+  - iptables: "Can block network traffic to/from the host"
+  - route: "Can break network routing"
+  - systemctl stop: "Can take down services"
+  - kill -9: "Forceful process termination, no cleanup"
+  - reboot: "Full host restart, all services affected"

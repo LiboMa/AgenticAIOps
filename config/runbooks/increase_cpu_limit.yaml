@@ -1,0 +1,89 @@
+# Runbook: Increase CPU Limit
+# Triggered by: cpu_throttling pattern
+
+id: "increase-cpu-limit"
+name: "Increase CPU Limit"
+description: "Increase container CPU limit when CPU throttling detected"
+
+triggers:
+  - pattern_id: "cpu-001"
+  - pattern_id: "cpu_throttling"
+
+preconditions:
+  - check: "resource_exists"
+    resource_type: "deployment"
+
+steps:
+  - id: "get-current-limits"
+    action: "get_resource_limits"
+    description: "获取当前 CPU 限制"
+    params:
+      resource_type: "deployment"
+      resource_name: "{{ resource_name }}"
+      namespace: "{{ namespace }}"
+    output: "current_limits"
+
+  - id: "calculate-new-limit"
+    action: "calculate"
+    description: "计算新的 CPU 限制 (增加 50%)"
+    params:
+      expression: "{{ current_limits.cpu }} * 1.5"
+      max_value: "2000m"
+    output: "new_cpu_limit"
+
+  - id: "patch-deployment"
+    action: "patch_resource"
+    description: "更新 Deployment CPU 限制"
+    params:
+      resource_type: "deployment"
+      resource_name: "{{ resource_name }}"
+      namespace: "{{ namespace }}"
+      patch:
+        spec:
+          template:
+            spec:
+              containers:
+                - name: "{{ container_name }}"
+                  resources:
+                    limits:
+                      cpu: "{{ new_cpu_limit }}"
+
+  - id: "wait-rollout"
+    action: "wait_rollout"
+    description: "等待 Rollout 完成"
+    params:
+      resource_type: "deployment"
+      resource_name: "{{ resource_name }}"
+      namespace: "{{ namespace }}"
+      timeout_seconds: 300
+
+  - id: "verify-health"
+    action: "verify_health"
+    description: "验证 Pod 状态正常"
+    params:
+      namespace: "{{ namespace }}"
+      label_selector: "app={{ resource_name }}"
+      timeout_seconds: 120
+
+rollback:
+  - id: "rollback-cpu"
+    action: "patch_resource"
+    description: "回滚 CPU 限制"
+    params:
+      resource_type: "deployment"
+      resource_name: "{{ resource_name }}"
+      namespace: "{{ namespace }}"
+      patch:
+        spec:
+          template:
+            spec:
+              containers:
+                - name: "{{ container_name }}"
+                  resources:
+                    limits:
+                      cpu: "{{ current_limits.cpu }}"
+
+notifications:
+  on_start: true
+  on_complete: true
+  on_failure: true

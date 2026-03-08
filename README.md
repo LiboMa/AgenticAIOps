@@ -1,103 +1,263 @@
-# AgenticAIOps
+# AgenticAIOps - AI-Powered Multi-Service Operations
 
-AI-powered operations assistant for Amazon EKS using Strands SDK and Amazon Bedrock.
+An intelligent AIOps agent for Amazon EKS, EC2, Lambda, and HPC, powered by AWS Bedrock and Strands SDK.
 
-## Features
+**基于 AIOpsLab 和 mABC 论文实现**
 
-- 🤖 **Strands SDK** - Modern agentic AI framework with `@tool` decorators
-- 🔧 **EKS Operations** - Cluster health, info, nodes, VPC configuration
-- ☁️ **Amazon Bedrock** - Claude models via APAC inference profiles
-- 🧪 **Tested** - 4/4 test scenarios passing
+---
 
-## Quick Start
-
-```bash
-# Create virtual environment
-python3 -m venv venv
-source venv/bin/activate
-
-# Install dependencies
-pip install strands-agents boto3
-
-# Configure AWS credentials
-aws configure
-
-# Run tests
-python3 test_strands.py
-
-# Interactive mode
-python3 strands_agent.py
-```
-
-## Architecture
+## 🏗️ Architecture
 
 ```
-┌─────────────────────────────────────────────────┐
-│  Strands Agent SDK                              │
-│  ├── @tool decorators for EKS operations        │
-│  ├── ReAct loop (built-in)                      │
-│  └── Bedrock model integration                  │
-└─────────────────────────────────────────────────┘
-                      ↓
-┌─────────────────────────────────────────────────┐
-│  Amazon Bedrock (APAC Claude 3 Haiku)           │
-│  ├── Natural language understanding             │
-│  └── Tool selection & response generation       │
-└─────────────────────────────────────────────────┘
-                      ↓
-┌─────────────────────────────────────────────────┐
-│  EKS Cluster (boto3 API)                        │
-│  ├── Cluster health & info                      │
-│  ├── Node groups & compute config               │
-│  └── VPC & networking                           │
-└─────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                    AgenticAIOps Architecture                    │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  ┌─────────────┐     ┌─────────────┐     ┌─────────────┐       │
+│  │   React     │     │  FastAPI    │     │   Strands   │       │
+│  │  Dashboard  │────▶│   Backend   │────▶│    Agent    │       │
+│  │  (Vite+MUI) │     │  (uvicorn)  │     │  (Bedrock)  │       │
+│  └─────────────┘     └─────────────┘     └─────────────┘       │
+│        :5173              :8000                 │               │
+│                                                 │               │
+│                    ┌────────────────────────────┴───────┐      │
+│                    │          ACI (Agent-Cloud Interface) ◀────┼──── NEW!
+│                    │  ┌─────────────────────────────────┐│      │
+│                    │  │ get_logs | get_metrics | kubectl ││     │
+│                    │  └─────────────────────────────────┘│      │
+│                    └───────────────────────────────────────┘    │
+│                                    │                           │
+│                    ┌───────────────┴───────────────┐          │
+│                    │      Plugin System             │          │
+│                    │  ┌─────┐ ┌─────┐ ┌──────┐ ┌─────┐ │      │
+│                    │  │ EKS │ │ EC2 │ │Lambda│ │ HPC │ │      │
+│                    │  │  ☸️ │ │ 🖥️ │ │  λ   │ │ 🖧  │ │      │
+│                    │  └─────┘ └─────┘ └──────┘ └─────┘ │      │
+│                    └───────────────────────────────────┘      │
+│                                    │                           │
+│                    ┌───────────────┴───────────────┐          │
+│                    │      Multi-Agent Voting (mABC) ◀──────────┼──── NEW!
+│                    │        (加权投票 + 共识检测)    │          │
+│                    └───────────────────────────────┘          │
+│                                    │                           │
+│                    ┌───────────────┴───────────────┐          │
+│                    │     EKS MCP Server (16 tools) │          │
+│                    │      + Prometheus + Grafana   │          │
+│                    └───────────────────────────────┘          │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-## Available Tools
+---
 
-| Tool | Description |
-|------|-------------|
-| `get_cluster_health` | Check cluster health status |
-| `get_cluster_info` | Get cluster version, endpoint, platform |
-| `get_nodes` | View compute/node configuration |
-| `get_vpc_config` | Check VPC and networking setup |
-| `list_nodegroups` | List managed node groups |
-| `get_addons` | List installed add-ons |
+## 📋 Development Progress
 
-## Example Usage
+### ✅ Completed Phases
+
+| Phase | Description | Status | Date |
+|-------|-------------|--------|------|
+| **Phase 1** | Plugin System | ✅ 完成 | 2026-02-01 |
+| **Phase 2** | Manifest/Schema | ✅ 完成 | 2026-02-01 |
+| **Phase 3** | ACI + Multi-Agent Voting | ✅ 完成 | 2026-02-02 |
+| **Phase 4** | 实际场景集成 | ✅ 完成 | 2026-02-02 |
+
+### 📝 Design Documents
+
+| Document | Description |
+|----------|-------------|
+| [ACI_DESIGN.md](docs/designs/ACI_DESIGN.md) | Agent-Cloud Interface 设计 |
+| [VOTING_DESIGN.md](docs/designs/VOTING_DESIGN.md) | Multi-Agent Voting 机制 (mABC) |
+| [PHASE4_SCENARIOS.md](docs/designs/PHASE4_SCENARIOS.md) | 故障注入场景设计 |
+| [FRONTEND_API_DESIGN.md](docs/designs/FRONTEND_API_DESIGN.md) | 前端 API 接口设计 |
+| [MULTI_CLUSTER_DESIGN.md](docs/designs/MULTI_CLUSTER_DESIGN.md) | 多集群架构设计 (Phase 5) |
+
+---
+
+## 🆕 New Features (Phase 3-4)
+
+### Agent-Cloud Interface (ACI)
+
+基于 **AIOpsLab 论文** 实现的统一 Agent-云环境接口。
 
 ```python
-from strands import Agent, tool
-from strands.models import BedrockModel
+from src.aci import AgentCloudInterface
 
-model = BedrockModel(
-    model_id="apac.anthropic.claude-3-haiku-20240307-v1:0",
-    region_name="ap-southeast-1"
+aci = AgentCloudInterface()
+
+# 获取 Pod 日志
+logs = aci.get_logs(namespace="default", severity="error")
+
+# 获取 Prometheus 指标
+metrics = aci.get_metrics(namespace="default", metric_type="cpu")
+
+# 获取 K8s 事件
+events = aci.get_events(namespace="default", type="Warning")
+
+# 安全执行 kubectl
+result = aci.kubectl(["get", "pods", "-n", "default"])
+```
+
+### Multi-Agent Voting (mABC)
+
+基于 **mABC 论文** 实现的区块链启发加权投票机制。
+
+```python
+from src.voting import MultiAgentVoting, TaskType
+
+voting = MultiAgentVoting()
+
+result = voting.vote(
+    task_type=TaskType.ANALYSIS,
+    query="Pod 为什么崩溃？",
+    agent_responses={
+        "architect": "内存溢出导致 OOM",
+        "developer": "应用内存泄漏",
+        "tester": "复现了 OOM 问题"
+    }
 )
 
-agent = Agent(model=model, tools=[get_cluster_health, get_cluster_info])
-response = agent("Check the health of my EKS cluster")
-print(response)
+print(result.final_answer)  # "oom"
+print(result.consensus)     # True
+print(result.confidence)    # 0.95
 ```
 
-## Sample Workloads
-
-Deploy sample applications for testing:
+### Fault Injection Scripts
 
 ```bash
-kubectl apply -f samples/onlineshop.yaml
-kubectl apply -f samples/bookstore.yaml
-kubectl apply -f samples/faulty-workloads.yaml  # For testing diagnostics
+# 注入 OOM 故障
+python scripts/fault_injection/inject_oom.py -n stress-test
+
+# 运行 Multi-Agent 诊断
+python scripts/diagnosis/run_diagnosis.py -n stress-test
+
+# 清理
+python scripts/fault_injection/inject_oom.py --cleanup
 ```
 
-## Roadmap
+---
 
-- [ ] Intent classification layer
-- [ ] Multi-agent voting (reduce hallucinations)
-- [ ] Operation sequence recommendations
-- [ ] Knowledge graph integration
-- [ ] AgentCore deployment
+## 🔌 Plugin System
 
-## License
+| Plugin | Icon | Description |
+|--------|------|-------------|
+| EKS | ☸️ | Multi-cluster Kubernetes management |
+| EC2 | 🖥️ | Instance monitoring and metrics |
+| Lambda | λ | Serverless function management |
+| HPC | 🖧 | ParallelCluster/Slurm integration |
 
-MIT
+---
+
+## 📦 Modules
+
+| Module | Description | Status |
+|--------|-------------|--------|
+| `src/aci/` | Agent-Cloud Interface | ✅ NEW |
+| `src/voting.py` | Multi-Agent Voting (mABC) | ✅ NEW |
+| `src/plugins/` | Plugin system (EKS, EC2, Lambda, HPC) | ✅ |
+| `src/tools/` | Prometheus + K8s tools | ✅ |
+| `src/intent_classifier.py` | Query intent classification | ✅ |
+| `scripts/fault_injection/` | 故障注入脚本 | ✅ NEW |
+| `scripts/diagnosis/` | 诊断运行器 | ✅ NEW |
+| `mcp_agent.py` | Strands Agent with AWS MCP Server | ✅ |
+| `api_server.py` | FastAPI backend (+ ACI endpoints) | ✅ |
+| `dashboard/` | React frontend (+ ACI Telemetry Tab) | ✅ |
+
+---
+
+## 🚀 Quick Start
+
+### Prerequisites
+- Python 3.10+
+- Node.js 18+
+- AWS CLI configured
+- kubectl configured for EKS cluster
+- AWS Bedrock access (Claude models)
+
+### Installation
+
+```bash
+# Clone repository
+git clone https://github.com/LiboMa/AgenticAIOps.git
+cd AgenticAIOps
+
+# Checkout MCP branch
+git checkout agent-mcp
+
+# Setup Python environment
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+
+# Setup React dashboard
+cd dashboard
+npm install
+cd ..
+```
+
+### Running the Services
+
+**1. Start Backend API**
+```bash
+source venv/bin/activate
+uvicorn api_server:app --host 0.0.0.0 --port 8000
+```
+
+**2. Start Frontend Dashboard**
+```bash
+cd dashboard
+npm run dev
+# Running on http://localhost:5173
+```
+
+**3. Access Grafana (Monitoring)**
+```bash
+kubectl port-forward svc/prometheus-grafana 3000:80 -n default
+# URL: http://localhost:3000
+# User: admin
+# Password: 6z752r5CxAKYdV5ef293bT7WvNIwFybQDKv2Uflt
+```
+
+---
+
+## 🧪 Testing
+
+```bash
+# 运行全量测试
+pytest tests/ -v
+
+# 当前测试覆盖
+# 99 passed, 2 skipped
+```
+
+| Test File | Tests | Status |
+|-----------|-------|--------|
+| test_aci.py | 14 | ✅ |
+| test_voting.py | 19 | ✅ |
+| test_plugins.py | 14 | ✅ |
+| test_mcp_integration.py | 14 | ✅ |
+| test_prometheus_integration.py | 14 | ✅ |
+| test_phase4_integration.py | 23 | ✅ |
+
+---
+
+## 📚 References
+
+- [AIOpsLab: A Holistic Framework for AIOps](https://arxiv.org/abs/2501.06706) - Microsoft Research
+- [mABC: Multi-Agent Blockchain-Inspired Collaboration](https://arxiv.org/abs/2404.12135)
+- [AWS EKS MCP Server](https://awslabs.github.io/mcp/)
+
+---
+
+## 👥 Team (Agentic SDLC)
+
+| Role | Agent |
+|------|-------|
+| 🎯 Orchestrator | cloud-mbot-worker-1 |
+| 📐 Architect | cloud-mbot-architect |
+| 💻 Developer | cloud-mbot-developer |
+| 🧪 Tester | cloud-mbot-tester |
+| 🔍 Reviewer | cloud-mbot-researcher-1 |
+
+---
+
+**Last Updated**: 2026-02-02  
+**Branch**: agent-mcp

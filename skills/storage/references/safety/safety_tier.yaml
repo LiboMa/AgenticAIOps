@@ -1,0 +1,9 @@
+tier: guarded
+requires_approval:
+  - delete_volume
+  - delete_snapshot
+  - force_detach_volume
+  - delete_s3_objects
+  - delete_efs
+  - umount_force
+deny_by_default: true

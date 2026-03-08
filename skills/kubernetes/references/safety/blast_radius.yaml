@@ -1,0 +1,43 @@
+# Blast radius definitions for dangerous K8s operations
+#
+# Each entry describes the potential impact scope of a dangerous operation.
+# Used by the approval flow to display impact warnings.
+
+drain:
+  scope: node
+  impact: |
+    All non-DaemonSet pods on the node will be evicted.
+    Workloads without PDB may experience downtime.
+  prerequisites:
+    - Check PodDisruptionBudgets exist for critical workloads
+    - Verify node is not the last healthy node in the cluster
+    - Confirm replacement capacity exists (ASG/node pool)
+  max_concurrent: 1
+
+delete:
+  scope: resource
+  impact: |
+    Resource will be permanently removed.
+    Dependent resources may become orphaned (check ownerReferences).
+  prerequisites:
+    - Verify resource is not referenced by other resources
+    - Check if resource has finalizers that may block deletion
+    - For StatefulSets: PVCs are NOT deleted automatically
+
+cordon:
+  scope: node
+  impact: |
+    No new pods will be scheduled on the node.
+    Existing pods continue running.
+  prerequisites:
+    - Verify sufficient capacity on remaining nodes
+  max_concurrent: 1
+
+taint:
+  scope: node
+  impact: |
+    Pods without matching tolerations will be evicted (NoExecute)
+    or not scheduled (NoSchedule).
+  prerequisites:
+    - Verify critical workloads have matching tolerations
+    - Check DaemonSet tolerations

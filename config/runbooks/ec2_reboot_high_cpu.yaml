@@ -1,0 +1,53 @@
+# Runbook: EC2 High CPU — Reboot Instance
+# Triggered by: ec2-high-cpu, high_cpu patterns
+
+id: "ec2-reboot-high-cpu"
+name: "EC2 High CPU — Reboot Instance"
+description: "Reboot EC2 instance when sustained high CPU detected"
+
+triggers:
+  - pattern_id: "ec2-high-cpu"
+  - pattern_id: "high_cpu"
+
+preconditions:
+  - check: "resource_exists"
+    resource_type: "ec2"
+
+steps:
+  - id: "describe-instance"
+    action: "ec2_describe"
+    description: "检查实例当前状态"
+    params:
+      instance_id: "{{ instance_id }}"
+    output: "instance_state"
+
+  - id: "check-alarms"
+    action: "cloudwatch_describe_alarms"
+    description: "检查 CloudWatch 告警"
+    params: {}
+
+  - id: "reboot-instance"
+    action: "ec2_reboot"
+    description: "重启 EC2 实例"
+    params:
+      instance_id: "{{ instance_id }}"
+    requires_approval: false
+
+  - id: "verify-health"
+    action: "ec2_describe"
+    description: "验证实例恢复正常"
+    params:
+      instance_id: "{{ instance_id }}"
+    output: "final_state"
+
+rollback:
+  - id: "notify-failure"
+    action: "sns_notify"
+    description: "通知运维人员"
+    params:
+      message: "EC2 reboot failed for {{ instance_id }}"
+
+notifications:
+  on_start: true
+  on_complete: true
+  on_failure: true

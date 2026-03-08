@@ -1,0 +1,47 @@
+# Runbook: RDS Failover
+# Triggered by: rds-connection-failure, database_down patterns
+
+id: "rds-failover"
+name: "RDS Multi-AZ Failover"
+description: "Trigger RDS Multi-AZ failover when primary DB is unresponsive"
+
+triggers:
+  - pattern_id: "rds-connection-failure"
+  - pattern_id: "database_down"
+  - pattern_id: "rds_connection_failure"
+
+preconditions:
+  - check: "resource_exists"
+    resource_type: "rds"
+
+steps:
+  - id: "check-alarms"
+    action: "cloudwatch_describe_alarms"
+    description: "确认 RDS 相关告警"
+    params: {}
+
+  - id: "failover"
+    action: "rds_failover"
+    description: "触发 Multi-AZ Failover"
+    params:
+      db_instance_id: "{{ db_instance_id }}"
+    requires_approval: true
+
+  - id: "verify"
+    action: "check_metrics"
+    description: "验证数据库连接恢复"
+    params:
+      metric: "DatabaseConnections"
+
+  - id: "notify"
+    action: "sns_notify"
+    description: "通知团队 Failover 完成"
+    params:
+      message: "RDS failover completed for {{ db_instance_id }}"
+
+rollback: []
+
+notifications:
+  on_start: true
+  on_complete: true
+  on_failure: true

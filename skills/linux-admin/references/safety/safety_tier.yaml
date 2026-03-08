@@ -1,0 +1,12 @@
+tier: guarded
+requires_approval:
+  - reboot
+  - shutdown
+  - halt
+  - kill -9
+  - systemctl stop
+  - systemctl disable
+  - rm -rf
+  - mkfs
+  - dd
+deny_by_default: false   # Linux admin needs broad read access

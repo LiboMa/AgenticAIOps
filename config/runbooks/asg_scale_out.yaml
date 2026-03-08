@@ -1,0 +1,37 @@
+# Runbook: ASG Scale Out
+# Triggered by: asg-capacity, high_traffic patterns
+
+id: "asg-scale-out"
+name: "ASG Scale Out — Increase Capacity"
+description: "Scale out Auto Scaling Group when capacity is insufficient"
+
+triggers:
+  - pattern_id: "asg-capacity"
+  - pattern_id: "high_traffic"
+
+steps:
+  - id: "scale-out"
+    action: "asg_scale"
+    description: "增加 ASG 期望容量"
+    params:
+      asg_name: "{{ asg_name }}"
+      desired_capacity: "{{ desired_capacity }}"
+
+  - id: "verify"
+    action: "check_metrics"
+    description: "验证扩容完成"
+    params:
+      metric: "GroupDesiredCapacity"
+
+rollback:
+  - id: "scale-back"
+    action: "asg_scale"
+    description: "回滚到原始容量"
+    params:
+      asg_name: "{{ asg_name }}"
+      desired_capacity: "{{ original_capacity }}"
+
+notifications:
+  on_start: true
+  on_complete: true
+  on_failure: true
