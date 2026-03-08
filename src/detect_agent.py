@@ -167,6 +167,17 @@ class DetectAgent:
         from src.event_correlator import get_correlator
         self._correlator = get_correlator(self.region)
 
+        # Skills integration (L1)
+        try:
+            from src.skills.skill_bridge import get_detect_tools, get_detect_prompt
+            self._skill_tools = get_detect_tools()
+            self._skill_prompt = get_detect_prompt()
+            logger.info(f"DetectAgent: {len(self._skill_tools)} skill tools loaded")
+        except Exception as e:
+            logger.warning(f"DetectAgent: Skills not available: {e}")
+            self._skill_tools = []
+            self._skill_prompt = ""
+
     async def run_detection(
         self,
         services: List[str] = None,
@@ -277,6 +288,10 @@ class DetectAgent:
             # ── Topology Enrichment (NEW) ──
             if result.error is None and result.anomalies_detected:
                 self._enrich_topology(detect_id, result)
+
+            # ── Skills Diagnostics (L1 integration) ──
+            if result.error is None:
+                self._run_skills_diagnostics(detect_id, result)
 
             # Cache
             self._cache[detect_id] = result
@@ -535,6 +550,51 @@ class DetectAgent:
 
         except Exception as e:
             logger.warning(f"[{detect_id}] Topology enrichment failed (non-fatal): {e}")
+
+    # ── Skills Diagnostics ─────────────────────────────────────────
+
+    def _run_skills_diagnostics(self, detect_id: str, result: DetectResult) -> None:
+        """Run skills-based diagnostics on detected anomalies.
+
+        Uses loaded skill tools (monitoring, log_analysis, etc.) to gather
+        supplemental diagnostic data for RCA enrichment.
+        """
+        if not getattr(self, '_skill_tools', None):
+            return
+
+        diagnostics = []
+        try:
+            from src.skills.skill_bridge import execute_skill_tool
+            import json
+
+            # For each anomaly, try relevant diagnostic tools
+            for anomaly in result.anomalies_detected[:5]:  # Limit to 5
+                anomaly_type = anomaly.get("type", "") if isinstance(anomaly, dict) else ""
+
+                # Log analysis for any anomaly
+                try:
+                    log_result = execute_skill_tool(
+                        "cw_log_groups",
+                        agent_role="detect"
+                    )
+                    parsed = json.loads(log_result)
+                    if parsed.get("status") == "success":
+                        diagnostics.append({
+                            "tool": "cw_log_groups",
+                            "anomaly_type": anomaly_type,
+                            "result": parsed.get("data"),
+                        })
+                except Exception:
+                    pass
+
+            if diagnostics:
+                if result.raw_data is None:
+                    result.raw_data = {}
+                result.raw_data["skill_diagnostics"] = diagnostics
+                logger.info(f"[{detect_id}] Skills diagnostics: {len(diagnostics)} results")
+
+        except Exception as e:
+            logger.warning(f"[{detect_id}] Skills diagnostics failed (non-fatal): {e}")
 
     @staticmethod
     def _extract_vpc_id(result: DetectResult) -> Optional[str]:

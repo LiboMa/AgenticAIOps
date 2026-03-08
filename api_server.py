@@ -151,6 +151,14 @@ async def startup_event():
     await proactive_system.start()
     print("🚀 Proactive Agent System started")
 
+    # Initialize Skills framework (L1 integration)
+    try:
+        from src.skills.skill_bridge import ensure_initialized
+        ensure_initialized()
+        print("🛠️ Skills framework initialized")
+    except Exception as e:
+        print(f"⚠️ Skills initialization failed (non-fatal): {e}")
+
 
 @app.on_event("shutdown")
 async def shutdown_event():

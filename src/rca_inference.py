@@ -166,6 +166,17 @@ class RCAInferenceEngine:
     def __init__(self):
         self.pattern_matcher = PatternMatcher()
         self._bedrock_client = None
+
+        # Skills integration (L1)
+        try:
+            from src.skills.skill_bridge import get_rca_tools, get_rca_prompt
+            self._skill_tools = get_rca_tools()
+            self._skill_prompt = get_rca_prompt()
+            logger.info(f"RCAInferenceEngine: {len(self._skill_tools)} skill tools loaded")
+        except Exception as e:
+            logger.warning(f"RCAInferenceEngine: Skills not available: {e}")
+            self._skill_tools = []
+            self._skill_prompt = ""
     
     @property
     def bedrock(self):
@@ -241,6 +252,10 @@ class RCAInferenceEngine:
             knowledge_context=knowledge_context,
             network_propagation_context=network_propagation_context,
         )
+
+        # Inject skills context if available
+        if self._skill_prompt:
+            prompt = f"{prompt}\n\n{self._skill_prompt}"
         
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
