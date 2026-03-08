@@ -449,9 +449,11 @@ class TestStage6RegressionSafety:
             "symptoms": ["test"],
         }
 
-        # BUG FIXED: exception is now caught and falls back to new_pattern trigger
-        result = await writer.evaluate_and_write(incident, rca_result, ["step1"])
-        # Should not raise; deduplicator failure is handled gracefully
+        # BUG-020 FIXED (5fce51a): exception caught, falls back to new_pattern
+        sop = await writer.evaluate_and_write(incident, rca_result, ["step1"])
+        assert sop is not None, "Fallback should generate SOP as new_pattern"
+        assert sop.service == "test"
+        assert sop.status == "draft"
 
     def test_skill_validator_never_raises(self):
         """SkillValidator.validate() returns result, never raises."""

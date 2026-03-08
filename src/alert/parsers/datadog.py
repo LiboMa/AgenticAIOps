@@ -59,7 +59,7 @@ class DatadogAlertParser(AlertParser):
 
             # Extract host/resource from tags
             resource = ""
-            host_match = re.search(r'host:(\S+)', message)
+            host_match = re.search(r'host:([^\s<>]+)', message)
             if host_match:
                 resource = host_match.group(1)
 
