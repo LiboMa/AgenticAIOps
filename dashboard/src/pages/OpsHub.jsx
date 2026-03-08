@@ -14,7 +14,7 @@ import {
   AlertOutlined, BugOutlined, CheckCircleOutlined, ClockCircleOutlined,
   FireOutlined, WarningOutlined, SearchOutlined,
 } from '@ant-design/icons'
-import { useHealthIssues, useAlertFeed, useIncidentStats, useAlertStats } from '../hooks/useApi'
+import { useHealthIssues, useAlertFeed, useIncidentStats, useAlertStats, useSOPList, useProactiveStatus } from '../hooks/useApi'
 
 const { Title, Text } = Typography
 
@@ -238,6 +238,101 @@ function AlertFeed() {
   )
 }
 
+function SOPQuickActions() {
+  const { data, isLoading, error } = useSOPList()
+
+  if (error) return <Alert message="SOPs unavailable" type="warning" showIcon />
+
+  const sops = Array.isArray(data) ? data : data?.sops || data?.items || []
+
+  return (
+    <Card
+      title={<><Space><span>📋</span><span>SOP Quick Actions</span></Space></>}
+      size="small"
+      bordered={false}
+      style={{ background: '#1a1a2e' }}
+    >
+      {isLoading ? (
+        <Spin />
+      ) : sops.length === 0 ? (
+        <Empty description="No SOPs configured" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+      ) : (
+        <Table
+          dataSource={sops.slice(0, 8)}
+          rowKey={(r) => r.id || r.name || Math.random()}
+          size="small"
+          pagination={false}
+          columns={[
+            {
+              title: 'Name',
+              dataIndex: 'name',
+              key: 'name',
+              render: (t, r) => t || r.title || r.id,
+            },
+            {
+              title: 'Risk',
+              dataIndex: 'risk_level',
+              key: 'risk',
+              width: 80,
+              render: (v) => v != null ? (
+                <Tag color={v <= 1 ? 'green' : v <= 2 ? 'gold' : 'red'}>L{v}</Tag>
+              ) : '-',
+            },
+            {
+              title: 'Pattern',
+              dataIndex: 'pattern',
+              key: 'pattern',
+              ellipsis: true,
+              render: (t) => <Text style={{ color: '#aaa', fontSize: 12 }}>{t || '-'}</Text>,
+            },
+          ]}
+        />
+      )}
+    </Card>
+  )
+}
+
+function ProactiveBadge() {
+  const { data, isLoading, error } = useProactiveStatus()
+
+  if (error) return <Alert message="Proactive scan unavailable" type="warning" showIcon />
+
+  const status = data || {}
+
+  return (
+    <Card
+      title={<><Space><span>🛡️</span><span>Proactive Scan</span></Space></>}
+      size="small"
+      bordered={false}
+      style={{ background: '#1a1a2e' }}
+    >
+      {isLoading ? (
+        <Spin />
+      ) : (
+        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+          <Statistic
+            title={<Text style={{ color: '#999' }}>Status</Text>}
+            value={status.running ? 'Running' : 'Idle'}
+            valueStyle={{ color: status.running ? '#52c41a' : '#999', fontSize: 16 }}
+          />
+          {status.last_scan_at && (
+            <Text style={{ color: '#888', fontSize: 12 }}>
+              Last scan: {new Date(status.last_scan_at).toLocaleString()}
+            </Text>
+          )}
+          {status.findings_count != null && (
+            <Statistic
+              title={<Text style={{ color: '#999' }}>Findings</Text>}
+              value={status.findings_count}
+              valueStyle={{ color: status.findings_count > 0 ? '#faad14' : '#52c41a', fontSize: 16 }}
+            />
+          )}
+        </Space>
+      )}
+    </Card>
+  )
+}
+
 export default function OpsHub() {
   return (
     <div style={{ padding: '16px 24px' }}>
@@ -255,6 +350,16 @@ export default function OpsHub() {
         </Col>
         <Col xs={24} lg={10}>
           <AlertFeed />
+        </Col>
+      </Row>
+
+      {/* Bottom row: SOP + Proactive */}
+      <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
+        <Col xs={24} lg={14}>
+          <SOPQuickActions />
+        </Col>
+        <Col xs={24} lg={10}>
+          <ProactiveBadge />
         </Col>
       </Row>
     </div>
