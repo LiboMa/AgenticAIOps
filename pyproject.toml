@@ -15,6 +15,7 @@ dependencies = [
 ]
 
 [tool.pytest.ini_options]
+testpaths = ["tests"]
 pythonpath = ["."]
 markers = [
     "slow: marks tests that hit real AWS / Bedrock APIs (deselect with '-m \"not slow\"')",
