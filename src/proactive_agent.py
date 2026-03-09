@@ -70,6 +70,7 @@ class ProactiveAgentSystem:
         self._running = False
         self._heartbeat_task: Optional[asyncio.Task] = None
         self._last_detect_result = None  # DetectResult from last quick_scan
+        self._rca_semaphore = asyncio.Semaphore(1)  # Prevent concurrent RCA triggers
         
         # Default tasks
         self._init_default_tasks()
@@ -402,27 +403,34 @@ class ProactiveAgentSystem:
             logger.warning(f"🚨 {result.task_name}: {result.summary}")
             await self.results_queue.put(result)
 
-            # NOTE: Incident pipeline auto-trigger disabled (Bug-019).
-            # The RCA pipeline's sync boto3 Bedrock calls block the event loop
-            # even when wrapped in run_in_executor (boto3 default timeouts are
-            # too long). Heartbeat should detect & report only; incident
-            # pipeline should be triggered explicitly via API.
-            # Timeout config added to Bedrock client in rca_inference.py.
-            # TODO: Re-enable auto-trigger and verify event loop is not blocked.
-            #
-            # if self._last_detect_result is not None:
-            #     try:
-            #         from src.incident_orchestrator import get_orchestrator
-            #         orchestrator = get_orchestrator()
-            #         incident = await orchestrator.handle_incident(...)
-            #     except Exception as e:
-            #         logger.error(f"Failed to trigger incident pipeline: {e}")
-                    #         logger.error(f"Failed to trigger incident pipeline: {e}")
+            # Auto-trigger RCA pipeline (re-enabled after Bug-019 fixes:
+            # run_in_executor wraps all boto3, Bedrock timeout+retry in e630ef2,
+            # heartbeat verified at 1.75s in Bug-018 close).
+            # Uses create_task to avoid blocking heartbeat loop,
+            # semaphore(1) prevents concurrent RCA runs.
+            asyncio.create_task(self._auto_trigger_rca(result))
 
             # Call registered callbacks
             if "alert" in self.callbacks:
                 await self.callbacks["alert"](result)
     
+    async def _auto_trigger_rca(self, result: ProactiveResult):
+        """Auto-trigger RCA pipeline for alert results (non-blocking)."""
+        async with self._rca_semaphore:
+            try:
+                from src.incident_orchestrator import get_orchestrator
+                orchestrator = get_orchestrator()
+                await orchestrator.handle_incident({
+                    "source": "proactive_agent",
+                    "task_name": result.task_name,
+                    "summary": result.summary,
+                    "details": result.details,
+                    "severity": result.severity,
+                })
+                logger.info(f"Auto-triggered RCA for: {result.task_name}")
+            except Exception as e:
+                logger.error(f"Auto-trigger RCA failed: {e}")
+
     async def trigger_event(self, event_type: str, event_data: Dict[str, Any]) -> ProactiveResult:
         """Trigger an event-driven task (e.g., CloudWatch alert)"""
         logger.info(f"⚡ Event triggered: {event_type}")
