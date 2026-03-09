@@ -220,7 +220,7 @@ class AWSServiceOps:
                 # Get last 50 lines
                 output_lines = console['Output'].split('\n')[-50:]
                 results["console_output"] = output_lines
-        except:
+        except Exception:
             pass
         
         return results
@@ -414,7 +414,7 @@ class AWSServiceOps:
                             "file": log_file['LogFileName'],
                             "content": log_data.get('LogFileData', '')[-5000:]  # Last 5KB
                         })
-                    except:
+                    except Exception:
                         pass
             
             return results
@@ -647,7 +647,7 @@ class AWSServiceOps:
             if not async_invoke and 'Payload' in response:
                 try:
                     result["response"] = json.loads(response['Payload'].read().decode())
-                except:
+                except Exception:
                     result["response"] = "Unable to parse response"
             
             if response.get('FunctionError'):
@@ -707,7 +707,7 @@ class AWSServiceOps:
                         block_config.get('RestrictPublicBuckets', False),
                     ]):
                         is_public = True
-                except:
+                except Exception:
                     # Check ACL as fallback
                     try:
                         acl = s3.get_bucket_acl(Bucket=bname)
@@ -716,7 +716,7 @@ class AWSServiceOps:
                             if 'AllUsers' in grantee.get('URI', ''):
                                 is_public = True
                                 break
-                    except:
+                    except Exception:
                         pass
                 
                 if is_public:
@@ -738,7 +738,7 @@ class AWSServiceOps:
                 try:
                     ver_response = s3.get_bucket_versioning(Bucket=bname)
                     versioning = ver_response.get('Status', 'disabled')
-                except:
+                except Exception:
                     pass
                 
                 bucket_health = {
@@ -1091,7 +1091,7 @@ class AWSServiceOps:
                             total_targets += 1
                             if target['TargetHealth']['State'] != 'healthy':
                                 unhealthy_targets += 1
-                    except:
+                    except Exception:
                         pass
                 
                 if unhealthy_targets > 0:
@@ -1191,7 +1191,7 @@ class AWSServiceOps:
                     minutes=hours * 60
                 )
                 results["metrics"][metric] = data
-            except:
+            except Exception:
                 pass
         
         return results
@@ -1261,7 +1261,7 @@ class AWSServiceOps:
                     health_status = "healthy" if healthy_count == total else "unhealthy"
                     if health_status == "unhealthy":
                         unhealthy_count += 1
-                except:
+                except Exception:
                     health_status = "unknown"
                 
                 results["health_checks"].append({
@@ -1440,7 +1440,7 @@ class AWSServiceOps:
                         "write_capacity": throughput.get('WriteCapacityUnits', 0),
                         "item_count": table.get('ItemCount', 0),
                     })
-                except:
+                except Exception:
                     tables.append({"name": tname, "status": "ERROR"})
             
             return {
@@ -1474,7 +1474,7 @@ class AWSServiceOps:
                     minutes=hours * 60
                 )
                 results["metrics"][metric] = data
-            except:
+            except Exception:
                 pass
         
         return results
@@ -1727,7 +1727,7 @@ class AWSServiceOps:
                         "type": "replication_group",
                         "issues": issues,
                     })
-            except:
+            except Exception:
                 pass
             
             # Overall status
@@ -1770,7 +1770,7 @@ class AWSServiceOps:
                         "type": "replication_group",
                         "num_nodes": len(rg.get('MemberClusters', [])),
                     })
-            except:
+            except Exception:
                 pass
             
             return {

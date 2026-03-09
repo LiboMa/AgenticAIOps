@@ -239,7 +239,7 @@ class AWSCloudScanner:
                             is_public = True
                             public_count += 1
                             break
-                except:
+                except Exception:
                     pass
                 
                 buckets.append({
@@ -298,7 +298,7 @@ class AWSCloudScanner:
                     mfa = iam.list_mfa_devices(UserName=user['UserName'])
                     if not mfa.get('MFADevices'):
                         users_without_mfa.append(user['UserName'])
-                except:
+                except Exception:
                     pass
             
             return {
@@ -424,7 +424,7 @@ class AWSCloudScanner:
                         "write_capacity": throughput.get('WriteCapacityUnits', 0),
                         "item_count": table.get('ItemCount', 0),
                     })
-                except:
+                except Exception:
                     tables.append({"name": tname, "status": "ERROR"})
             
             return {
@@ -493,7 +493,7 @@ class AWSCloudScanner:
                         "type": "replication_group",
                         "num_nodes": len(rg.get('MemberClusters', [])),
                     })
-            except:
+            except Exception:
                 pass
             
             return {
@@ -520,7 +520,7 @@ class AWSCloudScanner:
                         "status": detail.get('status', ''),
                         "endpoint": detail.get('endpoint', ''),
                     })
-                except:
+                except Exception:
                     clusters.append({"name": cluster_name})
             
             return {
