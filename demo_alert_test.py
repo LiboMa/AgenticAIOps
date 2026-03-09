@@ -76,7 +76,7 @@ def test_parsers():
 
     print(f"\n{'─' * 60}")
     print(f"解析结果: {len(results)}/{len(SAMPLE_ALERTS)} 成功")
-    return results
+    assert len(results) > 0, "至少应解析成功一个告警"
 
 
 def test_dedup():
