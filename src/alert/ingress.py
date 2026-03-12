@@ -119,10 +119,14 @@ class AlertIngressService:
 
         # Create a DetectResult from the alert
         # Import here to avoid circular deps
+        import uuid
         from src.detect_agent import DetectResult
 
-        detect_result = DetectResult()
-        detect_result.source = alert.source
+        detect_result = DetectResult(
+            detect_id=f"alert-{uuid.uuid4().hex[:8]}",
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            source=alert.source,
+        )
         detect_result.severity = alert.severity
         detect_result.alert = alert
 
