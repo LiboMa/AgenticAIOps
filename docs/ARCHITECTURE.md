@@ -89,8 +89,8 @@ ProactiveAgent (定时巡检)          CloudWatch Alarm (事件触发)
 
 | 模块 | 文件 | 行数 | 功能 |
 |------|------|------|------|
-| **ProactiveAgent** | `src/proactive_agent.py` | 471 | 定时巡检，调度 DetectAgent |
-| **DetectAgent** | `src/detect_agent.py` | 485 | 采集 + 缓存 + Pattern Match + 异常分发 |
+| **ProactiveAgent** | `src/proactive_agent.py` | 498 | 定时巡检，调度 DetectAgent |
+| **DetectAgent** | `src/detect_agent.py` | 689 | 采集 + 缓存 + Pattern Match + 异常分发 |
 | **EventCorrelator** | `src/event_correlator.py` | 729 | AWS 数据采集 (CloudWatch/Trail/Health) |
 | **IncidentOrchestrator** | `src/incident_orchestrator.py` | 660 | 闭环管道编排 |
 | **RCA Inference** | `src/rca_inference.py` | 368 | Bedrock Claude 根因分析 |
