@@ -163,3 +163,17 @@ class TestAnalyzeQuery:
         result = analyze_query("")
         assert result["intent"] == "info"
         assert result["confidence"] == 0.0
+
+
+class TestIntentClassifierMainBlock:
+    """Cover the __main__ block (lines 145-160)."""
+
+    def test_main_block_runs(self, capsys):
+        import runpy
+        runpy.run_module("src.intent_classifier", run_name="__main__", alter_sys=False)
+        captured = capsys.readouterr()
+        assert "Intent Classification Test" in captured.out
+        assert "Intent:" in captured.out
+        assert "Tools:" in captured.out
+        # Verify all test queries produced output
+        assert captured.out.count("Query:") == 7
