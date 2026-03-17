@@ -362,7 +362,7 @@ agentic-aiops-mvp/
 │   └── rca_patterns.yaml      # Pattern 规则 YAML
 ├── agents/                    # Agent manifests (5 roles)
 ├── dashboard/                 # React 前端 (AppV2.jsx, LobeChat 风格)
-├── tests/                     # 测试 (3,565 cases, 94% 覆盖率)
+├── tests/                     # 测试 (3,632 cases, 94% 覆盖率)
 └── docs/                      # 文档
     ├── ARCHITECTURE.md        # 本文件 (唯一架构文档)
     └── designs/               # 设计文档
@@ -391,7 +391,7 @@ EC2: mbot-sg-1 (m6i.xlarge, ap-southeast-1)
 | 单账户 | 仅支持一个 AWS 账户 | P1 |
 | PatternMatcher 规则 | YAML 规则面向 K8s，需扩充 CloudWatch 场景 | P1 |
 | ~~Heartbeat sync boto3~~ | ~~`detect_agent.run_detection()` 同步阻塞事件循环~~ (**已修复**: `run_in_executor`) | ~~P2~~ |
-| aws_ops.py 83% 覆盖 | 1,793 行已有测试 (83% coverage) | ~~P2~~ |
+| aws_ops.py 89% 覆盖 | 1,793 行已有测试 (89% coverage) | ~~P2~~ |
 | Bedrock KB | PatternRAG 未接入 (需 KB ID 配置) | P2 |
 | chat.py agent_factory | 可提取为独立模块 (289→~170 行) | P2 |
 | 前端 ReactFlow | Topology 可视化未接入前端 | P2 |
