@@ -362,7 +362,7 @@ agentic-aiops-mvp/
 │   └── rca_patterns.yaml      # Pattern 规则 YAML
 ├── agents/                    # Agent manifests (5 roles)
 ├── dashboard/                 # React 前端 (AppV2.jsx, LobeChat 风格)
-├── tests/                     # 测试 (3,632 cases, 94% 覆盖率)
+├── tests/                     # 测试 (3,667 cases, 95% 覆盖率)
 └── docs/                      # 文档
     ├── ARCHITECTURE.md        # 本文件 (唯一架构文档)
     └── designs/               # 设计文档
