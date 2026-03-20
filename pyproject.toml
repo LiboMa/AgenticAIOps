@@ -19,6 +19,7 @@ testpaths = ["tests"]
 pythonpath = ["."]
 markers = [
     "slow: marks tests that hit real AWS / Bedrock APIs (deselect with '-m \"not slow\"')",
+    "timeout: per-test timeout in seconds (requires pytest-timeout)",
 ]
 # Default: skip slow tests to prevent hangs in routine test runs.
 # Run slow tests explicitly: pytest -m slow
